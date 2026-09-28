@@ -89,7 +89,7 @@ def _build_message(item: Dict[str, Any]) -> (dict, str):
 @app.post("/v1/chat/completions")
 async def chat_completions(body: dict):
     model = _normalize_model(body.get("model", "unknown"))
-    _requests_log[model].append({"messages": body.get("messages", [])})
+    _requests_log[model].append({"messages": body.get("messages", []), "tools": body.get("tools")})
 
     queue = _scripts[model]
     item = queue.popleft() if queue else {"text": DEFAULT_TEXT}
