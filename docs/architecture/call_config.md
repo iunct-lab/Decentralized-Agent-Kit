@@ -126,3 +126,4 @@
 - `agent/tests/test_call_scoped_instruction.py` — 指示がそのセッションのシステムプロンプトだけになる。並行する別セッションは既定のまま
 - `agent/tests/test_call_scoped_output_schema.py` — リクエストに構造化出力の指定が入る。合わない応答が構造化された失敗になる
 - `tests/integration/test_call_config_flow.py` — 実際の構成（agent コンテナ → LiteLLM → fake-LLM）で同じことを確かめる
+- `tests/integration/test_minimal_overhead.py` — 指示と出力スキーマだけで `dak:tools: []` の呼び出しが、LLM を 1 回・ツール定義なし・直接呼び出しとの差 20 トークン以内で呼ぶ（`serverless.md` §2）
