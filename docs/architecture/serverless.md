@@ -41,6 +41,11 @@
 
 上乗せが 0 であることは、#139 で CI の不変条件にする。
 
+CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示と出力スキーマだけを渡し `dak:tools: []` でツールを選ばない呼び出しについて、次を毎回確かめる（fake-LLM が受け取ったリクエストを数える）。
+
+- LLM の呼び出しは 1 回（Meta-LLM は同じモデル名で呼ぶので、Meta-LLM も 0 回）。リクエストにツールの定義が無い
+- メッセージのトークン（`agent/dak_agent/harness.py::estimate_tokens` の見積もり）が、同じ指示と入力で LLM を直接呼んだ場合との差 **N = 20 トークン**以内。DAK 固有の差は、ADK がどのエージェントの指示にも足す 1 行（`You are an agent. Your internal name is "dak_agent".`）だけで、実測は 14（DAK 56 / 直接 42、2026-09-28）。20 はこの行の分とわずかな余裕で、これを超えたら DAK が何かを足している
+
 ### サーバレスで困る点
 
 | 点 | 現状（根拠） | 直す PBI |
