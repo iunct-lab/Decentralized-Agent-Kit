@@ -70,6 +70,9 @@ def split_command_segments(command: str) -> Optional[List[str]]:
         return None
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
+    # shlex would treat `#` anywhere as a comment; the shell only at the start
+    # of a word (`git status a#; rm -rf /` runs the rm). Keep `#` as text.
+    lexer.commenters = ""
     try:
         tokens = list(lexer)
     except ValueError:
@@ -111,8 +114,10 @@ DEFAULT_RULES: List[Rule] = [
     # The default MCP server: ask, except reads and read-only git.
     Rule("default", "*", "*", "ask"),
     *(Rule("default", t, "*", "allow") for t in ("read_file", "list_files", "search_files", "grep", "deep_think")),
-    Rule("default", "read_file", "*.env", "ask"),
+    *(Rule("default", t, p, "ask") for t in ("read_file", "grep") for p in ("*.env", "*.env.*")),
     *(Rule("default", "run_command", p, "allow") for g in _READ_ONLY_GIT for p in (f"git {g}", f"git {g} *")),
+    # Options that make those git commands write a file or run a program.
+    *(Rule("default", "run_command", f"git * {o}*", "ask") for o in ("--output", "--ext-diff", "--textconv")),
     *(Rule("default", "run_command", p, "deny")
       for p in ("rm -rf *", "rm -fr *", "git push --force*", "git push -f*", "git push * --force*", "git push * -f*")),
 ]

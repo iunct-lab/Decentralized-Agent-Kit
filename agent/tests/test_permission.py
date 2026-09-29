@@ -54,6 +54,25 @@ def test_unsplittable_command_is_never_allowed(command):
     assert run(command) == "ask"
 
 
+@pytest.mark.parametrize("command", ["git status a#; rm -rf /", "git log --grep=x#y && rm -rf ~"])
+def test_hash_inside_a_word_does_not_hide_a_chained_command(command):
+    """The shell starts a comment only at the start of a word."""
+    assert run(command) == "deny"
+
+
+@pytest.mark.parametrize("command", [
+    "git diff --output=/projects/x.yml", "git log -p --output=x", "git show --ext-diff HEAD", "git diff --textconv",
+])
+def test_read_only_git_that_writes_or_runs_programs_asks(command):
+    assert run(command) == "ask"
+
+
+@pytest.mark.parametrize("command", ["rm -r -f /", "/bin/rm -rf /", "sudo rm -rf /"])
+def test_other_spellings_of_destructive_commands_are_at_least_ask(command):
+    """Not denied by the default patterns, but never allowed either."""
+    assert run(command) in ("ask", "deny")
+
+
 def test_unsplittable_command_still_honours_deny():
     assert run("rm -rf / > /dev/null") == "deny"
 
@@ -72,4 +91,6 @@ def test_rules_are_keyed_by_source():
     assert evaluate(DEFAULT_RULES, "caller", "write_file", args) == "allow"
     assert evaluate(DEFAULT_RULES, "local", "planner", {}) == "allow"
     assert evaluate(DEFAULT_RULES, "default", "write_file", args) == "ask"
-    assert evaluate(DEFAULT_RULES, "default", "read_file", {"path": ".env"}) == "ask"
+    for path in (".env", "config/.env.local", ".env.production"):
+        assert evaluate(DEFAULT_RULES, "default", "read_file", {"path": path}) == "ask"
+        assert evaluate(DEFAULT_RULES, "default", "grep", {"pattern": ".", "path": path}) == "ask"
