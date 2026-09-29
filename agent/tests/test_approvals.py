@@ -191,5 +191,19 @@ def test_list_pending_includes_both_kinds():
     assert [p["kind"] for p in list_pending([_user_text("go"), _confirmation_call()])] == ["approval"]
 
 
+def test_list_pending_orders_approvals_and_questions_by_time():
+    """One model turn calls both ask_question (1.5) and a confirmed tool (2.0):
+    the question was asked first, though approvals are collected first."""
+    question, response = _question_call(ts=1.5)
+    events = [_user_text("go"), question, _confirmation_call(ts=2.0), {**response, "timestamp": 2.1}]
+    assert [(p["kind"], p["id"]) for p in list_pending(events)] == [("question", "call-q"), ("approval", "adk-1")]
+
+
+def test_compaction_after_the_question_keeps_it_pending():
+    """The compaction event comes after the question's response, which must still count as the last event."""
+    events = [_user_text("deploy it"), *_question_call(), _compaction(ts=6.0)]
+    assert [p["id"] for p in list_pending_questions(events)] == ["call-q"]
+
+
 def test_build_question_reply_is_a_plain_message():
     assert build_question_reply("main") == {"parts": [{"text": "main"}]}
