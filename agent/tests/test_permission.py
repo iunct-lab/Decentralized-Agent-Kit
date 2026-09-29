@@ -74,6 +74,20 @@ def test_other_spellings_of_destructive_commands_are_at_least_ask(command):
     assert run(command) in ("ask", "deny")
 
 
+@pytest.mark.parametrize("command", [
+    "git diff --outpu{t,t}=FILE", "git show --ext-dif{f,f} HEAD", "git log *.py", "git diff ~/x", "git log $REF",
+    "git log --since=~x",
+])
+def test_segments_the_shell_expands_are_never_allowed(command):
+    assert run(command) == "ask"
+
+
+def test_expansion_keeps_deny_and_plain_git_allowed():
+    assert run("git status && rm -rf *") == "deny"
+    assert run("git log HEAD~1") == "allow"
+    assert run("git log --oneline -n 3") == "allow"
+
+
 def test_unsplittable_command_still_honours_deny():
     assert run("rm -rf / > /dev/null") == "deny"
 
