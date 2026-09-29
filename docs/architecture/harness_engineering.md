@@ -49,7 +49,7 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
 ## 3. 実装したコンテキストハーネス（`agent/dak_agent/harness.py`）
 
 `agent.py` は `root_agent` に加えて ADK の `App` を公開し、ADK の FastAPI アプリ（A2A を含む。
-`agent/dak_agent/server.py` が `get_fast_api_app` で作る）は `app` のほうを優先して読み込む。安いものから順に 3 段で防ぐ。
+`agent/dak_agent/server.py` が `get_fast_api_app` で作る）は `app` のほうを優先して読み込む。安いものから順に 3 段で防ぎ、それでも超えたときの回復を 4 段目に置く。
 
 1. **ツール出力の上限**（`ContextHarnessPlugin.after_tool_callback`）
    - 上限を超えた結果は先頭 70% と末尾 30% のプレビューに置き換え、全文は Artifact
@@ -76,6 +76,15 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
      オブジェクトは書き換えずに差し替える。
    - 見積もりは **CJK を 1 文字 = 1 トークン**で数える。単純な `len // 4` では日本語で
      3〜4 倍の過小評価になる。
+4. **超過からの回復**（`ContextHarnessPlugin.on_model_error_callback`、#88）
+   - 見積もりの誤差や巨大な system instruction で、モデルがそれでも窓超過のエラー
+     （`is_context_overflow_error` が判定する各社の文面）を返したときだけ働く。
+     予算を半分ずつ絞って 3 と同じ差し替えをかけ、同じモデルを直接呼び直す。
+   - 呼び直しは `DAK_MODEL_ERROR_RETRY_ATTEMPTS` 回（既定 2）まで、1 回のコールバックの
+     中で終える。回数を state に持たないので、次のターンに失敗が持ち越されない。
+   - 尽きたら例外を投げず、先頭が `[CONTEXT_OVERFLOW]` の説明文（`CONTEXT_OVERFLOW_FAILURE_TEXT`）
+     をそのターンの答えにする。invocation は失敗扱いにならず、同じセッションで次の入力を受け付ける。
+   - 窓超過以外のエラーは扱わない（ADK が元の例外をそのまま送出する）。
 
 加えて:
 - mcp-server: `read_file(path, offset, limit)`（行範囲）を追加し、`read_file`/`run_command` は
@@ -98,6 +107,7 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 | `DAK_COMPACTION_INTERVAL` | `20` | sliding-window 圧縮の間隔（ユーザーターン数） |
 | `DAK_COMPACTION_INPUT_RATIO` | `0.5` | 1 回の要約リクエストに入れる履歴の上限（窓占有率）。残りは要約の出力枠 |
 | `DAK_REQUEST_BUDGET_RATIO` | `0.85` | 最終ガードの上限 |
+| `DAK_MODEL_ERROR_RETRY_ATTEMPTS` | `2` | 窓超過のエラーを受けたときの呼び直しの回数（予算は毎回半分）。`0` で呼び直さずに説明文を返す |
 | `DAK_TOOL_OUTPUT_MAX_CHARS` | 窓の 15%（2K〜40K 文字） | 1 回のツール結果の上限 |
 
 目安: 8K 窓 → 圧縮 4,915 tok / ツール出力 2,000 文字。32K 窓 → 19,660 tok / 4,915 文字。
@@ -161,7 +171,7 @@ MRTR（MCP 2026-07-28、SEP-2322）との対応: 保留の 1 件 ↔ `InputRequi
 | P1 | **調査用サブエージェント（`AgentTool`）** | 「リポジトリを読んで要約」を子エージェントに任せ、親のコンテキストには結論だけを残す（Deep Agents の `task`、Claude Code の Explore 相当）。長い調査タスクで最も効く | #85 |
 | P1 | **内容検索ツール（grep）と行番号付き読み込み** | 今の `search_files` はファイル名しか検索できず、中身を探すにはファイル全体を読むしかない。`grep(pattern, path, glob)` と `edit_file`（文字列置換）を足すか、ADK `EnvironmentToolset` への移行を検討 | #86, #16, #20 |
 | ~~P1~~ | ~~**TODO ツール（セッション state に保存）**~~ | **済み（#87）**: `write_todos` / `read_plan`。上の「計画と進捗」 | #87, #21 |
-| P2 | **コンテキスト超過からの回復** | 圧縮側は §5 で対応済み（要約は失敗しても例外を投げず、最悪でも抜粋で圧縮する）。残りはモデル呼び出し側: `on_model_error_callback` で `ContextWindowExceededError` を受けたら、強制圧縮して再試行するか、利用者に分かる形で失敗させる | #88 |
+| ~~P2~~ | ~~**コンテキスト超過からの回復**~~ | **済み（#88）**: 圧縮側は §5、モデル呼び出し側は §3 の 4（予算を絞って有限回呼び直し、尽きたら説明文で終える） | #88 |
 | P2 | **窓サイズの自動検出** | llama-server の `/props`（`n_ctx`）から窓を取る。compose 既定の 8192 と実サーバーの 32768 のようなずれを防ぐ | #89 |
 | P2 | **`SkillToolset` への移行** | 独自の `SkillRegistry`/`enable_skill` を ADK 標準（Agent Skills 仕様・段階的開示・リソース読み込み）に寄せ、保守コストを下げる | #90, #81 |
 | P2 | **ツール失敗の自己修正** | `ReflectAndRetryToolPlugin` を試す | #91 |

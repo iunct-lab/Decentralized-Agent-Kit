@@ -18,6 +18,12 @@ Three layers, cheapest first:
    user turn in the request after compaction (chat templates require one) and,
    as a last resort, elides the oldest tool payloads when the assembled request
    would still overflow (e.g. the summarizer failed).
+4. Overflow recovery (``ContextHarnessPlugin.on_model_error_callback``): when
+   the model still rejects a request for size (the estimate was off, or the
+   system instruction alone is huge), the request is retried a bounded number
+   of times on a halved budget; if it never fits, the turn ends with an
+   explanation (``CONTEXT_OVERFLOW_FAILURE_TEXT``) instead of an exception, so
+   the session takes the next user turn as usual.
 
 All limits derive from the model's context window (``MODEL_CONTEXT_WINDOW`` or
 LiteLLM's model map), so a llama.cpp server launched with 8K gets tight budgets
@@ -35,6 +41,7 @@ from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions, EventCompaction
 from google.adk.models.llm_request import LlmRequest
+from google.adk.models.llm_response import LlmResponse
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools import FunctionTool
 from google.genai import types
@@ -91,6 +98,13 @@ _DENSE_ENTRY_MULTIPLIER = 4
 _COMPACTION_ATTEMPTS = 3
 _DENSE_KINDS = frozenset({"user", "text"})
 
+# The turn's answer when a request still overflows after every retry. The
+# leading marker lets clients tell it from an ordinary answer.
+CONTEXT_OVERFLOW_FAILURE_TEXT = (
+    "[CONTEXT_OVERFLOW]\nThis request could not be processed even after compaction and "
+    "budget tightening. Start a new session, or call write_handoff then continue.\n"
+)
+
 
 def estimate_tokens(text: str) -> int:
     """Conservative token estimate.
@@ -144,6 +158,7 @@ class HarnessSettings:
     request_budget_ratio: float = 0.85
     tool_output_max_chars: Optional[int] = None
     compaction_input_ratio: float = 0.5
+    model_error_retry_attempts: int = 2
 
     @classmethod
     def from_env(cls, model_name: str) -> "HarnessSettings":
@@ -155,6 +170,7 @@ class HarnessSettings:
             request_budget_ratio=_env_float("DAK_REQUEST_BUDGET_RATIO", 0.85, 0.0, 1.0),
             tool_output_max_chars=_env_int("DAK_TOOL_OUTPUT_MAX_CHARS", 0, 0) or None,
             compaction_input_ratio=_env_float("DAK_COMPACTION_INPUT_RATIO", 0.5, 0.0, 1.0),
+            model_error_retry_attempts=_env_int("DAK_MODEL_ERROR_RETRY_ATTEMPTS", 2, 0),
         )
 
     @property
@@ -757,3 +773,33 @@ class ContextHarnessPlugin(BasePlugin):
         ensure_user_query(llm_request)
         fit_request_to_budget(llm_request, self._settings_for(callback_context).request_token_budget)
         return None
+
+    async def on_model_error_callback(self, *, callback_context, llm_request, error) -> Optional[LlmResponse]:
+        """Retry a request the model rejected for size on a halved budget, a
+        bounded number of times within this one call (no state carries over to
+        the next turn); then answer with an explanation instead of raising.
+        Other errors return None, so ADK re-raises them unchanged."""
+        if not is_context_overflow_error(error):
+            return None
+        settings = self._settings_for(callback_context)
+        model = callback_context._invocation_context.agent.canonical_model
+        budget = settings.request_token_budget
+        for attempt in range(1, settings.model_error_retry_attempts + 1):
+            budget = max(1, budget // 2)
+            elided = fit_request_to_budget(llm_request, budget)
+            logger.warning(
+                "Context harness: model rejected the request for size; retry %d/%d on %d tokens "
+                "(%d part(s) elided): %s", attempt, settings.model_error_retry_attempts, budget, elided, error)
+            try:
+                async for llm_response in model.generate_content_async(llm_request, stream=False):
+                    if llm_response.content:
+                        return llm_response
+            except Exception as e:
+                error = e
+                logger.warning("Context harness: retry %d failed (%s: %s)", attempt, type(e).__name__, e)
+        logger.error("Context harness: request still rejected after %d retry(ies); ending the turn with an "
+                     "explanation", settings.model_error_retry_attempts)
+        return LlmResponse(
+            content=types.Content(role="model", parts=[types.Part(text=CONTEXT_OVERFLOW_FAILURE_TEXT)]),
+            turn_complete=True,
+        )

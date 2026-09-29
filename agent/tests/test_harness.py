@@ -60,20 +60,23 @@ class TestHarnessSettings:
         assert HarnessSettings(context_window=1_000_000).tool_output_chars == 40_000
 
     @patch.dict(os.environ, {"MODEL_CONTEXT_WINDOW": "8192", "DAK_TOOL_OUTPUT_MAX_CHARS": "1234",
-                             "DAK_COMPACTION_THRESHOLD_RATIO": "0.5", "DAK_COMPACTION_RETAIN_EVENTS": "2"})
+                             "DAK_COMPACTION_THRESHOLD_RATIO": "0.5", "DAK_COMPACTION_RETAIN_EVENTS": "2",
+                             "DAK_MODEL_ERROR_RETRY_ATTEMPTS": "5"})
     def test_from_env(self):
         s = HarnessSettings.from_env("openai/llamacpp")
         assert s.context_window == 8192
         assert s.tool_output_chars == 1234
         assert s.compaction_token_threshold == 4096
         assert s.compaction_retain_events == 2
+        assert s.model_error_retry_attempts == 5
 
     @patch.dict(os.environ, {"MODEL_CONTEXT_WINDOW": "8192", "DAK_COMPACTION_THRESHOLD_RATIO": "7",
-                             "DAK_COMPACTION_RETAIN_EVENTS": "-1"})
+                             "DAK_COMPACTION_RETAIN_EVENTS": "-1", "DAK_MODEL_ERROR_RETRY_ATTEMPTS": "-1"})
     def test_invalid_env_falls_back_to_defaults(self):
         s = HarnessSettings.from_env("openai/llamacpp")
         assert s.compaction_threshold_ratio == 0.6
         assert s.compaction_retain_events == 4
+        assert s.model_error_retry_attempts == 2
 
     def test_compaction_config_uses_token_threshold(self):
         config = make_compaction_config(HarnessSettings(context_window=8192), llm=MagicMock())
@@ -522,6 +525,98 @@ class TestEnsureUserQuery:
         assert len(request.contents) == 2
 
 
+class TestOnModelErrorCallback:
+    """PBI #88: a model call rejected for size is retried a bounded number of
+    times with a tighter budget, then fails with an explanation instead of
+    raising."""
+
+    settings = HarnessSettings(context_window=8192, model_error_retry_attempts=2)
+
+    def _request(self):
+        # Two old 4K-char tool results the budget can elide, then the turn being answered.
+        return LlmRequest(contents=[
+            types.Content(role="user", parts=[types.Part(text="ログを読んで")]),
+            _fr("read_file", 16_000), _fr("read_file", 16_000),
+            types.Content(role="user", parts=[types.Part(text="続けて")]),
+            types.Content(role="model", parts=[types.Part(text="...")]),
+        ])
+
+    def _context(self, llm):
+        ctx = MagicMock()
+        ctx._invocation_context.agent.canonical_model = llm
+        return ctx
+
+    def _llm(self, responses):
+        """`responses`: per call, an exception to raise or a text to answer; records request sizes."""
+        from google.adk.models.llm_response import LlmResponse
+
+        llm = MagicMock()
+        llm.request_tokens = []
+        queue = list(responses)
+
+        async def generate_content_async(llm_request, stream=False):
+            llm.request_tokens.append(_request_tokens(llm_request))
+            item = queue.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text=item)]))
+
+        llm.generate_content_async = generate_content_async
+        return llm
+
+    async def _callback(self, llm, error, request=None):
+        plugin = ContextHarnessPlugin(self.settings, "test-model")
+        request = request or self._request()
+        with patch("dak_agent.call_config.resolve_dak_settings", return_value={}):
+            response = await plugin.on_model_error_callback(
+                callback_context=self._context(llm), llm_request=request, error=error)
+        return response, request
+
+    @pytest.mark.asyncio
+    async def test_recovers_after_tightening_the_budget(self):
+        llm = self._llm([_context_error(), "recovered"])
+
+        response, request = await self._callback(llm, _context_error())
+
+        assert response.content.parts[0].text == "recovered"
+        assert len(llm.request_tokens) == 2
+        # Each attempt ran on a tighter budget: the old tool payloads were elided.
+        assert llm.request_tokens[0] <= self.settings.request_token_budget // 2
+        assert llm.request_tokens[1] <= llm.request_tokens[0]
+        assert all(p.function_response.response["result"].startswith("[elided")
+                   for c in request.contents[1:3] for p in c.parts)
+
+    @pytest.mark.asyncio
+    async def test_gives_up_after_exhausting_attempts_with_an_explicit_failure(self):
+        llm = self._llm([_context_error()] * 10)
+
+        response, _ = await self._callback(llm, _context_error())
+
+        assert len(llm.request_tokens) <= self.settings.model_error_retry_attempts
+        assert harness.CONTEXT_OVERFLOW_FAILURE_TEXT in response.content.parts[0].text
+        assert response.content.role == "model"
+        assert response.turn_complete
+
+    @pytest.mark.asyncio
+    async def test_zero_attempts_fails_explicitly_without_calling_the_model(self):
+        self.settings = HarnessSettings(context_window=8192, model_error_retry_attempts=0)
+        llm = self._llm([])
+
+        response, _ = await self._callback(llm, _context_error())
+
+        assert llm.request_tokens == []
+        assert harness.CONTEXT_OVERFLOW_FAILURE_TEXT in response.content.parts[0].text
+
+    @pytest.mark.asyncio
+    async def test_non_overflow_errors_are_not_handled(self):
+        llm = self._llm([])
+
+        response, _ = await self._callback(llm, ConnectionError("connection refused"))
+
+        assert response is None  # ADK re-raises the original error
+        assert llm.request_tokens == []
+
+
 # --- End-to-end: a real ADK Runner with a scripted model --------------------
 
 WINDOW = 8192
@@ -547,14 +642,16 @@ THOUGHT_FRAGMENTS = ["考える。"] * 850
 PLAN = [{"step": "read repo", "status": "done"}, {"step": "write summary", "status": "pending"}]
 
 
-def _make_fake_llm(tool_calls: int, thoughts: bool = False, plan: bool = False):
+def _make_fake_llm(tool_calls: int, thoughts: bool = False, plan: bool = False, overflows: int = 0):
     from google.adk.models.base_llm import BaseLlm
     from google.adk.models.llm_response import LlmResponse
 
     class ScriptedLlm(BaseLlm):
         """Calls big_tool `tool_calls` times, then answers. Records request sizes.
-        With `plan`, the first step records a plan with write_todos."""
+        With `plan`, the first step records a plan with write_todos. The first
+        `overflows` requests are rejected as too large whatever their size."""
         steps: int = 0
+        overflows_left: int = overflows
         request_tokens: list = []
         system_instructions: list = []
         summaries_before_request: list = []
@@ -579,7 +676,8 @@ def _make_fake_llm(tool_calls: int, thoughts: bool = False, plan: bool = False):
             if not any(c.role == "user" and any(p.text for p in c.parts or []) for c in llm_request.contents):
                 # Mirrors llama.cpp's Qwen chat template (--jinja).
                 raise ValueError("Jinja Exception: No user query found in messages.")
-            if tokens > WINDOW:
+            if tokens > WINDOW or self.overflows_left > 0:
+                self.overflows_left = max(0, self.overflows_left - 1)
                 raise ValueError(f"the request exceeds the available context size ({tokens} > {WINDOW})")
             self.steps += 1
             if plan and self.steps == 1:
@@ -732,3 +830,57 @@ async def test_plan_state_is_not_lost_by_compaction_summary():
     assert compaction_events
     assert all("dak_todos" not in (e.actions.state_delta or {}) for e in compaction_events)
     assert session.state["dak_todos"] == PLAN
+
+
+async def _run_turns(overflows: int, messages: list[str]):
+    """Send `messages` one after another to the same session, the first
+    `overflows` model requests being rejected as too large. Returns the model's
+    final text per turn (the run must not raise)."""
+    from google.adk.agents import LlmAgent
+    from google.adk.apps import App
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+
+    llm = _make_fake_llm(tool_calls=0, overflows=overflows)
+    settings = HarnessSettings(context_window=WINDOW)
+    agent = LlmAgent(name="dak_agent", model=llm, instruction="Answer.")
+    app = App(name="dak_agent", root_agent=agent, plugins=[ContextHarnessPlugin(settings, "test-model")])
+    sessions = InMemorySessionService()
+    runner = Runner(app=app, session_service=sessions)
+    session = await sessions.create_session(app_name="dak_agent", user_id="u")
+
+    finals = []
+    for message in messages:
+        final_text = None
+        async for event in runner.run_async(
+            user_id="u", session_id=session.id,
+            new_message=types.Content(role="user", parts=[types.Part(text=message)]),
+        ):
+            for part in (event.content.parts if event.content else None) or []:
+                if part.text and not part.thought:
+                    final_text = part.text
+        finals.append(final_text)
+    return llm, finals
+
+
+@pytest.mark.asyncio
+async def test_an_injected_overflow_is_recovered_and_the_session_continues():
+    """PBI #88 AC1/AC2: one overflow is absorbed by a retry; the next user turn
+    in the same session runs normally."""
+    llm, finals = await _run_turns(overflows=1, messages=["最初の質問", "次の質問"])
+
+    assert finals == ["done", "done"]
+    assert llm.steps == 2
+    assert llm.overflows_left == 0
+
+
+@pytest.mark.asyncio
+async def test_a_persistent_overflow_fails_with_an_explanation_and_the_session_continues():
+    """PBI #88 AC1/AC2: when every retry overflows, the turn ends with an
+    explanation instead of an exception, and the next turn still works."""
+    retries = HarnessSettings(context_window=WINDOW).model_error_retry_attempts
+    llm, finals = await _run_turns(overflows=1 + retries, messages=["最初の質問", "次の質問"])
+
+    assert harness.CONTEXT_OVERFLOW_FAILURE_TEXT in finals[0]
+    assert finals[1] == "done"
+    assert llm.steps == 1  # only the second turn reached the model successfully
