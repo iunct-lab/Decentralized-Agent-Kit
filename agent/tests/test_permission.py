@@ -1,21 +1,24 @@
 """Tests for the declarative tool permission rules (dak_agent.permission)."""
 import asyncio
+from unittest.mock import patch
 
 import pytest
 from google.adk.agents import LlmAgent
 from google.adk.apps import App
 from google.adk.artifacts import InMemoryArtifactService
+from google.adk.events import Event, EventActions
 from google.adk.models.base_llm import BaseLlm
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.tools import FunctionTool
-from google.adk.tools.mcp_tool import StreamableHTTPConnectionParams
+from google.adk.tools.mcp_tool import McpToolset, StreamableHTTPConnectionParams
 from google.adk.tools.mcp_tool.mcp_session_manager import MCPSessionManager
 from google.adk.tools.mcp_tool.mcp_tool import McpTool
 from google.genai import types
 from mcp.types import Tool as McpBaseTool
 
+from dak_agent.adaptive_agent import AdaptiveAgent
 from dak_agent.config import load_agent_config
 from dak_agent.permission import (
     DEFAULT_RULES,
@@ -28,7 +31,7 @@ from dak_agent.permission import (
     strictest,
     tool_source,
 )
-from dak_agent.skill_tools import make_mcp_toolset
+from dak_agent.skill_tools import STATE_MODE_TOOL_NAMES, make_mcp_toolset
 
 
 def run(command, rules=DEFAULT_RULES, source="default"):
@@ -178,9 +181,12 @@ class ScriptedLlm(BaseLlm):
 
 
 class Harness:
-    def __init__(self, tool, call, rules=DEFAULT_RULES):
-        self.llm = ScriptedLlm(model="scripted", call=call, requests=[])
-        agent = LlmAgent(model=self.llm, name="dak_agent", instruction="x", tools=[tool])
+    def __init__(self, tool, call, rules=DEFAULT_RULES, agent=None):
+        if agent is None:
+            self.llm = ScriptedLlm(model="scripted", call=call, requests=[])
+            agent = LlmAgent(model=self.llm, name="dak_agent", instruction="x", tools=[tool])
+        else:
+            self.llm = agent.model
         self.sessions = InMemorySessionService()
         self.runner = Runner(
             app=App(name="dak_agent", root_agent=agent, plugins=[PermissionPlugin(rules, DEFAULT_URL)]),
@@ -201,6 +207,10 @@ class Harness:
         response = {"confirmed": confirmed} | ({"payload": payload} if payload else {})
         return self.send(types.Content(role="user", parts=[types.Part(function_response=types.FunctionResponse(
             id=request.id, name="adk_request_confirmation", response=response))]))
+
+
+def _state_event(delta):
+    return Event(author="user", invocation_id="setup", actions=EventActions(state_delta=delta))
 
 
 def responses(events, name):
@@ -249,14 +259,27 @@ def test_denied_command_returns_observation_without_executing():
 
 
 def test_rules_apply_to_toolsets_built_without_confirmation():
-    """make_mcp_toolset (skills, mode switch, dak:tools) sets
-    require_confirmation=False; the plugin still asks for write_file."""
-    assert make_mcp_toolset(DEFAULT_URL)._require_confirmation is False
+    """After a mode switch, AdaptiveAgent rebuilds the session's MCP tools with
+    make_mcp_toolset (require_confirmation=False); the plugin still asks."""
     tool = mcp_tool("write_file")
-    h = Harness(tool, {"name": "write_file", "args": {"path": "a.txt", "content": "x"}})
+    built = []
 
-    events = h.say("write")
+    async def get_tools(toolset, readonly_context=None):
+        built.append(toolset)
+        return [tool]
 
+    llm = ScriptedLlm(model="scripted", call={"name": "write_file", "args": {"path": "a.txt"}}, requests=[])
+    agent = AdaptiveAgent(model=llm, name="dak_agent", instruction="x",
+                          tools=[make_mcp_toolset(DEFAULT_URL)], mcp_url=DEFAULT_URL)
+    h = Harness(tool, {}, agent=agent)
+    asyncio.run(h.sessions.append_event(h.session, _state_event({STATE_MODE_TOOL_NAMES: ["write_file"]})))
+    h.session = asyncio.run(h.sessions.get_session(app_name="dak_agent", user_id="u", session_id=h.session.id))
+
+    with patch.object(McpToolset, "get_tools", get_tools), \
+            patch("dak_agent.remote_tools.discover_remote_tools", return_value={}):
+        events = h.say("write")
+
+    assert built and all(t._require_confirmation is False for t in built)
     assert tool.calls == []
     assert [fc for e in events for fc in e.get_function_calls() if fc.name == "adk_request_confirmation"]
 
@@ -279,11 +302,16 @@ def test_config_rules_override_defaults(tmp_path):
         "permissions:\n"
         "  - {source: default, tool: run_command, pattern: 'pytest *', action: allow}\n"
         "  - {source: default, tool: read_file, action: deny}\n"
-        "  - {tool: write_file, action: sometimes}\n"
     )
-    rules = DEFAULT_RULES + load_rules(load_agent_config(str(config)).permissions)
+    rules = DEFAULT_RULES + load_rules(load_agent_config(str(config)).permission_rules)
 
-    assert len(rules) == len(DEFAULT_RULES) + 2  # the malformed one is skipped
+    assert len(rules) == len(DEFAULT_RULES) + 2
     assert run("pytest -q", rules) == "allow"
     assert run("pytest -q", DEFAULT_RULES) == "ask"
     assert evaluate(rules, "default", "read_file", {"path": "README.md"}) == "deny"
+
+
+@pytest.mark.parametrize("entry", [{"tool": "write_file", "action": "sometimes"}, {"action": "deny"}, "deny"])
+def test_malformed_config_rule_stops_startup(entry):
+    with pytest.raises(ValueError):
+        load_rules([entry])

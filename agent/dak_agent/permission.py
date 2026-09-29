@@ -14,7 +14,6 @@ the STRICTEST result wins for the whole command (deny > ask > allow).
 - any other MCP server: its URL
 """
 import fnmatch
-import logging
 import os
 import shlex
 from dataclasses import dataclass
@@ -25,7 +24,6 @@ from google.adk.tools.mcp_tool.mcp_tool import McpTool
 
 from .call_config import ALLOWED_MCP_URLS_ENV
 
-logger = logging.getLogger(__name__)
 
 Action = Literal["allow", "ask", "deny"]
 
@@ -212,15 +210,12 @@ class PermissionPlugin(BasePlugin):
 
 
 def load_rules(raw: Any) -> List[Rule]:
-    """`permissions:` of agent_config.yaml -> rules. A malformed entry is
-    skipped with a warning (it must not silently allow anything)."""
+    """`permissions:` of agent_config.yaml -> rules. A malformed entry stops
+    the agent from starting: skipping it could silently drop a deny."""
     rules: List[Rule] = []
     for entry in raw or []:
-        try:
-            action = entry["action"]
-            if action not in _SEVERITY:
-                raise ValueError(f"unknown action {action!r}")
-            rules.append(Rule(str(entry.get("source", "*")), str(entry["tool"]), str(entry.get("pattern", "*")), action))
-        except (KeyError, TypeError, ValueError) as e:
-            logger.warning("Ignoring permission rule %r: %s", entry, e)
+        if not isinstance(entry, Mapping) or "tool" not in entry or entry.get("action") not in _SEVERITY:
+            raise ValueError(f"Invalid permission rule in agent_config.yaml: {entry!r} "
+                             "(needs tool and action: allow | ask | deny)")
+        rules.append(Rule(str(entry.get("source", "*")), str(entry["tool"]), str(entry.get("pattern", "*")), entry["action"]))
     return rules
