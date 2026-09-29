@@ -7,3 +7,11 @@ a2a_peers:
   - name: "agent_provider"
     url: "http://agent-provider:8000"
     capabilities: ["premium_service"]
+
+# Tool permission rules, appended after the defaults in dak_agent/permission.py
+# (the last matching rule wins). source: local | default | caller | <MCP URL>;
+# tool / pattern are globs (pattern matches run_command's command or a path).
+# action: allow | ask | deny.
+permissions: []
+#  - {source: default, tool: run_command, pattern: "pytest *", action: allow}
+#  - {source: caller, tool: write_file, action: ask}
