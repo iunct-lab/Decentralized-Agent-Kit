@@ -13,7 +13,7 @@ from google.adk.models.llm_response import LlmResponse
 
 # Mock McpToolset
 class MockMcpToolset:
-    def __init__(self, connection_params, tool_filter=None, require_confirmation=False):
+    def __init__(self, connection_params, tool_filter=None, require_confirmation=False, header_provider=None):
         self.tool_filter = tool_filter
         self.name = "MockMcpToolset"
         self._tools = []
