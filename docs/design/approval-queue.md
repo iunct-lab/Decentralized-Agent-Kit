@@ -85,7 +85,7 @@ reply は `id` と次の本文で受ける（HTTP は #175 の `POST /approvals/
 | `reject` | `false` | `{"mode": "reject", "reason": "<理由>"}` | `{"observation": "denied_by_user", "reason": "<理由>"}` |
 | `timed_out`（4 で DAK が送る） | `false` | `{"mode": "timed_out", "reason": ""}` | `{"observation": "timed_out"}` |
 
-- `confirmed` は必ず入れる。CLI の既存の答え（`{"confirmed": bool}` だけ、payload なし）も同じ経路で有効なまま（payload が無い拒否は、理由なしの固定文言のまま届く）
+- `confirmed` は必ず入れる。`/run` に payload なしの `{"confirmed": bool}` を直接送るクライアントも ADK の経路として動き続ける（payload が無い拒否は、理由なしの固定文言のまま届く）。CLI はこの直送をやめて `/approvals` に移る（#405）
 - 固定文言 `{"error": "This tool call is rejected."}` を Observation に書き換えるのは `AdaptiveAgent` の `after_tool_callback`（#174 の `_restore_reject_reason`）。`tool_context.tool_confirmation` が `confirmed: false` で `payload.mode` が `reject` / `timed_out` のときだけ動き、それ以外は `None`
 
 ### 質問: `{"answer": "<自由文>"}`
@@ -132,6 +132,8 @@ MRTR の形: サーバはクライアントの要求（`tools/call` など）に
 - #405（新規）: CLI の承認の答えを `/run` 直送から `/approvals/{id}/reply` に移し、`dak-cli approvals` / `dak-cli approve` で別のクライアントが始めたセッションの保留に答えられるようにする（3）
 
 ## 未検証事項
+
+- 1 回のモデルの応答が複数の確認を出したとき、reply が 1 件だけに答えると、残りの確認は捨てられる（答えが最後の user イベントになり、残りはその前に並ぶので一覧から消え、reply は `404`。ADK は最後の user イベントの答えしか読まないので、そのツールは動かず、モデルにも何も届かない）。今は確認を出すのが `planner` だけで並列の確認は起きないので、MCP のツールが確認を求めるようになった後の Task #406（#101 の子）で扱う
 
 - この文書の ADK の流れはコードを読んで確かめたもので、動かしてはいない（#175 の統合テストで確かめる）
 - 別のエージェント（sub_agent）が出した確認は、そのエージェントの processor が処理する（`request_confirmation.py` の「authored by another agent」）。DAK の sub_agent は A2A の `RemoteA2aAgent` だけ（`agent/dak_agent/agent.py:91-92`）で、ツールの確認はその先のエージェントの中で起きる。こちらのセッションに `adk_request_confirmation` を出すのは `AdaptiveAgent` だけなので、一覧は author を見ない（動かしてはいない）
