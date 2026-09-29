@@ -113,7 +113,7 @@ root_agent = AdaptiveAgent(
 )
 
 # --- Tool permissions (always on, harness or not) ---
-permission_plugin = PermissionPlugin(DEFAULT_RULES + load_rules(load_agent_config().permissions), mcp_url)
+permission_plugin = PermissionPlugin(DEFAULT_RULES + load_rules(load_agent_config().permission_rules), mcp_url)
 
 app = App(
     name="dak_agent",
