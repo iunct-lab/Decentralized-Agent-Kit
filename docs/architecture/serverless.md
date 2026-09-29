@@ -35,7 +35,7 @@
 |---|---|---|
 | 指示と出力の形を、呼び出しごとに渡せない | 指示・ツール・モデル・MCP の接続先は、import 時の環境変数で固定（`agent/dak_agent/agent.py:40-100`）。ADK 2.8 の `/run` には `state_delta` / `custom_metadata` の受け口がある（`google/adk/cli/api_server.py:521-532`）が、使っていない | #137 |
 | ツールの定義が毎回すべて載る | MCP の 8 ツールと内蔵ツール（`planner`、`switch_mode`、`list_skills`、`enable_skill`、`read_tool_output`）| #136 |
-| ツールが確認待ちで止まる | MCP のツールはすべて `require_confirmation=True`（`agent/dak_agent/agent.py:44`）| #136 / #101 |
+| ツールが確認待ちで止まる（実際は止まらない） | `agent/dak_agent/agent.py:45` の `require_confirmation=True` は `AdaptiveAgent` が捨てるので効かず、モデルに渡る MCP のツールセットは全部 `require_confirmation=False`（`docs/design/permission-boundary.md`）| #136 / #101 |
 | 検査を LLM の往復でしか行えない | 検査をツールとして渡すと、通る場合も「ツール → 結果 → 最終応答」の往復が要る | #140 |
 | キャッシュが効かない経路 | Luna のプロンプトキャッシュは Responses API だけで効く。LiteLLM の `bedrock/` の既定は Converse | #94 |
 | モード切替の Meta-LLM | 切替のたびに 1 回（`agent/dak_agent/mode_manager.py:216`）。毎ターンではない（最初の見積もりでは多く数えていた）| #139（呼び出し元が有効にしたときだけ）|
