@@ -1,14 +1,34 @@
 """Tests for the declarative tool permission rules (dak_agent.permission)."""
-import pytest
+import asyncio
 
+import pytest
+from google.adk.agents import LlmAgent
+from google.adk.apps import App
+from google.adk.artifacts import InMemoryArtifactService
+from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_response import LlmResponse
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.adk.tools import FunctionTool
+from google.adk.tools.mcp_tool import StreamableHTTPConnectionParams
+from google.adk.tools.mcp_tool.mcp_session_manager import MCPSessionManager
+from google.adk.tools.mcp_tool.mcp_tool import McpTool
+from google.genai import types
+from mcp.types import Tool as McpBaseTool
+
+from dak_agent.config import load_agent_config
 from dak_agent.permission import (
     DEFAULT_RULES,
+    PermissionPlugin,
     Rule,
     evaluate,
     evaluate_ruleset,
+    load_rules,
     split_command_segments,
     strictest,
+    tool_source,
 )
+from dak_agent.skill_tools import make_mcp_toolset
 
 
 def run(command, rules=DEFAULT_RULES, source="default"):
@@ -118,3 +138,152 @@ def test_rules_are_keyed_by_source():
     for path in (".env", "config/.env.local", ".env.production"):
         assert evaluate(DEFAULT_RULES, "default", "read_file", {"path": path}) == "ask"
         assert evaluate(DEFAULT_RULES, "default", "grep", {"pattern": ".", "path": path}) == "ask"
+
+
+# --- PermissionPlugin through ADK's Runner (#177) ---
+
+DEFAULT_URL = "http://mcp-server:8000/mcp"
+
+
+def mcp_tool(name, url=DEFAULT_URL):
+    """A real McpTool as make_mcp_toolset builds it (require_confirmation=False),
+    whose MCP call is replaced by a recorder."""
+    tool = McpTool(
+        mcp_tool=McpBaseTool(name=name, inputSchema={"type": "object", "properties": {}}),
+        mcp_session_manager=MCPSessionManager(StreamableHTTPConnectionParams(url=url)),
+        require_confirmation=False,
+    )
+    tool.calls = []
+
+    async def run(*, args, tool_context, credential=None):
+        tool.calls.append(args)
+        return {"ok": True}
+
+    object.__setattr__(tool, "_run_async_impl", run)
+    return tool
+
+
+class ScriptedLlm(BaseLlm):
+    """Calls `call` once, then answers with text. Records what it was sent."""
+    call: dict
+    requests: list = []
+
+    async def generate_content_async(self, llm_request, stream=False):
+        self.requests.append(llm_request)
+        if len(self.requests) == 1:
+            part = types.Part(function_call=types.FunctionCall(id="fc-1", **self.call))
+        else:
+            part = types.Part(text="done")
+        yield LlmResponse(content=types.Content(role="model", parts=[part]))
+
+
+class Harness:
+    def __init__(self, tool, call, rules=DEFAULT_RULES):
+        self.llm = ScriptedLlm(model="scripted", call=call, requests=[])
+        agent = LlmAgent(model=self.llm, name="dak_agent", instruction="x", tools=[tool])
+        self.sessions = InMemorySessionService()
+        self.runner = Runner(
+            app=App(name="dak_agent", root_agent=agent, plugins=[PermissionPlugin(rules, DEFAULT_URL)]),
+            session_service=self.sessions, artifact_service=InMemoryArtifactService(),
+        )
+        self.session = asyncio.run(self.sessions.create_session(app_name="dak_agent", user_id="u"))
+
+    def send(self, message):
+        async def go():
+            return [e async for e in self.runner.run_async(user_id="u", session_id=self.session.id, new_message=message)]
+        return asyncio.run(go())
+
+    def say(self, text):
+        return self.send(types.Content(role="user", parts=[types.Part(text=text)]))
+
+    def answer(self, events, confirmed, payload=None):
+        request = next(fc for e in events for fc in e.get_function_calls() if fc.name == "adk_request_confirmation")
+        response = {"confirmed": confirmed} | ({"payload": payload} if payload else {})
+        return self.send(types.Content(role="user", parts=[types.Part(function_response=types.FunctionResponse(
+            id=request.id, name="adk_request_confirmation", response=response))]))
+
+
+def responses(events, name):
+    return [fr.response for e in events for fr in e.get_function_responses() if fr.name == name]
+
+
+def test_allowed_git_status_runs_without_confirmation():
+    tool = mcp_tool("run_command")
+    h = Harness(tool, {"name": "run_command", "args": {"command": "git status"}})
+
+    events = h.say("status?")
+
+    assert tool.calls == [{"command": "git status"}]
+    assert not responses(events, "adk_request_confirmation")
+    assert not [fc for e in events for fc in e.get_function_calls() if fc.name == "adk_request_confirmation"]
+
+
+def test_ask_holds_the_call_for_confirmation():
+    for confirmed, expected_calls in ((True, [{"command": "rm x"}]), (False, [])):
+        tool = mcp_tool("run_command")
+        h = Harness(tool, {"name": "run_command", "args": {"command": "rm x"}})
+
+        events = h.say("remove x")
+        assert tool.calls == []  # held, not run
+        assert [fc for e in events for fc in e.get_function_calls() if fc.name == "adk_request_confirmation"]
+
+        answered = h.answer(events, confirmed)
+        assert tool.calls == expected_calls
+        if not confirmed:
+            assert responses(answered, "run_command") == [{"error": "This tool call is rejected."}]
+
+
+def test_denied_command_returns_observation_without_executing():
+    tool = mcp_tool("run_command")
+    h = Harness(tool, {"name": "run_command", "args": {"command": "rm -rf /"}})
+
+    events = h.say("wipe")
+
+    assert tool.calls == []
+    denied = responses(events, "run_command")[0]
+    assert denied["observation"] == "denied_by_policy"
+    assert denied["rules"] == ["default run_command 'rm -rf *' -> deny"]
+    # The Observation reaches the model, which answers on its own.
+    sent = [p.function_response.response for c in h.llm.requests[1].contents for p in c.parts if p.function_response]
+    assert sent[0]["observation"] == "denied_by_policy"
+
+
+def test_rules_apply_to_toolsets_built_without_confirmation():
+    """make_mcp_toolset (skills, mode switch, dak:tools) sets
+    require_confirmation=False; the plugin still asks for write_file."""
+    assert make_mcp_toolset(DEFAULT_URL)._require_confirmation is False
+    tool = mcp_tool("write_file")
+    h = Harness(tool, {"name": "write_file", "args": {"path": "a.txt", "content": "x"}})
+
+    events = h.say("write")
+
+    assert tool.calls == []
+    assert [fc for e in events for fc in e.get_function_calls() if fc.name == "adk_request_confirmation"]
+
+
+def test_tool_source(monkeypatch):
+    assert tool_source(mcp_tool("read_file"), DEFAULT_URL) == "default"
+    assert tool_source(mcp_tool("read_file", "http://caller:9000/mcp"), DEFAULT_URL, {"http://caller:9000/mcp"}) == "caller"
+    assert tool_source(mcp_tool("read_file", "http://other:9000/mcp"), DEFAULT_URL) == "http://other:9000/mcp"
+    assert tool_source(FunctionTool(lambda: None), DEFAULT_URL) == "local"
+
+    monkeypatch.setenv("DAK_ALLOWED_MCP_URLS", "http://caller:9000/mcp")
+    tool = mcp_tool("write_file", "http://caller:9000/mcp")
+    Harness(tool, {"name": "write_file", "args": {"path": "a"}}).say("write")
+    assert tool.calls == [{"path": "a"}]  # the caller's tools run without confirmation (#136)
+
+
+def test_config_rules_override_defaults(tmp_path):
+    config = tmp_path / "agent_config.yaml"
+    config.write_text(
+        "permissions:\n"
+        "  - {source: default, tool: run_command, pattern: 'pytest *', action: allow}\n"
+        "  - {source: default, tool: read_file, action: deny}\n"
+        "  - {tool: write_file, action: sometimes}\n"
+    )
+    rules = DEFAULT_RULES + load_rules(load_agent_config(str(config)).permissions)
+
+    assert len(rules) == len(DEFAULT_RULES) + 2  # the malformed one is skipped
+    assert run("pytest -q", rules) == "allow"
+    assert run("pytest -q", DEFAULT_RULES) == "ask"
+    assert evaluate(rules, "default", "read_file", {"path": "README.md"}) == "deny"

@@ -30,6 +30,8 @@ class AgentConfig:
     """Parsed agent_config.yaml content."""
     mcp_servers: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     a2a_peers: List[Dict[str, Any]] = field(default_factory=list)
+    # Tool permission rules (dak_agent.permission.load_rules), after the defaults.
+    permissions: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def find_config_path(path: Optional[str] = None) -> Optional[str]:
@@ -57,12 +59,13 @@ def load_agent_config(path: Optional[str] = None) -> AgentConfig:
         srv["name"]: srv for srv in raw.get("mcp_servers") or [] if isinstance(srv, dict) and "name" in srv
     }
     a2a_peers = [peer for peer in raw.get("a2a_peers") or [] if isinstance(peer, dict)]
+    permissions = [rule for rule in raw.get("permissions") or [] if isinstance(rule, dict)]
 
     logger.info(
         f"Loaded agent config from {config_path}: "
         f"{len(mcp_servers)} MCP server(s), {len(a2a_peers)} A2A peer(s)"
     )
-    return AgentConfig(mcp_servers=mcp_servers, a2a_peers=a2a_peers)
+    return AgentConfig(mcp_servers=mcp_servers, a2a_peers=a2a_peers, permissions=permissions)
 
 
 def resolve_model_name(env: Optional[Mapping[str, str]] = None) -> str:

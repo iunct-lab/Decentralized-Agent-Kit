@@ -22,7 +22,7 @@ from pydantic import ConfigDict
 from .a2a_peer_manager import get_a2a_sub_agents
 from .adaptive_agent import AdaptiveAgent
 from .builtin_tools import make_builtin_tools
-from .config import get_litellm_model_name, resolve_model_name
+from .config import get_litellm_model_name, load_agent_config, resolve_model_name
 from .enforcer import ENFORCER_INSTRUCTION, enforcer_validator
 from .harness import (
     ContextHarnessPlugin,
@@ -32,6 +32,7 @@ from .harness import (
     make_read_tool_output_tool,
 )
 from .mcp_headers import session_key_header
+from .permission import DEFAULT_RULES, PermissionPlugin, load_rules
 from .skill_tools import ALL_WALLET_TOOL_NAMES, load_solana_wallet_tools
 
 
@@ -40,10 +41,11 @@ class PatchedMcpToolset(McpToolset):
 
 
 # --- MCP server (default) ---
+# No require_confirmation here: allow / ask / deny is decided for every tool
+# call by PermissionPlugin below.
 mcp_url = os.getenv("MCP_SERVER_URL", "http://mcp-server:8000/mcp")
 mcp_toolset = PatchedMcpToolset(
     connection_params=StreamableHTTPConnectionParams(url=mcp_url),
-    require_confirmation=True,
     header_provider=session_key_header,
 )
 
@@ -110,9 +112,12 @@ root_agent = AdaptiveAgent(
     skills_dirs=skills_dirs,
 )
 
+# --- Tool permissions (always on, harness or not) ---
+permission_plugin = PermissionPlugin(DEFAULT_RULES + load_rules(load_agent_config().permissions), mcp_url)
+
 app = App(
     name="dak_agent",
     root_agent=root_agent,
-    plugins=[ContextHarnessPlugin(harness_settings, formatted_model_name)] if use_harness else [],
+    plugins=[permission_plugin] + ([ContextHarnessPlugin(harness_settings, formatted_model_name)] if use_harness else []),
     events_compaction_config=make_compaction_config(harness_settings, llm=model) if use_harness else None,
 )

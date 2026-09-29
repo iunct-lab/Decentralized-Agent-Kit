@@ -14,9 +14,18 @@ the STRICTEST result wins for the whole command (deny > ask > allow).
 - any other MCP server: its URL
 """
 import fnmatch
+import logging
+import os
 import shlex
 from dataclasses import dataclass
-from typing import Any, List, Literal, Mapping, Optional
+from typing import Any, Collection, List, Literal, Mapping, Optional
+
+from google.adk.plugins.base_plugin import BasePlugin
+from google.adk.tools.mcp_tool.mcp_tool import McpTool
+
+from .call_config import ALLOWED_MCP_URLS_ENV
+
+logger = logging.getLogger(__name__)
 
 Action = Literal["allow", "ask", "deny"]
 
@@ -126,3 +135,92 @@ DEFAULT_RULES: List[Rule] = [
     *(Rule("default", "run_command", p, "deny")
       for p in ("rm -rf *", "rm -fr *", "git push --force*", "git push -f*", "git push * --force*", "git push * -f*")),
 ]
+
+
+def tool_source(tool: Any, default_mcp_url: str, caller_urls: Collection[str] = ()) -> str:
+    """Where a tool comes from, as a rule's `source` (see the module doc).
+    An MCP tool whose server URL cannot be read gets "mcp:unknown", which no
+    default rule matches (so it asks)."""
+    if not isinstance(tool, McpTool):
+        return "local"
+    try:
+        url = tool._mcp_session_manager._connection_params.url
+    except AttributeError:
+        return "mcp:unknown"
+    if url == default_mcp_url:
+        return "default"
+    if url in caller_urls:
+        return "caller"
+    return str(url)
+
+
+def matching_rules(rules: List[Rule], source: str, tool_name: str, args: Mapping[str, Any]) -> List[str]:
+    """The rules that decided a denial, for the Observation."""
+    value = subject(tool_name, args)
+    values = split_command_segments(value) if tool_name == "run_command" else None
+    candidates = (values or []) + [value]
+    return [
+        f"{r.source} {r.tool} {r.pattern!r} -> {r.action}"
+        for r in rules
+        if r.action == "deny"
+        and fnmatch.fnmatchcase(source, r.source)
+        and fnmatch.fnmatchcase(tool_name, r.tool)
+        and any(fnmatch.fnmatchcase(v, r.pattern) for v in candidates)
+    ]
+
+
+class PermissionPlugin(BasePlugin):
+    """App-wide allow / ask / deny for every tool call, whichever toolset
+    (default, skill, mode switch, `dak:tools`) it came from
+    (docs/design/permission-boundary.md, decision 1)."""
+
+    def __init__(self, rules: List[Rule], default_mcp_url: str, name: str = "dak_permission"):
+        super().__init__(name=name)
+        self.rules = list(rules)
+        self._default_mcp_url = default_mcp_url
+
+    def _source(self, tool: Any) -> str:
+        caller_urls = {u.strip() for u in os.environ.get(ALLOWED_MCP_URLS_ENV, "").split(",") if u.strip()}
+        return tool_source(tool, self._default_mcp_url, caller_urls)
+
+    async def before_tool_callback(self, *, tool, tool_args, tool_context) -> Optional[dict]:
+        source = self._source(tool)
+        action = evaluate(self.rules, source, tool.name, tool_args)
+        if action == "allow":
+            return None
+        if action == "deny":
+            return {
+                "observation": "denied_by_policy",
+                "tool": tool.name,
+                "reason": f"'{tool.name}' is denied by policy for this input.",
+                "rules": matching_rules(self.rules, source, tool.name, tool_args),
+                "hint": "Do not retry the same call. Choose another way, or ask the user to run it themselves.",
+            }
+        # ask: the same call comes back here with the user's answer.
+        confirmation = tool_context.tool_confirmation
+        if confirmation is None:
+            tool_context.request_confirmation(
+                hint=f"Please approve or reject the tool call {tool.name}() by responding with a"
+                     " FunctionResponse with an expected ToolConfirmation payload."
+            )
+            return {"error": "This tool call requires confirmation, please approve or reject."}
+        if not confirmation.confirmed:
+            # Same text as ADK's tools; the rejection reason is restored from
+            # the answer's payload by the agent's after_tool_callback (#174).
+            return {"error": "This tool call is rejected."}
+        return None
+
+
+def load_rules(raw: Any) -> List[Rule]:
+    """`permissions:` of agent_config.yaml -> rules. A malformed entry is
+    skipped with a warning (it must not silently allow anything)."""
+    rules: List[Rule] = []
+    for entry in raw or []:
+        try:
+            action = entry["action"]
+            if action not in _SEVERITY:
+                raise ValueError(f"unknown action {action!r}")
+            rules.append(Rule(str(entry.get("source", "*")), str(entry["tool"]), str(entry.get("pattern", "*")), action))
+        except (KeyError, TypeError, ValueError) as e:
+            logger.warning("Ignoring permission rule %r: %s", entry, e)
+    return rules
