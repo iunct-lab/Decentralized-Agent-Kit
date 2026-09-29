@@ -136,5 +136,61 @@ class TestCLICommands(unittest.TestCase):
         self.assertEqual(result.exit_code, 2)
 
 
+    @patch('src.main.AgentClient')
+    def test_run_says_an_expired_answer_was_told_to_the_agent(self, mock_client_class):
+        """409: the agent was already resumed with timed_out; do not present it as 'not taken'."""
+        mock_client = MagicMock(session_id="s1")
+        mock_client.run_task.return_value = {"status": "needs_approval", "tool_call": {
+            "tool_name": "planner", "tool_args": {}, "tool_call_id": "fc_1"}}
+        mock_client.reply_approval.side_effect = ApprovalError(409, '{"observation":"timed_out"}')
+        mock_client_class.return_value = mock_client
+
+        result = self.runner.invoke(app, ["run", "plan it"], input="y\n")
+
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        self.assertIn("expired", result.stdout)
+        self.assertNotIn("did not take", result.stdout)
+
+    @patch('src.main.AgentClient')
+    def test_run_says_a_refused_answer_was_not_taken(self, mock_client_class):
+        mock_client = MagicMock(session_id="s1")
+        mock_client.run_task.return_value = {"status": "needs_approval", "tool_call": {
+            "tool_name": "planner", "tool_args": {}, "tool_call_id": "fc_1"}}
+        mock_client.reply_approval.side_effect = ApprovalError(404, "fc_1 is not pending")
+        mock_client_class.return_value = mock_client
+
+        result = self.runner.invoke(app, ["run", "plan it"], input="y\n")
+
+        self.assertIn("did not take", result.stdout)
+        self.assertIn("not pending", result.stdout)
+
+    @patch('src.main.AgentClient')
+    def test_approve_of_an_expired_approval_says_so(self, mock_client_class):
+        mock_client = MagicMock()
+        mock_client.reply_approval.side_effect = ApprovalError(409, '{"observation":"timed_out"}')
+        mock_client_class.return_value = mock_client
+
+        result = self.runner.invoke(app, ["approve", "fc_1", "-s", "s1"])
+
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("expired", result.stdout)
+
+    @patch('src.main.AgentClient')
+    def test_approve_reports_the_next_approval(self, mock_client_class):
+        mock_client = MagicMock()
+        mock_client.reply_approval.return_value = {"status": "needs_approval", "tool_call": {
+            "tool_name": "write_file", "tool_args": {}, "tool_call_id": "fc_2"}}
+        mock_client_class.return_value = mock_client
+
+        result = self.runner.invoke(app, ["approve", "fc_1", "-s", "s1"])
+
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        self.assertIn("Another approval is pending: fc_2", result.stdout)
+
+    def test_approve_refuses_a_reason_without_reject(self):
+        result = self.runner.invoke(app, ["approve", "fc_1", "-s", "s1", "--reason", "no"])
+        self.assertEqual(result.exit_code, 2)
+
+
 if __name__ == '__main__':
     unittest.main()

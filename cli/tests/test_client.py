@@ -178,6 +178,34 @@ class TestAgentClient(unittest.TestCase):
         self.assertEqual(context.exception.status_code, 404)
         self.assertIn("not pending", str(context.exception))
 
+    @patch('src.client.requests.post')
+    @patch('src.client.ConfigManager')
+    def test_reply_approval_keeps_the_id_in_one_path_segment(self, mock_config_class, mock_post):
+        mock_config_class.return_value = self.mock_config
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = []
+
+        AgentClient().reply_approval("a/../../run", "s1", "once")
+
+        self.assertEqual(mock_post.call_args.args[0], "http://test.example.com:8000/approvals/a%2F..%2F..%2Frun/reply")
+
+    @patch('src.client.requests.post')
+    @patch('src.client.requests.get')
+    @patch('src.client.ConfigManager')
+    def test_approvals_need_a_user(self, mock_config_class, mock_get, mock_post):
+        """Not logged in and no --user: say so instead of sending user_id null."""
+        mock_config = MagicMock()
+        mock_config.get_user.return_value = None
+        mock_config_class.return_value = mock_config
+
+        client = AgentClient()
+        for call in (lambda: client.list_approvals("s1"), lambda: client.reply_approval("fc_1", "s1", "once")):
+            with self.assertRaises(ValueError) as context:
+                call()
+            self.assertIn("Not logged in", str(context.exception))
+        mock_get.assert_not_called()
+        mock_post.assert_not_called()
+
     @patch('src.client.ConfigManager')
     def test_run_task_not_logged_in(self, mock_config_class):
         """Test run_task raises error when not logged in."""
