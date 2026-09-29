@@ -199,9 +199,13 @@ def _v1_with(**fields) -> httpx.Response:
         {"maxTimeoutSeconds": "60"},
         {"maxTimeoutSeconds": True},
         {"extra": "USDC"},
+        {"extra": False},
+        {"extra": []},
+        {"extra": 0},
     ],
     ids=["amount-null", "amount-number", "amount-decimal", "asset-null", "payto-empty",
-         "timeout-float", "timeout-string", "timeout-bool", "extra-not-object"],
+         "timeout-float", "timeout-string", "timeout-bool", "extra-not-object",
+         "extra-false", "extra-empty-list", "extra-zero"],
 )
 def test_parse_rejects_bad_field_values(fields):
     with pytest.raises(ValueError):
