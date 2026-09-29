@@ -31,7 +31,7 @@ from dak_agent.permission import (
     strictest,
     tool_source,
 )
-from dak_agent.skill_tools import STATE_MODE_TOOL_NAMES, make_mcp_toolset
+from dak_agent.skill_tools import STATE_ACTIVE_SKILLS, STATE_MODE_TOOL_NAMES, make_mcp_toolset
 
 
 def run(command, rules=DEFAULT_RULES, source="default"):
@@ -258,9 +258,13 @@ def test_denied_command_returns_observation_without_executing():
     assert sent[0]["observation"] == "denied_by_policy"
 
 
-def test_rules_apply_to_toolsets_built_without_confirmation():
-    """After a mode switch, AdaptiveAgent rebuilds the session's MCP tools with
-    make_mcp_toolset (require_confirmation=False); the plugin still asks."""
+@pytest.mark.parametrize("session_state", [
+    {STATE_MODE_TOOL_NAMES: ["write_file"]},  # after a mode switch
+    {STATE_ACTIVE_SKILLS: ["filesystem"]},  # after enable_skill (no local tools.py: MCP fallback)
+])
+def test_rules_apply_to_toolsets_built_without_confirmation(session_state):
+    """AdaptiveAgent rebuilds the session's MCP tools with make_mcp_toolset
+    (require_confirmation=False); the plugin still asks."""
     tool = mcp_tool("write_file")
     built = []
 
@@ -272,7 +276,7 @@ def test_rules_apply_to_toolsets_built_without_confirmation():
     agent = AdaptiveAgent(model=llm, name="dak_agent", instruction="x",
                           tools=[make_mcp_toolset(DEFAULT_URL)], mcp_url=DEFAULT_URL)
     h = Harness(tool, {}, agent=agent)
-    asyncio.run(h.sessions.append_event(h.session, _state_event({STATE_MODE_TOOL_NAMES: ["write_file"]})))
+    asyncio.run(h.sessions.append_event(h.session, _state_event(session_state)))
     h.session = asyncio.run(h.sessions.get_session(app_name="dak_agent", user_id="u", session_id=h.session.id))
 
     with patch.object(McpToolset, "get_tools", get_tools), \
