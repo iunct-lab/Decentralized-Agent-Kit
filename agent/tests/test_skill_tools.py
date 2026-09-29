@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from dak_agent import mcp_headers
 from dak_agent.skill_tools import (
     WALLET_TOOL_NAMES,
     load_local_tools_from_skill,
@@ -85,6 +86,10 @@ class TestMakeMcpToolset(unittest.TestCase):
         kwargs = MockToolset.call_args.kwargs
         self.assertEqual(kwargs["connection_params"].url, "http://srv:8000/sse")
         self.assertEqual(type(kwargs["connection_params"]).__name__, "SseConnectionParams")
+
+    def test_make_mcp_toolset_wires_session_key_header(self):
+        toolset = make_mcp_toolset("http://srv:8000/mcp", "http", ["tool_a"])
+        self.assertIs(toolset.header_provider, mcp_headers.session_key_header)
 
 
 class TestLoadSolanaWalletTools(unittest.TestCase):

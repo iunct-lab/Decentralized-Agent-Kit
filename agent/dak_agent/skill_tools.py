@@ -15,6 +15,7 @@ from google.adk.tools.mcp_tool import McpToolset, StreamableHTTPConnectionParams
 import httpx
 
 from . import call_config
+from .mcp_headers import session_key_header
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,7 @@ def make_mcp_toolset(
         connection_params=conn_params,
         tool_filter=tool_filter,
         require_confirmation=False,
+        header_provider=session_key_header,
     )
 
 

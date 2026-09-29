@@ -31,6 +31,7 @@ from .harness import (
     make_compaction_config,
     make_read_tool_output_tool,
 )
+from .mcp_headers import session_key_header
 from .skill_tools import ALL_WALLET_TOOL_NAMES, load_solana_wallet_tools
 
 
@@ -43,6 +44,7 @@ mcp_url = os.getenv("MCP_SERVER_URL", "http://mcp-server:8000/mcp")
 mcp_toolset = PatchedMcpToolset(
     connection_params=StreamableHTTPConnectionParams(url=mcp_url),
     require_confirmation=True,
+    header_provider=session_key_header,
 )
 
 # --- Feature flags ---
