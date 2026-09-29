@@ -102,7 +102,7 @@ _DENSE_KINDS = frozenset({"user", "text"})
 # leading marker lets clients tell it from an ordinary answer.
 CONTEXT_OVERFLOW_FAILURE_TEXT = (
     "[CONTEXT_OVERFLOW]\nThis request could not be processed even after compaction and "
-    "budget tightening. Start a new session, or call write_handoff then continue.\n"
+    "budget tightening. Start a new session, or narrow the request.\n"
 )
 
 
@@ -778,11 +778,13 @@ class ContextHarnessPlugin(BasePlugin):
         """Retry a request the model rejected for size on a halved budget, a
         bounded number of times within this one call (no state carries over to
         the next turn); then answer with an explanation instead of raising.
-        Other errors return None, so ADK re-raises them unchanged."""
+        Other errors return None, so ADK re-raises them unchanged; a
+        different error during a retry is raised as is."""
         if not is_context_overflow_error(error):
             return None
         settings = self._settings_for(callback_context)
-        model = callback_context._invocation_context.agent.canonical_model
+        invocation = callback_context._invocation_context
+        model = invocation.agent.canonical_model
         budget = settings.request_token_budget
         for attempt in range(1, settings.model_error_retry_attempts + 1):
             budget = max(1, budget // 2)
@@ -790,13 +792,17 @@ class ContextHarnessPlugin(BasePlugin):
             logger.warning(
                 "Context harness: model rejected the request for size; retry %d/%d on %d tokens "
                 "(%d part(s) elided): %s", attempt, settings.model_error_retry_attempts, budget, elided, error)
+            invocation.increment_llm_call_count()  # a retry is a model call: honour max_llm_calls
             try:
                 async for llm_response in model.generate_content_async(llm_request, stream=False):
                     if llm_response.content:
                         return llm_response
             except Exception as e:
+                if not is_context_overflow_error(e):
+                    raise  # not a size problem: report it as it is
                 error = e
-                logger.warning("Context harness: retry %d failed (%s: %s)", attempt, type(e).__name__, e)
+                continue
+            logger.warning("Context harness: retry %d returned no content", attempt)
         logger.error("Context harness: request still rejected after %d retry(ies); ending the turn with an "
                      "explanation", settings.model_error_retry_attempts)
         return LlmResponse(
