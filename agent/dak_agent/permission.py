@@ -17,11 +17,12 @@ import fnmatch
 import os
 import shlex
 from dataclasses import dataclass
-from typing import Any, Collection, List, Literal, Mapping, Optional
+from typing import Any, Collection, List, Literal, Mapping, MutableMapping, Optional
 
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools.mcp_tool.mcp_tool import McpTool
 
+from . import enforcer
 from .call_config import ALLOWED_MCP_URLS_ENV
 
 
@@ -98,17 +99,65 @@ def split_command_segments(command: str) -> Optional[List[str]]:
     return [s for s in segments if s]
 
 
-def evaluate(rules: List[Rule], source: str, tool_name: str, args: Mapping[str, Any]) -> Action:
+def _values(tool_name: str, args: Mapping[str, Any]) -> Optional[List[str]]:
+    """What the rules are matched against, one per `run_command` segment.
+    None when the command cannot be split."""
     value = subject(tool_name, args)
     if tool_name != "run_command":
-        return evaluate_ruleset(rules, source, tool_name, value)
+        return [value]
     segments = split_command_segments(value)
     if segments is None:
+        return None
+    return segments or [value]
+
+
+def evaluate(
+    rules: List[Rule], source: str, tool_name: str, args: Mapping[str, Any],
+    always: Collection[tuple] = (),
+) -> Action:
+    """`always`: (source, tool, value) the user approved for good
+    (`always_approvals`). It turns an "ask" value into "allow" and nothing
+    else: a deny stays, and an unapproved segment still asks."""
+    values = _values(tool_name, args)
+    if values is None:
         # A deny still applies to the whole text, but it is never allowed.
-        return strictest("ask", evaluate_ruleset(rules, source, tool_name, value))
-    if not segments:
-        return evaluate_ruleset(rules, source, tool_name, value)
-    return strictest(*(evaluate_ruleset(rules, source, tool_name, s) for s in segments))
+        return strictest("ask", evaluate_ruleset(rules, source, tool_name, subject(tool_name, args)))
+
+    def one(value: str) -> Action:
+        action = evaluate_ruleset(rules, source, tool_name, value)
+        if action == "ask" and (source, tool_name, value) in always:
+            return "allow"
+        return action
+
+    return strictest(*(one(v) for v in values))
+
+
+# Session-state key for the user's "always" approvals. Only
+# `record_always_approval` writes it, and only when the user answered a
+# confirmation with `always` (docs/design/permission-boundary.md).
+PERSISTED_ALLOW_KEY = "dak_permission_always_rules"
+
+
+def always_approvals(state: Mapping[str, Any]) -> set:
+    return {(e["source"], e["tool"], e["pattern"]) for e in state.get(PERSISTED_ALLOW_KEY) or []}
+
+
+def record_always_approval(state: MutableMapping[str, Any], source: str, tool_name: str, args: Mapping[str, Any]) -> None:
+    """Remember this exact call (each `run_command` segment, not a prefix).
+    A command that cannot be split is not remembered (never allowed)."""
+    entries = list(state.get(PERSISTED_ALLOW_KEY) or [])
+    for value in _values(tool_name, args) or []:
+        entry = {"source": source, "tool": tool_name, "pattern": value}
+        if entry not in entries:
+            entries.append(entry)
+    state[PERSISTED_ALLOW_KEY] = entries  # reassigned so ADK records the delta
+
+
+def enforcer_gate(tool_name: str, allowed_tools: Optional[Collection[str]]) -> Action:
+    """The Ulysses Pact as an action: tools outside the active plan are denied."""
+    if allowed_tools is None or tool_name in allowed_tools:
+        return "allow"
+    return "deny"
 
 
 _READ_ONLY_GIT = ("status", "log", "diff", "show")
@@ -183,7 +232,17 @@ class PermissionPlugin(BasePlugin):
 
     async def before_tool_callback(self, *, tool, tool_args, tool_context) -> Optional[dict]:
         source = self._source(tool)
-        action = evaluate(self.rules, source, tool.name, tool_args)
+        state = tool_context.state
+        if enforcer_gate(tool.name, enforcer._get_allowed_tools(tool_context)) == "deny":
+            # Checked first: an approval must not get around the plan.
+            return {
+                "observation": "denied_by_policy",
+                "tool": tool.name,
+                "reason": f"'{tool.name}' is not in the active plan (Ulysses Pact).",
+                "rules": [],
+                "hint": "Use a tool in the plan, or call planner to update the plan.",
+            }
+        action = evaluate(self.rules, source, tool.name, tool_args, always_approvals(state))
         if action == "allow":
             return None
         if action == "deny":
@@ -206,6 +265,9 @@ class PermissionPlugin(BasePlugin):
             # Same text as ADK's tools; the rejection reason is restored from
             # the answer's payload by the agent's after_tool_callback (#174).
             return {"error": "This tool call is rejected."}
+        payload = confirmation.payload
+        if isinstance(payload, Mapping) and payload.get("mode") == "always":
+            record_always_approval(state, source, tool.name, tool_args)
         return None
 
 
