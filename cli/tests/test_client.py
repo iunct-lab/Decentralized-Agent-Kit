@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import uuid
 
-from src.client import AgentClient
+from src.client import AgentClient, ApprovalError
 
 
 class TestAgentClient(unittest.TestCase):
@@ -114,6 +114,69 @@ class TestAgentClient(unittest.TestCase):
         
         self.assertEqual(result["status"], "needs_approval")
         self.assertEqual(result["tool_call"]["tool_name"], "test_tool")
+
+    @patch('src.client.requests.get')
+    @patch('src.client.ConfigManager')
+    def test_list_approvals_calls_endpoint(self, mock_config_class, mock_get):
+        """The pending list comes from the agent's /approvals, for the logged-in user by default."""
+        mock_config_class.return_value = self.mock_config
+        mock_get.return_value.json.return_value = [{"id": "fc_123", "kind": "approval"}]
+
+        client = AgentClient()
+        self.assertEqual(client.list_approvals("s1"), [{"id": "fc_123", "kind": "approval"}])
+        self.assertEqual(client.list_approvals("s1", user_id="bff_user"), [{"id": "fc_123", "kind": "approval"}])
+
+        first, second = mock_get.call_args_list
+        self.assertEqual(first.args[0], "http://test.example.com:8000/approvals")
+        self.assertEqual(first.kwargs["params"], {"app_name": "dak_agent", "user_id": "test_user", "session_id": "s1"})
+        self.assertEqual(second.kwargs["params"]["user_id"], "bff_user")
+
+    @patch('src.client.requests.post')
+    @patch('src.client.ConfigManager')
+    def test_reply_approval_posts_mode_and_reason(self, mock_config_class, mock_post):
+        """An answer goes to /approvals/{id}/reply, never straight to /run."""
+        mock_config_class.return_value = self.mock_config
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = [{"content": {"role": "model", "parts": [{"text": "ok"}]}}]
+
+        client = AgentClient()
+        result = client.reply_approval("fc_123", "s1", "reject", reason="not now")
+
+        self.assertEqual(result, [{"content": {"role": "model", "parts": [{"text": "ok"}]}}])
+        mock_post.assert_called_once()
+        self.assertEqual(mock_post.call_args.args[0], "http://test.example.com:8000/approvals/fc_123/reply")
+        self.assertEqual(mock_post.call_args.kwargs["json"], {
+            "app_name": "dak_agent", "user_id": "test_user", "session_id": "s1",
+            "mode": "reject", "reason": "not now",
+        })
+
+    @patch('src.client.requests.post')
+    @patch('src.client.ConfigManager')
+    def test_reply_approval_reports_the_next_approval(self, mock_config_class, mock_post):
+        """The resumed turn can ask for another approval; it is detected like run_task's."""
+        mock_config_class.return_value = self.mock_config
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = [{"content": {"parts": [{"functionCall": {
+            "id": "fc_456", "name": "adk_request_confirmation",
+            "args": {"originalFunctionCall": {"name": "planner", "args": {}}}}}]}}]
+
+        result = AgentClient().reply_approval("fc_123", "s1", "once")
+
+        self.assertEqual(result["status"], "needs_approval")
+        self.assertEqual(result["tool_call"]["tool_call_id"], "fc_456")
+
+    @patch('src.client.requests.post')
+    @patch('src.client.ConfigManager')
+    def test_reply_approval_raises_when_not_pending(self, mock_config_class, mock_post):
+        """404 (already answered, or unknown) must not look like success."""
+        mock_config_class.return_value = self.mock_config
+        mock_post.return_value = MagicMock(status_code=404, text='{"detail":"fc_123 is not pending"}')
+        mock_post.return_value.json.return_value = {"detail": "fc_123 is not pending"}
+
+        with self.assertRaises(ApprovalError) as context:
+            AgentClient().reply_approval("fc_123", "s1", "once")
+        self.assertEqual(context.exception.status_code, 404)
+        self.assertIn("not pending", str(context.exception))
 
     @patch('src.client.ConfigManager')
     def test_run_task_not_logged_in(self, mock_config_class):
