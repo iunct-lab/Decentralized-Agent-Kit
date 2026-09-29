@@ -2,6 +2,7 @@ import requests
 from typing import Dict, Any, List, Optional
 import time
 import uuid
+from urllib.parse import quote
 from .config import ConfigManager
 
 
@@ -123,12 +124,18 @@ class AgentClient:
         except requests.RequestException as e:
             raise ConnectionError(f"Failed to communicate with agent: {e}")
 
+    def _approvals_user(self, user_id: Optional[str]) -> str:
+        if not (user_id or self.username):
+            raise ValueError("Not logged in. Please run 'dak-cli login' first, or pass --user.")
+        return user_id or self.username
+
     def list_approvals(self, session_id: str, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Pending approvals and questions of a session, from any client (GET /approvals)."""
+        user_id = self._approvals_user(user_id)
         try:
             response = requests.get(
                 f"{self.base_url}/approvals",
-                params={"app_name": "dak_agent", "user_id": user_id or self.username, "session_id": session_id},
+                params={"app_name": "dak_agent", "user_id": user_id, "session_id": session_id},
                 headers=self._get_headers(),
                 timeout=30
             )
@@ -141,10 +148,11 @@ class AgentClient:
                        user_id: Optional[str] = None) -> Any:
         """Answer a pending approval (once / always / reject) through POST
         /approvals/{id}/reply, which refuses an id that is no longer pending."""
+        user_id = self._approvals_user(user_id)
         try:
             response = requests.post(
-                f"{self.base_url}/approvals/{approval_id}/reply",
-                json={"app_name": "dak_agent", "user_id": user_id or self.username, "session_id": session_id,
+                f"{self.base_url}/approvals/{quote(approval_id, safe='')}/reply",
+                json={"app_name": "dak_agent", "user_id": user_id, "session_id": session_id,
                       "mode": mode, "reason": reason},
                 headers=self._get_headers(),
                 timeout=300

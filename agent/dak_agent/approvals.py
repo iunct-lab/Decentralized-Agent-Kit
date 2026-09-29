@@ -103,7 +103,7 @@ def list_pending(events: list[dict]) -> list[dict]:
 def build_reply_function_response(fc_id: str, mode: str, reason: str = "") -> dict:
     """The `new_message` that answers a confirmation: `mode` is once / always /
     reject (timed_out when DAK answers an expired one). `confirmed` is always
-    set, as the CLI's answer (`cli/src/client.py`) is."""
+    set: it is what ADK reads; `payload` carries DAK's mode and reason."""
     if mode not in REPLY_MODES:
         raise ValueError(f"unknown reply mode: {mode!r}")
     return {"parts": [{"functionResponse": {

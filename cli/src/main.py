@@ -72,9 +72,16 @@ def _answer_approvals(client: AgentClient, response_data):
                 response_data = client.reply_approval(
                     tool_call.get("tool_call_id"), client.session_id, "once" if approved else "reject")
         except ApprovalError as e:
-            console.print(f"[red]The agent did not take the answer ({e}).[/red]")
+            console.print(_refusal(e))
             return []
     return response_data
+
+
+def _refusal(e: ApprovalError) -> str:
+    """409 is not "nothing happened": the agent was resumed with timed_out and the model moved on."""
+    if e.status_code == 409:
+        return "[yellow]The approval had expired; the agent was told it timed out and has moved on.[/yellow]"
+    return f"[red]The agent did not take the answer ({escape(str(e))}).[/red]"
 
 app = typer.Typer(help="DAK CLI - Decentralized Agent Kit Command Line Interface")
 console = Console()
@@ -372,11 +379,17 @@ def approve(
     if reject and always:
         console.print("[red]--reject and --always cannot be used together.[/red]")
         raise typer.Exit(2)
+    if reason and not reject:
+        console.print("[red]--reason goes with --reject.[/red]")
+        raise typer.Exit(2)
     mode = "reject" if reject else "always" if always else "once"
     client = AgentClient(session_id=session)
     try:
         with console.status("[bold green]Answering..."):
             response_data = client.reply_approval(approval_id, session, mode, reason=reason, user_id=user)
+    except ApprovalError as e:
+        console.print(_refusal(e))
+        raise typer.Exit(1)
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
