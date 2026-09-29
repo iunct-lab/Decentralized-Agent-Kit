@@ -65,24 +65,33 @@ def list_pending_approvals(events: list[dict]) -> list[dict]:
 
 
 def list_pending_questions(events: list[dict]) -> list[dict]:
-    """`ask_question` calls after the last user event. The tool ends the
-    invocation, and the next user message (from any client) is the answer."""
-    pending = []
-    for event in _since_last_user_event(events):
+    """The `ask_question` call that ended the invocation: its response is the
+    last event, and it is not an error (a failed call, e.g. a missing
+    argument, does not end the invocation). The next user message, from any
+    client, is the answer."""
+    recent = _since_last_user_event(events)
+    if not recent:
+        return []
+    ended = [p["functionResponse"] for p in _parts(recent[-1])
+             if (p.get("functionResponse") or {}).get("name") == ASK_QUESTION
+             and "error" not in (p["functionResponse"].get("response") or {})]
+    if not ended:
+        return []
+    ended_id = ended[0].get("id")
+    for event in recent:
         for part in _parts(event):
             call = part.get("functionCall")
-            if not call or call.get("name") != ASK_QUESTION:
-                continue
-            args = call.get("args") or {}
-            pending.append({
-                "id": call.get("id"),
-                "kind": "question",
-                "tool_name": ASK_QUESTION,
-                "questions": args.get("questions") or [],
-                "context": args.get("context", ""),
-                "requested_at": event.get("timestamp"),
-            })
-    return pending
+            if call and call.get("name") == ASK_QUESTION and call.get("id") == ended_id:
+                args = call.get("args") or {}
+                return [{
+                    "id": ended_id,
+                    "kind": "question",
+                    "tool_name": ASK_QUESTION,
+                    "questions": args.get("questions") or [],
+                    "context": args.get("context", ""),
+                    "requested_at": event.get("timestamp"),
+                }]
+    return []
 
 
 def list_pending(events: list[dict]) -> list[dict]:
