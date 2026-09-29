@@ -70,6 +70,9 @@ Task 本文の `python3.13` は誤りで、agent の venv は 3.12。
 
 reply は `id` と次の本文で受ける（HTTP は #175 の `POST /approvals/{id}/reply`）。どちらも `new_message` に組み立てて `POST /run` と同じ `Runner.run_async` に渡すだけで、保留の状態は持たない。
 
+**reply はまず `list_pending` にその `id` があるかを確かめ、無ければ `404` を返して何も流さない**（答え済み・新しい発言で捨てられた・存在しない）。ADK は二重の答えを止めない: 答え済みかを見るのは「最後の user イベントより後」だけ（`request_confirmation.py` の Step 2）なので、BFF が `once` で答えてツールが動いた後に CLI が同じ `id` へ答えると、その答えが最後の user イベントになり、ツールがもう一度動く。受け入れ条件 1 の「両方のクライアントから答えられる」はこの二重の答えを含むので、`404` で止める。質問も同じ（答え済みの質問への答えは、新しい発言として流れてしまう）。
+この確かめは `/approvals` の reply だけに効く。CLI の既存の答え方（`/run` に直接 functionResponse を送る）は ADK の標準の経路なので、ここでは止められない。
+
 ### 承認: `{"mode": "once" | "always" | "reject", "reason": ""}`
 
 `approvals.build_reply_function_response(fc_id, mode, reason)`（#173）が作る `new_message`:
@@ -77,7 +80,7 @@ reply は `id` と次の本文で受ける（HTTP は #175 の `POST /approvals/
 | DAK の `mode` | `response.confirmed` | `response.payload` | モデルに届く Observation |
 |---|---|---|---|
 | `once` | `true` | `{"mode": "once", "reason": ""}` | ツールの実行結果 |
-| `always` | `true` | `{"mode": "always", "reason": ""}` | ツールの実行結果（永続化は #101 / #178 が `payload.mode` を読んで行う。#100 では `once` と同じ動き） |
+| `always` | `true` | `{"mode": "always", "reason": ""}` | ツールの実行結果（永続化は #101 / #178 が `payload.mode` を読んで行う。#100 では `once` と同じ動き。区別はセッションのイベントに残る functionResponse の `payload.mode` と、再実行時の `tool_context.tool_confirmation.payload` で見える） |
 | `reject` | `false` | `{"mode": "reject", "reason": "<理由>"}` | `{"observation": "denied_by_user", "reason": "<理由>"}` |
 | `timed_out`（4 で DAK が送る） | `false` | `{"mode": "timed_out", "reason": ""}` | `{"observation": "timed_out"}` |
 
@@ -92,10 +95,10 @@ reply は `id` と次の本文で受ける（HTTP は #175 の `POST /approvals/
 
 - 期限は `DAK_APPROVAL_TIMEOUT_SECONDS`（既定 900 秒）。`approvals.is_expired(requested_at)` = `time.time() - requested_at > PENDING_TIMEOUT_SECONDS`（#173）
 - 常駐のスケジューラやタイマーは持たない。**次にその保留が触れられたとき**に評価する
-  - 一覧: 期限切れの保留は `status: "timed_out"` を付けて返す（消さない。消費するのは reply）
-  - reply: 期限切れの承認に reply が来たら、答えの代わりに `mode: "timed_out"` の functionResponse を流して invocation を再開させ、HTTP は `409` と `{"observation": "timed_out"}` を返す。モデルには `denied_by_user` ではなく `timed_out` が届き、invocation は落ちない
+  - 一覧: 期限切れの保留は `status: "timed_out"` を付けて返す（消さない。消費するのは reply）。Task #172 の手順 4 は「一覧取得か reply で消費する」だったが、一覧では消費しない: 消費は `timed_out` の答えを流して invocation を再開させること、つまりエージェントと LLM を動かすことで、`GET` と 2 秒ごとに一覧を読む SSE（#175）に副作用とお金のかかる処理を持たせることになる
+  - reply: 期限切れの承認に reply が来たら、答えの代わりに `mode: "timed_out"` の functionResponse を流して invocation を再開させ、HTTP は `409` と `{"observation": "timed_out"}` を返す。モデルには `denied_by_user` ではなく `timed_out` が届き、invocation は落ちない。**`409` でも副作用はある**（答えは受け付けなかったが、エージェントは `timed_out` を受けて先へ進んだ）。クライアントは `409` を「何も起きなかった」と読んで答え直さない（答え直しても、その `id` はもう保留に無いので `404`）
   - 期限切れの質問への reply は、期限を理由に拒まない（答えは自由文で、ADK から見て普通の発言。拒むと利用者は同じ文を送り直すだけ）。一覧の `status` だけ `timed_out` にする
-- 誰も触らない保留は、次の user の発言で自然に捨てられる（1 の最後の点）。捨てられた保留は一覧に出ない
+- 誰も触らない保留は、次の user の発言で自然に捨てられる（1 の最後の点）。捨てられた保留は一覧に出ない。このときモデルに `timed_out` は届かず、モデルが見るのは元の「requires confirmation」の結果と新しい発言。利用者が答えずに次の話へ進んだのであって、エージェントが待ち続けているわけではない（invocation は確認を出した時点で終わっている）ので、`timed_out` を差し込まない
 
 ## 5. MRTR（MCP 2026-07-28、SEP-2322）との対応
 
@@ -123,7 +126,7 @@ MRTR の形: サーバはクライアントの要求（`tools/call` など）に
 
 - #173: 一覧の各件のキー名を `fc_id` ではなく `id` にし、`kind` もここで付ける（質問と同じ一覧に並べるため）。それ以外は Task 本文どおり
 - #174: 理由を state に退避しない。`stash_reject_reason` は作らず、`_restore_reject_reason` は `tool_context.tool_confirmation.payload` を読む（1 の事実）。`build_question_reply(answer)` を足す（3 の質問の答え。受け入れ条件 3 の「質問も保留として回答でき」）
-- #175: 統合テストの保留は `run_command` では作れない（MCP のツールは今は確認を求めない）。`DAK_PLANNER_REQUIRE_CONFIRMATION=true` を test override で与え、fake-LLM に `planner` の functionCall を台本して作る。#101 が入れば同じテストの台本を MCP のツールに替えられる。reply の本文に質問の `answer` を足し、`reject` のときの state 書き込みはしない。期限切れの質問は `409` にしない（4）
+- #175: reply は `list_pending` に無い `id` を `404` にする（3）。期限切れの承認への `409` は副作用ありと API の説明に書く（4）。統合テストの保留は `run_command` では作れない（MCP のツールは今は確認を求めない）。`DAK_PLANNER_REQUIRE_CONFIRMATION=true` を test override で与え、fake-LLM に `planner` の functionCall を台本して作る。#101 が入れば同じテストの台本を MCP のツールに替えられる。reply の本文に質問の `answer` を足し、`reject` のときの state 書き込みはしない。期限切れの質問は `409` にしない（4）
 
 ## 未検証事項
 
