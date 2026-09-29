@@ -348,10 +348,15 @@ def test_always_does_not_override_deny_or_new_segments():
         return evaluate(DEFAULT_RULES, "default", "run_command", {"command": command}, always)
 
     assert run_("make build") == "allow"
-    assert run_("make build && git status") == "allow"
-    assert run_("make build && rm x") == "ask"  # the new segment asks again
+    assert run_("make build && rm x") == "ask"  # an extended command asks again
+    assert run_("make  build") == "ask"  # another text, even if the shell reads it the same
     assert run_("make build && rm -rf /") == "deny"
     assert run_("make build > out") == "ask"  # never allow what cannot be split
+    # Quoting is part of the approval: `rm '*.txt'` does not approve `rm *.txt`.
+    quoted = {}
+    record_always_approval(quoted, "default", "run_command", {"command": "rm '*.txt'"})
+    assert evaluate(DEFAULT_RULES, "default", "run_command", {"command": "rm *.txt"}, always_approvals(quoted)) == "ask"
+    assert evaluate(DEFAULT_RULES, "default", "run_command", {"command": "rm '*.txt'"}, always_approvals(quoted)) == "allow"
     # Scoped to the source: another server's run_command still asks.
     assert evaluate(DEFAULT_RULES, "http://other/mcp", "run_command", {"command": "make build"}, always) == "ask"
 

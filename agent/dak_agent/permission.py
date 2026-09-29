@@ -99,37 +99,26 @@ def split_command_segments(command: str) -> Optional[List[str]]:
     return [s for s in segments if s]
 
 
-def _values(tool_name: str, args: Mapping[str, Any]) -> Optional[List[str]]:
-    """What the rules are matched against, one per `run_command` segment.
-    None when the command cannot be split."""
-    value = subject(tool_name, args)
-    if tool_name != "run_command":
-        return [value]
-    segments = split_command_segments(value)
-    if segments is None:
-        return None
-    return segments or [value]
-
-
 def evaluate(
     rules: List[Rule], source: str, tool_name: str, args: Mapping[str, Any],
     always: Collection[tuple] = (),
 ) -> Action:
     """`always`: (source, tool, value) the user approved for good
-    (`always_approvals`). It turns an "ask" value into "allow" and nothing
-    else: a deny stays, and an unapproved segment still asks."""
-    values = _values(tool_name, args)
-    if values is None:
-        # A deny still applies to the whole text, but it is never allowed.
-        return strictest("ask", evaluate_ruleset(rules, source, tool_name, subject(tool_name, args)))
-
-    def one(value: str) -> Action:
+    (`always_approvals`). It turns "ask" into "allow" for exactly that call
+    text and nothing else: a deny stays, a changed or extended command asks
+    again, and a command that cannot be split is never allowed."""
+    value = subject(tool_name, args)
+    if tool_name != "run_command":
         action = evaluate_ruleset(rules, source, tool_name, value)
-        if action == "ask" and (source, tool_name, value) in always:
-            return "allow"
-        return action
-
-    return strictest(*(one(v) for v in values))
+    else:
+        segments = split_command_segments(value)
+        if segments is None:
+            # A deny still applies to the whole text, but it is never allowed.
+            return strictest("ask", evaluate_ruleset(rules, source, tool_name, value))
+        action = strictest(*(evaluate_ruleset(rules, source, tool_name, s) for s in segments or [value]))
+    if action == "ask" and (source, tool_name, value) in always:
+        return "allow"
+    return action
 
 
 # Session-state key for the user's "always" approvals. Only
@@ -143,14 +132,16 @@ def always_approvals(state: Mapping[str, Any]) -> set:
 
 
 def record_always_approval(state: MutableMapping[str, Any], source: str, tool_name: str, args: Mapping[str, Any]) -> None:
-    """Remember this exact call (each `run_command` segment, not a prefix).
-    A command that cannot be split is not remembered (never allowed)."""
+    """Remember this exact call text (not a prefix, not a shell-normalised
+    form: `rm '*.txt'` must not approve `rm *.txt`). A command that cannot
+    be split is not remembered (never allowed)."""
+    value = subject(tool_name, args)
+    if tool_name == "run_command" and split_command_segments(value) is None:
+        return
     entries = list(state.get(PERSISTED_ALLOW_KEY) or [])
-    for value in _values(tool_name, args) or []:
-        entry = {"source": source, "tool": tool_name, "pattern": value}
-        if entry not in entries:
-            entries.append(entry)
-    state[PERSISTED_ALLOW_KEY] = entries  # reassigned so ADK records the delta
+    entry = {"source": source, "tool": tool_name, "pattern": value}
+    if entry not in entries:
+        state[PERSISTED_ALLOW_KEY] = entries + [entry]  # reassigned so ADK records the delta
 
 
 def enforcer_gate(tool_name: str, allowed_tools: Optional[Collection[str]]) -> Action:
