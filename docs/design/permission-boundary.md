@@ -101,6 +101,7 @@ PBI #16。この文書は、ツール実行の権限（許可 / 確認 / 拒否�
 - 呼び出し元が `dak:tools` で渡すツールも同じ callback を通る。確認なしで動かすなら、callback の規則で allow にする。ツールセットの設定で迂回しない。**これは #101 の決定ログ（2026-09-23）の「#136 のツールは規則の評価に合流させず、#136 が自分のツールセットに `require_confirmation=False` を付ける」を置き換える**
 - 規則は、ツール名だけでなく出どころ（どの MCP サーバのツールか）でも分けられる鍵で引く。MCP のツール名は接頭辞なし（#101 の決定ログ）なので、名前だけだと呼び出し元が渡したサーバの `write_file` と既定の mcp-server の `write_file` を区別できず、一方を allow にすると他方も通る。鍵の形（ツールが持つ接続先の URL、接頭辞など）は #101 で決める
   - 決めた形（#177）: 規則は `source × tool × pattern`（`agent/dak_agent/permission.py` の `Rule`）。`source` は McpTool の接続先 URL から求め、既定の mcp-server（`MCP_SERVER_URL`）は `default`、`DAK_ALLOWED_MCP_URLS` のサーバ（呼び出し元が `dak:tools` で渡すもの）は `caller`、それ以外の MCP サーバは URL そのもの、MCP でないツール（組み込み・スキルのローカルツール）は `local`。既定の規則は `local` と `caller` を allow（今の挙動と #136）、`default` を読み取り系だけ allow・残りは ask・`rm -rf` などは deny。規則は `agent_config.yaml` の `permissions:` で足す（後勝ち）。同じ URL が既定と `DAK_ALLOWED_MCP_URLS` の両方にあれば `default` として扱う
+  - 評価の順番（#178）: 1. Ulysses Pact（`enforcer.py` の計画）に無いツールは deny。2. 既定の規則（`DEFAULT_RULES`）→ `agent_config.yaml` の `permissions:` の順に並べ、一致した最後の規則（`run_command` はセグメントごとに評価して最も厳しいもの）。3. ask になった値のうち、利用者が確認に `always`（#100 の reply の `payload.mode`）で答えたもの（セッションの state の `dak_permission_always_rules`。その値そのものだけで、前方一致に広げない）は allow。継続許可は ask を allow にするだけで、deny・計画外・シェルが展開するセグメント・分けられないコマンドには効かない。deny はツールを実行せず `denied_by_policy` の Observation、ask は ADK の確認（`adk_request_confirmation`）で保留する
 
 ## #20 への制約
 
