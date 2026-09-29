@@ -66,7 +66,8 @@ Task 本文の `python3.13` は誤りで、agent の venv は 3.12。
 保留に数える条件:
 
 - 承認: 最後の `author == "user"` のイベントより後にある `adk_request_confirmation` の functionCall。答えは user のイベントなので、答え済みの確認はその答えより前にあり、ここに入らない（同じ id の functionResponse を探す必要は無い）
-- 質問: 最後の `author == "user"` のイベントより後に `ask_question` の functionCall があるもの（その後に user のイベントがあれば答え済み）
+- 質問: invocation を終えた `ask_question`。最後の `author == "user"` のイベントより後で、最後のイベントが `ask_question` のエラーでない functionResponse のもの（引数の不足などで失敗した呼び出しは invocation を終えないので数えない。その後に user のイベントがあれば答え済み）
+- どちらも、圧縮のイベント（author は user、`actions.compaction` だけ）は無いものとして数える（1 の事実を参照）
 
 ## 3. 決定: reply 契約
 
