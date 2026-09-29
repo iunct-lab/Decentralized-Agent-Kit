@@ -26,7 +26,7 @@ Task 本文の `python3.13` は誤りで、agent の venv は 3.12。
 
   `_RequestConfirmationLlmRequestProcessor`（`<adk>/flows/llm_flows/request_confirmation.py`）が**最後の user イベント**の functionResponse を読み、`originalFunctionCall` を引いて元のツールを `tool_confirmation` 付きでもう一度実行する（Step 1〜4）。すでに応答済みの元の呼び出しは飛ばす（Step 2）
 - したがって「どのクライアントが答えても同じ結果になる」は ADK の標準 REST API だけで成立している。保留はセッションのイベント列そのもので、別のストア（pending dict、`asyncio.Future`）は要らない。今この形で答えているクライアントは CLI だけ（`cli/src/client.py:83-102`、`response` は `{"confirmed": bool}` のみ）
-- 答えずに新しい文を送ると、最後の user イベントが functionResponse でなくなるので、その確認は二度と処理されない（Step 1 で `return`）。保留は「最後の user イベントより後にある、未応答の `adk_request_confirmation`」だけ
+- 答えずに新しい文を送ると、最後の user イベントが functionResponse でなくなるので、その確認は二度と処理されない（Step 1 で `return`）。保留は「最後の user イベントより後にある `adk_request_confirmation`」だけ（答えはそれ自体が user のイベントなので、それより後の確認は全部未回答）
 - `ToolConfirmation`（`<adk>/tools/tool_confirmation.py`）のフィールドは `hint` / `confirmed` / `payload` の 3 つだけ（`extra="forbid"`）。`once` / `always` / `reject` と理由は DAK が `payload` に載せる独自の拡張になる
 - 拒否（`confirmed: false`）されたツールは、理由を見ずに固定の `{"error": "This tool call is rejected."}` を返す（`function_tool.py:350-351`、`mcp_tool.py:414-415`。vendor のコードなので変えない）
 - ただし、もう一度実行されるときの `ToolContext` は答えの `ToolConfirmation` を持つ（`functions.py:1334-1344` の `_create_tool_context`）。**エージェントの `after_tool_callback` は `tool_context.tool_confirmation.payload` から理由を直接読める**。答えるときに理由を session state に退避しておく必要は無い（#174 の手順 3・4 を変える。下の「Task への影響」）
@@ -63,7 +63,7 @@ Task 本文の `python3.13` は誤りで、agent の venv は 3.12。
 
 保留に数える条件:
 
-- 承認: 最後の `author == "user"` のイベントより後にある `adk_request_confirmation` の functionCall で、同じ id の functionResponse がまだ無いもの
+- 承認: 最後の `author == "user"` のイベントより後にある `adk_request_confirmation` の functionCall。答えは user のイベントなので、答え済みの確認はその答えより前にあり、ここに入らない（同じ id の functionResponse を探す必要は無い）
 - 質問: 最後の `author == "user"` のイベントより後に `ask_question` の functionCall があるもの（その後に user のイベントがあれば答え済み）
 
 ## 3. 決定: reply 契約
@@ -71,7 +71,8 @@ Task 本文の `python3.13` は誤りで、agent の venv は 3.12。
 reply は `id` と次の本文で受ける（HTTP は #175 の `POST /approvals/{id}/reply`）。どちらも `new_message` に組み立てて `POST /run` と同じ `Runner.run_async` に渡すだけで、保留の状態は持たない。
 
 **reply はまず `list_pending` にその `id` があるかを確かめ、無ければ `404` を返して何も流さない**（答え済み・新しい発言で捨てられた・存在しない）。ADK は二重の答えを止めない: 答え済みかを見るのは「最後の user イベントより後」だけ（`request_confirmation.py` の Step 2）なので、BFF が `once` で答えてツールが動いた後に CLI が同じ `id` へ答えると、その答えが最後の user イベントになり、ツールがもう一度動く。受け入れ条件 1 の「両方のクライアントから答えられる」はこの二重の答えを含むので、`404` で止める。質問も同じ（答え済みの質問への答えは、新しい発言として流れてしまう）。
-この確かめは `/approvals` の reply だけに効く。CLI の既存の答え方（`/run` に直接 functionResponse を送る）は ADK の標準の経路なので、ここでは止められない。
+この確かめは `/approvals` の reply だけに効く。`/run` に直接 functionResponse を送る答え方（今の CLI、`cli/src/client.py:83-102`）は ADK の標準の経路なので、ここでは止められない。そのため CLI の答えも `/approvals/{id}/reply` に移す（#405）。
+確かめと実行のあいだに同じ `id` への reply がもう 1 本来ると、両方が確かめを通る。#175 はセッションごとの `asyncio.Lock` を確かめから `Runner.run_async` の終わりまで持って、同じセッションへの reply を 1 本ずつにする（agent は 1 プロセスの uvicorn で動く。複数 worker にするなら、この錠はプロセスをまたがない）。
 
 ### 承認: `{"mode": "once" | "always" | "reject", "reason": ""}`
 
@@ -126,7 +127,9 @@ MRTR の形: サーバはクライアントの要求（`tools/call` など）に
 
 - #173: 一覧の各件のキー名を `fc_id` ではなく `id` にし、`kind` もここで付ける（質問と同じ一覧に並べるため）。それ以外は Task 本文どおり
 - #174: 理由を state に退避しない。`stash_reject_reason` は作らず、`_restore_reject_reason` は `tool_context.tool_confirmation.payload` を読む（1 の事実）。`build_question_reply(answer)` を足す（3 の質問の答え。受け入れ条件 3 の「質問も保留として回答でき」）
-- #175: reply は `list_pending` に無い `id` を `404` にする（3）。期限切れの承認への `409` は副作用ありと API の説明に書く（4）。統合テストの保留は `run_command` では作れない（MCP のツールは今は確認を求めない）。`DAK_PLANNER_REQUIRE_CONFIRMATION=true` を test override で与え、fake-LLM に `planner` の functionCall を台本して作る。#101 が入れば同じテストの台本を MCP のツールに替えられる。reply の本文に質問の `answer` を足し、`reject` のときの state 書き込みはしない。期限切れの質問は `409` にしない（4）
+- #175: reply は `list_pending` に無い `id` を `404` にし、確かめから実行の終わりまでセッションごとの錠を持つ（3）。一覧（`GET` / SSE）は期限切れを `status: "timed_out"` と示すだけで消費しない。消費は reply だけ（4。Task #172 の手順 4 からの変更）。期限切れの承認への `409` は副作用ありと API の説明に書く（4）。統合テストの保留は `run_command` では作れない（MCP のツールは今は確認を求めない）。`DAK_PLANNER_REQUIRE_CONFIRMATION=true` を test override で与え、fake-LLM に `planner` の functionCall を台本して作る。#101 が入れば同じテストの台本を MCP のツールに替えられる。reply の本文に質問の `answer` を足し、`reject` のときの state 書き込みはしない。期限切れの質問は `409` にしない（4）
+
+- #405（新規）: CLI の承認の答えを `/run` 直送から `/approvals/{id}/reply` に移し、`dak-cli approvals` / `dak-cli approve` で別のクライアントが始めたセッションの保留に答えられるようにする（3）
 
 ## 未検証事項
 
