@@ -483,11 +483,7 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         self.assertIn("switch_mode", names)
         self.assertIn("enable_skill", names)
 
-if __name__ == '__main__':
-    unittest.main()
-
-
-class TestRestoreRejectReason(unittest.TestCase):
+class TestRestoreRejectReason(unittest.IsolatedAsyncioTestCase):
     """ADK answers a rejected confirmation with a fixed text; the reason the
     user gave travels in the confirmation payload (docs/design/approval-queue.md)."""
 
@@ -518,9 +514,63 @@ class TestRestoreRejectReason(unittest.TestCase):
         self.assertIsNone(self._agent()._restore_reject_reason(MagicMock(), {}, ctx, self.REJECTED))
 
     def test_restore_reject_reason_is_noop_for_other_results(self):
-        ctx = MagicMock()
-        ctx.tool_confirmation = None
+        """Only ADK's own rejection text is rewritten, even after a rejection."""
+        ctx = self._context(False, {"mode": "reject", "reason": "not now"})
         self.assertIsNone(self._agent()._restore_reject_reason(MagicMock(), {}, ctx, {"result": "ok"}))
 
-    def test_restore_reject_reason_is_registered(self):
-        self.assertEqual(self._agent().after_tool_callback.__name__, "_restore_reject_reason")
+    async def test_rejected_confirmation_reaches_the_model_with_its_reason(self):
+        """Through ADK's Runner: a tool asks for confirmation, the pending
+        approval is listed, a reject with a reason resumes the session, and
+        the next model call sees the reason instead of ADK's fixed text."""
+        from google.adk.apps import App
+        from google.adk.models.base_llm import BaseLlm
+        from google.adk.models.llm_response import LlmResponse
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
+        from google.adk.tools import FunctionTool
+        from google.genai import types
+
+        from dak_agent import approvals
+
+        def touch(path: str) -> str:
+            """Create a file."""
+            return f"touched {path}"
+
+        requests = []
+
+        class CallThenAnswer(BaseLlm):
+            async def generate_content_async(self, llm_request, stream=False):
+                requests.append(llm_request)
+                if len(requests) == 1:
+                    part = types.Part(function_call=types.FunctionCall(id="fc-1", name="touch", args={"path": "a"}))
+                else:
+                    part = types.Part(text="ok")
+                yield LlmResponse(content=types.Content(role="model", parts=[part]))
+
+        agent = AdaptiveAgent(model=CallThenAnswer(model="m"), name="dak_agent", instruction="i",
+                              tools=[FunctionTool(touch, require_confirmation=True)])
+        sessions = InMemorySessionService()
+        session = await sessions.create_session(app_name="dak_agent", user_id="u")
+        runner = Runner(app=App(name="dak_agent", root_agent=agent), session_service=sessions)
+
+        async def run(message):
+            with patch("dak_agent.remote_tools.discover_remote_tools", return_value={}):
+                async for _ in runner.run_async(user_id="u", session_id=session.id,
+                                                new_message=types.Content.model_validate(message)):
+                    pass
+            stored = await sessions.get_session(app_name="dak_agent", user_id="u", session_id=session.id)
+            return [e.model_dump(mode="json", by_alias=True, exclude_none=True) for e in stored.events]
+
+        [pending] = approvals.list_pending(await run({"role": "user", "parts": [{"text": "hi"}]}))
+        self.assertEqual((pending["kind"], pending["tool_name"]), ("approval", "touch"))
+
+        reply = approvals.build_reply_function_response(pending["id"], "reject", "not now")
+        self.assertEqual(approvals.list_pending(await run({"role": "user", **reply})), [])
+
+        responses = [p.function_response.response for c in requests[1].contents for p in c.parts
+                     if p.function_response and p.function_response.name == "touch"]
+        self.assertEqual(responses[-1], {"observation": "denied_by_user", "reason": "not now"})
+
+
+if __name__ == '__main__':
+    unittest.main()

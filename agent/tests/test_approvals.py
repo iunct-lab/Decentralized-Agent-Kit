@@ -169,9 +169,26 @@ def test_list_pending_excludes_answered_question():
     assert list_pending_questions(events) == []
 
 
-def test_list_pending_orders_approvals_and_questions_by_time():
-    events = [_user_text("go"), *_question_call(ts=1.5), _confirmation_call(ts=2.0)]
-    assert [(p["kind"], p["id"]) for p in list_pending(events)] == [("question", "call-q"), ("approval", "adk-1")]
+def test_failed_question_is_not_pending():
+    """A call ADK rejected (missing argument) did not end the invocation, so
+    nobody is waiting for an answer to it."""
+    call, response = _question_call()
+    response["content"]["parts"][0]["functionResponse"]["response"] = {"error": "Invoking `ask_question()` failed"}
+    answer = {"author": "dak_agent", "timestamp": 6.0, "content": {"role": "model", "parts": [{"text": "done"}]}}
+    assert list_pending_questions([_user_text("deploy it"), call, response]) == []
+    assert list_pending_questions([_user_text("deploy it"), call, response, answer]) == []
+
+
+def test_only_the_question_that_ended_the_invocation_is_pending():
+    first_call, first_error = _question_call("call-bad")
+    first_error["content"]["parts"][0]["functionResponse"]["response"] = {"error": "missing context"}
+    events = [_user_text("deploy it"), first_call, first_error, *_question_call("call-q", ts=7.0)]
+    assert [p["id"] for p in list_pending_questions(events)] == ["call-q"]
+
+
+def test_list_pending_includes_both_kinds():
+    assert [p["kind"] for p in list_pending([_user_text("go"), *_question_call()])] == ["question"]
+    assert [p["kind"] for p in list_pending([_user_text("go"), _confirmation_call()])] == ["approval"]
 
 
 def test_build_question_reply_is_a_plain_message():
