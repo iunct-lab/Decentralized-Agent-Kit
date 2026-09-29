@@ -22,7 +22,7 @@ services:
       - OPENAI_API_BASE=http://fake-llm:8080/v1
       - OPENAI_API_KEY=dummy
       - DAK_ALLOWED_MODELS=openai/fake-default,openai/fake-alt
-      # tests/integration/test_approvals.py: planner is the one tool that asks for confirmation today
+      # tests/integration/test_approvals.py: planner asks for confirmation (an agent-side tool, no MCP server needed)
       - DAK_PLANNER_REQUIRE_CONFIRMATION=true
       - DAK_APPROVAL_TIMEOUT_SECONDS=5
       # The stack's own mcp-server stands in for a caller's MCP server (dak:tools.mcp_servers).

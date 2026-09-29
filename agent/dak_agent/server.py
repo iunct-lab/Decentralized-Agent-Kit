@@ -16,6 +16,7 @@ import json
 import os
 import weakref
 from typing import Literal, Optional
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -52,6 +53,8 @@ def _adk() -> httpx.AsyncClient:
 
 
 async def _session_events(client: httpx.AsyncClient, app_name: str, user_id: str, session_id: str) -> list[dict]:
+    # Each id is one path segment: `s1/../s2` must not reach another session
+    app_name, user_id, session_id = (quote(s, safe="") for s in (app_name, user_id, session_id))
     resp = await client.get(f"/apps/{app_name}/users/{user_id}/sessions/{session_id}")
     if resp.status_code != 200:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
@@ -123,10 +126,24 @@ async def reply(approval_id: str, body: Reply):
         return resp.json()
 
 
+def _stream_events(seen: dict[str, dict], current: dict[str, dict]) -> tuple[list[str], dict[str, dict]]:
+    """The events between two readings of the list, and the new `seen`."""
+    events = []
+    for pid, item in current.items():
+        if pid not in seen:
+            events.append(f"event: approval.asked\ndata: {json.dumps(item)}\n\n")
+        elif item["status"] == "timed_out" and seen[pid]["status"] != "timed_out":
+            events.append(f"event: approval.timed_out\ndata: {json.dumps(item)}\n\n")
+    for pid in seen.keys() - current.keys():
+        events.append(f"event: approval.replied\ndata: {json.dumps({'id': pid})}\n\n")
+    return events, current
+
+
 @router.get("/stream")
 async def stream(request: Request, user_id: str, session_id: str, app_name: str = "dak_agent"):
-    """`approval.asked` for each new pending item, `approval.replied` when one
-    leaves the list. Polls every STREAM_INTERVAL_SECONDS until the client goes."""
+    """`approval.asked` for each new pending item, `approval.timed_out` when one
+    expires (still listed, see GET), `approval.replied` when one leaves the
+    list. Polls every STREAM_INTERVAL_SECONDS until the client goes."""
     async with _adk() as client:  # an unknown session is a 404, not a stream that breaks
         await _session_events(client, app_name, user_id, session_id)
 
@@ -135,12 +152,9 @@ async def stream(request: Request, user_id: str, session_id: str, app_name: str 
         async with _adk() as client:
             while not await request.is_disconnected():
                 current = {p["id"]: p for p in await _pending(client, app_name, user_id, session_id)}
-                for pid, item in current.items():
-                    if pid not in seen:
-                        yield f"event: approval.asked\ndata: {json.dumps(item)}\n\n"
-                for pid in seen.keys() - current.keys():
-                    yield f"event: approval.replied\ndata: {json.dumps({'id': pid})}\n\n"
-                seen = current
+                batch, seen = _stream_events(seen, current)
+                for event in batch:
+                    yield event
                 await asyncio.sleep(STREAM_INTERVAL_SECONDS)
 
     return StreamingResponse(events(), media_type="text/event-stream")

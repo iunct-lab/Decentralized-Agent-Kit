@@ -98,3 +98,29 @@ def test_list_of_an_unknown_session_is_404(client):
 
 def test_stream_of_an_unknown_session_is_404(client):
     assert client.get("/approvals/stream", params={"user_id": "u", "session_id": "nope"}).status_code == 404
+
+
+def test_ids_cannot_walk_to_another_session(client):
+    """The ids go into ADK's session URL: `s1/../s2` must not read s2."""
+    assert client.post("/apps/dak_agent/users/u/sessions/s2", json={}).status_code == 200
+    assert client.get("/approvals", params={"user_id": "u", "session_id": "s2"}).json() == []
+    assert client.get("/approvals", params={"user_id": "u", "session_id": "s1/../s2"}).status_code == 404
+    assert client.get("/approvals", params={"user_id": "x/../u", "session_id": "s2"}).status_code == 404
+
+
+def test_stream_announces_an_approval_that_times_out():
+    """A connected client sees `pending`, then `approval.timed_out` when the same id expires."""
+    from dak_agent.server import _stream_events
+
+    item = {"id": "adk-1", "kind": "approval", "status": "pending"}
+    asked, seen = _stream_events({}, {"adk-1": item})
+    assert [e.split("\n")[0] for e in asked] == ["event: approval.asked"]
+    assert _stream_events(seen, {"adk-1": item})[0] == []
+
+    expired, seen = _stream_events(seen, {"adk-1": {**item, "status": "timed_out"}})
+    assert [e.split("\n")[0] for e in expired] == ["event: approval.timed_out"]
+    assert '"status": "timed_out"' in expired[0]
+    assert _stream_events(seen, {"adk-1": {**item, "status": "timed_out"}})[0] == []
+
+    replied, _ = _stream_events(seen, {})
+    assert replied == ['event: approval.replied\ndata: {"id": "adk-1"}\n\n']

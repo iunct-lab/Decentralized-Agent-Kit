@@ -133,12 +133,12 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 |---|---|
 | `GET /approvals?user_id=&session_id=[&app_name=dak_agent]` | 保留の一覧。1 件は `id`・`kind`（`approval` / `question`）・`tool_name`・`tool_args` / `hint`（承認）・`questions` / `context`（質問）・`requested_at`・`status`（`pending` / `timed_out`）・`session_id` |
 | `POST /approvals/{id}/reply` | 本文 `{user_id, session_id, mode, reason}`（承認）か `{user_id, session_id, answer}`（質問）。セッションを再開して ADK のイベントを返す。保留に無い `id` は `404`、`mode` の誤りは `422` |
-| `GET /approvals/stream?user_id=&session_id=` | 同じ一覧を server-sent events で。新しい保留に `approval.asked`、一覧から消えたら `approval.replied`（2 秒ごとに読む） |
+| `GET /approvals/stream?user_id=&session_id=` | 同じ一覧を server-sent events で。新しい保留に `approval.asked`、期限が切れたら `approval.timed_out`（一覧には残る）、一覧から消えたら `approval.replied`（2 秒ごとに読む） |
 
 | 答え | モデルに届く Observation |
 |---|---|
 | `once` | ツールの実行結果 |
-| `always` | ツールの実行結果（`payload.mode: "always"` がセッションに残る。継続許可の保存は #101） |
+| `always` | ツールの実行結果。`PermissionPlugin` が `payload.mode: "always"` を読んで継続許可を保存する（#178） |
 | `reject` + `reason` | `{"observation": "denied_by_user", "reason": ...}`（`AdaptiveAgent._restore_reject_reason`） |
 | `timed_out` | `{"observation": "timed_out"}`。`DAK_APPROVAL_TIMEOUT_SECONDS`（既定 900）を過ぎた承認に reply すると、その答えの代わりに流し、HTTP は `409`。一覧（GET / SSE）は示すだけで消費しない |
 
@@ -146,7 +146,7 @@ MRTR（MCP 2026-07-28、SEP-2322）との対応: 保留の 1 件 ↔ `InputRequi
 `once` / `always` ↔ `ElicitResult.action: "accept"`、`reject` ↔ `"decline"`、`timed_out` ↔ `"cancel"`、質問の `answer` ↔ `accept` の `content`。
 `requestState`（状態をクライアントが運ぶ）と、mcp-server が返す `input_required` の透過は未対応（表の全体は設計文書の 5）。
 
-確認を求めるツールは今は `planner`（`DAK_PLANNER_REQUIRE_CONFIRMATION=true`）だけ。MCP のツールは #101 で確認を求めるようになる。
+確認を求めるのは、`PermissionPlugin` の規則が `ask` になる MCP のツール（既定の MCP サーバの書き込み・コマンドなど。`agent/dak_agent/permission.py` の `DEFAULT_RULES`）と、`DAK_PLANNER_REQUIRE_CONFIRMATION=true` のときの `planner`。どちらも同じ `adk_request_confirmation` の形なので、一覧と reply は区別しない。拒否は `PermissionPlugin` も ADK と同じ固定文言で返すので、理由は同じ `_restore_reject_reason` でモデルに届く。
 
 ## 4. 残りのギャップとバックログ（優先度順）
 
