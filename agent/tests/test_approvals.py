@@ -1,5 +1,7 @@
 import time
 
+import pytest
+
 from dak_agent.approvals import (
     PENDING_TIMEOUT_SECONDS,
     build_reply_function_response,
@@ -80,6 +82,12 @@ def test_build_reply_reject_carries_reason():
     response = message["parts"][0]["functionResponse"]["response"]
     assert response["confirmed"] is False
     assert response["payload"]["reason"] == "not now"
+
+
+def test_build_reply_refuses_unknown_mode():
+    """A typo must not turn into a rejection without a reason."""
+    with pytest.raises(ValueError):
+        build_reply_function_response("adk-1", "approve")
 
 
 def test_is_expired():

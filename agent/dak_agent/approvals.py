@@ -14,6 +14,7 @@ import os
 import time
 
 REQUEST_CONFIRMATION = "adk_request_confirmation"
+REPLY_MODES = ("once", "always", "reject", "timed_out")
 
 PENDING_TIMEOUT_SECONDS = float(os.getenv("DAK_APPROVAL_TIMEOUT_SECONDS", "900"))
 
@@ -32,17 +33,13 @@ def _since_last_user_event(events: list[dict]) -> list[dict]:
 
 
 def list_pending_approvals(events: list[dict]) -> list[dict]:
-    """Confirmation requests after the last user event that have no response yet."""
-    recent = _since_last_user_event(events)
-    answered = {
-        p["functionResponse"].get("id")
-        for e in recent for p in _parts(e) if p.get("functionResponse")
-    }
+    """Confirmation requests after the last user event. An answer is itself a
+    user event, so every request after the last one is still unanswered."""
     pending = []
-    for event in recent:
+    for event in _since_last_user_event(events):
         for part in _parts(event):
             call = part.get("functionCall")
-            if not call or call.get("name") != REQUEST_CONFIRMATION or call.get("id") in answered:
+            if not call or call.get("name") != REQUEST_CONFIRMATION:
                 continue
             args = call.get("args") or {}
             original = args.get("originalFunctionCall") or {}
@@ -61,6 +58,8 @@ def build_reply_function_response(fc_id: str, mode: str, reason: str = "") -> di
     """The `new_message` that answers a confirmation: `mode` is once / always /
     reject (timed_out when DAK answers an expired one). `confirmed` is always
     set, as the CLI's answer (`cli/src/client.py`) is."""
+    if mode not in REPLY_MODES:
+        raise ValueError(f"unknown reply mode: {mode!r}")
     return {"parts": [{"functionResponse": {
         "id": fc_id,
         "name": REQUEST_CONFIRMATION,
