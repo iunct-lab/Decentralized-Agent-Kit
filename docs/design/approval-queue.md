@@ -38,6 +38,8 @@ Task 本文の `python3.13` は誤りで、agent の venv は 3.12。
 今、確認を求めるのは `planner` だけで、`DAK_PLANNER_REQUIRE_CONFIRMATION=true` のとき（`agent/dak_agent/builtin_tools.py:192-218`）。
 #101 が入ると確認は `before_tool_callback` の `tool_context.request_confirmation(...)` から出るが、イベント列の形（`adk_request_confirmation` の functionCall）は同じなので、この文書の一覧・reply はそのまま使える。拒否をどう返すか（固定文言か、callback が理由つきで返すか）は #101 が決める。
 
+追記（2026-09-30）: #101 / #178 が main に入った。`PermissionPlugin`（`agent/dak_agent/permission.py`。App のプラグインの `before_tool_callback`）が、規則が `ask` になるツール（既定の MCP サーバの書き込み・コマンドなど）で `request_confirmation` を呼ぶ。拒否は ADK と同じ固定文言 `{"error": "This tool call is rejected."}` を返すので、理由は 3 の `_restore_reject_reason` でモデルに届く（プラグインが結果を返してもエージェントの `after_tool_callback` は呼ばれる。`functions.py` の Step 4）。`always` は `PermissionPlugin` が `payload.mode` を読んで継続許可を保存する。この文書の一覧・reply はそのまま使える。統合テスト（#175）は MCP サーバに依らない `planner` で保留を作る。
+
 ### 質問待ち（`ask_question`）
 
 - `ask_question`（`builtin_tools.py:40-49`）は enforcer mode のときだけ出る普通のツール（確認なし）。`end_invocation = True` にして invocation を終え、結果（質問の文面）を functionResponse として残す
@@ -133,7 +135,7 @@ MRTR の形: サーバはクライアントの要求（`tools/call` など）に
 
 ## 未検証事項
 
-- 1 回のモデルの応答が複数の確認を出したとき、reply が 1 件だけに答えると、残りの確認は捨てられる（答えが最後の user イベントになり、残りはその前に並ぶので一覧から消え、reply は `404`。ADK は最後の user イベントの答えしか読まないので、そのツールは動かず、モデルにも何も届かない）。今、確認を出すのは `planner` だけだが、1 回の応答で `planner` を 2 回呼ぶことは止めていない（`AdaptiveAgent` にも enforcer にもその制限は無い）ので、`DAK_PLANNER_REQUIRE_CONFIRMATION=true` なら今でも起きうる。#100 ではこの制限を残し（どちらのクライアントから答えても同じ結果になる、という受け入れ条件 1 は変わらない）、兄弟の確認をどう扱うか（まとめて答える・残りを一覧に残す）は要件の解釈なので、MCP のツールが確認を求めるようになる Task #406（#101 の子）で利用者に確かめて扱う
+- 1 回のモデルの応答が複数の確認を出したとき、reply が 1 件だけに答えると、残りの確認は捨てられる（答えが最後の user イベントになり、残りはその前に並ぶので一覧から消え、reply は `404`。ADK は最後の user イベントの答えしか読まないので、そのツールは動かず、モデルにも何も届かない）。今は `PermissionPlugin` が MCP のツールにも確認を求め（上の追記）、1 回の応答で確認の要るツールを複数呼ぶことは止めていない（`AdaptiveAgent` にも enforcer にもその制限は無い）ので、今でも起きうる。#100 ではこの制限を残し（どちらのクライアントから答えても同じ結果になる、という受け入れ条件 1 は変わらない）、兄弟の確認をどう扱うか（まとめて答える・残りを一覧に残す）は要件の解釈なので、Task #406（#101 の子）で利用者に確かめて扱う
 
 - この文書の ADK の流れはコードを読んで確かめたもので、動かしてはいない（#175 の統合テストで確かめる）
 - 別のエージェント（sub_agent）が出した確認は、そのエージェントの processor が処理する（`request_confirmation.py` の「authored by another agent」）。DAK の sub_agent は A2A の `RemoteA2aAgent` だけ（`agent/dak_agent/agent.py:91-92`）で、ツールの確認はその先のエージェントの中で起きる。こちらのセッションに `adk_request_confirmation` を出すのは `AdaptiveAgent` だけなので、一覧は author を見ない（動かしてはいない）
