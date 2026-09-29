@@ -547,7 +547,8 @@ class TestOnModelErrorCallback:
         return ctx
 
     def _llm(self, responses):
-        """`responses`: per call, an exception to raise or a text to answer; records request sizes."""
+        """`responses`: per call, an exception to raise, a text to answer, or None
+        for an answer without content; records request sizes."""
         from google.adk.models.llm_response import LlmResponse
 
         llm = MagicMock()
@@ -559,17 +560,17 @@ class TestOnModelErrorCallback:
             item = queue.pop(0)
             if isinstance(item, Exception):
                 raise item
-            yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text=item)]))
+            yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text=item)]) if item else None)
 
         llm.generate_content_async = generate_content_async
         return llm
 
-    async def _callback(self, llm, error, request=None):
+    async def _callback(self, llm, error, request=None, context=None):
         plugin = ContextHarnessPlugin(self.settings, "test-model")
         request = request or self._request()
         with patch("dak_agent.call_config.resolve_dak_settings", return_value={}):
             response = await plugin.on_model_error_callback(
-                callback_context=self._context(llm), llm_request=request, error=error)
+                callback_context=context or self._context(llm), llm_request=request, error=error)
         return response, request
 
     @pytest.mark.asyncio
@@ -592,7 +593,7 @@ class TestOnModelErrorCallback:
 
         response, _ = await self._callback(llm, _context_error())
 
-        assert len(llm.request_tokens) <= self.settings.model_error_retry_attempts
+        assert len(llm.request_tokens) == self.settings.model_error_retry_attempts
         assert harness.CONTEXT_OVERFLOW_FAILURE_TEXT in response.content.parts[0].text
         assert response.content.role == "model"
         assert response.turn_complete
@@ -606,6 +607,33 @@ class TestOnModelErrorCallback:
 
         assert llm.request_tokens == []
         assert harness.CONTEXT_OVERFLOW_FAILURE_TEXT in response.content.parts[0].text
+
+    @pytest.mark.asyncio
+    async def test_a_different_error_during_a_retry_is_raised_not_reported_as_overflow(self):
+        llm = self._llm([ConnectionError("connection refused")])
+
+        with pytest.raises(ConnectionError):
+            await self._callback(llm, _context_error())
+        assert len(llm.request_tokens) == 1
+
+    @pytest.mark.asyncio
+    async def test_each_retry_counts_against_max_llm_calls(self):
+        llm = self._llm([_context_error(), "recovered"])
+        context = self._context(llm)
+
+        await self._callback(llm, _context_error(), context=context)
+
+        assert context._invocation_context.increment_llm_call_count.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_a_retry_without_content_is_logged_and_retried(self, caplog):
+        llm = self._llm([None, "recovered"])
+
+        with caplog.at_level("WARNING", logger="dak_agent.harness"):
+            response, _ = await self._callback(llm, _context_error())
+
+        assert response.content.parts[0].text == "recovered"
+        assert "returned no content" in caplog.text
 
     @pytest.mark.asyncio
     async def test_non_overflow_errors_are_not_handled(self):
