@@ -14,14 +14,15 @@ PBI #16。この文書は、ツール実行の権限（許可 / 確認 / 拒否�
 ### agent 側: MCP のツールは確認なしで動く
 
 - `agent/dak_agent/agent.py:37-46` は既定のツールセットを `PatchedMcpToolset(..., require_confirmation=True)` で作り、`AdaptiveAgent` に渡す（`agent.py:53`、`100-109`）
-- しかし `AdaptiveAgent.__init__` はツールセットを捨てて組み込みツールだけで始める（`agent/dak_agent/adaptive_agent.py:76-91`）。既定のツールセットは「あった」という印（`_has_default_mcp_toolset`、`adaptive_agent.py:122`）にしか使われない。**`require_confirmation=True` の付いたツールセットはモデルに渡らない**
+- しかし `AdaptiveAgent.__init__` はツールセットを捨てて組み込みツールだけで始める（`agent/dak_agent/adaptive_agent.py:76-91`）。既定のツールセットは「あった」という印（`_has_default_mcp_toolset`、`adaptive_agent.py:122`）と、モード切替の Meta-Agent に選択肢のツール名を見せる一覧（`adaptive_agent.py:613-627` の `get_tools()`）にしか使われない。**`require_confirmation=True` の付いたツールセットはモデルに渡らない**
 - MCP のツールは毎回の呼び出しで組み直すツール一覧（`adaptive_agent.py:428` の `live.tools = ... _resolve_session_tools(...)`）からだけ出る。その中のツールセットは全部 `_cached_mcp_toolset`（`adaptive_agent.py:356-371`）→ `make_mcp_toolset`（`agent/dak_agent/skill_tools.py:110-129`）で作られ、`require_confirmation=False` 固定。使われるのは次のとき
   - スキルの有効化・モード切替（`adaptive_agent.py:289-332`。既定の MCP サーバ `self._mcp_url` にも使う。モード切替でツールが選ばれなければ、既定の MCP サーバを絞らずに全部出す: `adaptive_agent.py:326-329`）
   - 呼び出しごとの `dak:tools`（`adaptive_agent.py:256-287`、`341-354`）
   - したがって**既定の MCP サーバの `run_command` / `write_file` も、今は確認なしで実行される**。`agent.py:45` の `require_confirmation=True` は効いていない
+  - 以前の文書のうち `docs/comparison/harness-survey-2026-09/README.md:61` の「`require_confirmation` 一律 + denylist」は、この事実と食い違う（調査時点の見立て。denylist も無い）
   - 確かめ方: `cd agent && uv run python` で `AdaptiveAgent(..., tools=[McpToolset(..., require_confirmation=True)])` を作ると、`agent.tools` にツールセットは 0 個、`_has_default_mcp_toolset` は `True`、`_cached_mcp_toolset(url, "http", {"run_command"})._require_confirmation` は `False`（2026-09-29 に実行）
 - スキルのローカルツールも確認なし: `skill_tools.py:93-94` の `FunctionTool(func, require_confirmation=False)`
-- ツールと引数を見て許可・拒否する仕組み（`before_tool_callback` など）は無い。`AdaptiveAgent` が付ける callback は `before_agent_callback`・`after_model_callback`・`on_tool_error_callback`（`adaptive_agent.py:87-95`）だけ
+- ツールと引数を見て許可・拒否する仕組み（`before_tool_callback` など）は無い。`AdaptiveAgent` が付ける callback は `before_agent_callback`・`after_model_callback`・`on_tool_error_callback`（`adaptive_agent.py:87-95`）だけ。App のプラグインにはツールの後の hook がある（`ContextHarnessPlugin.after_tool_callback`、`agent/dak_agent/harness.py:719`、`agent.py:114` で App に付ける）。プラグインの `before_tool_callback` にすれば、同じ App のどのエージェントのツール呼び出しにも効く
 - 接続先の制御はある: 呼び出し元が渡す MCP サーバは `DAK_ALLOWED_MCP_URLS` の許可リストで絞る（`agent/dak_agent/call_config.py:192-197`）。リダイレクトは追わない（`skill_tools.py:103-107`、`114-119`）。これは「どこに繋ぐか」の制御で、「どのツールをどの引数で実行するか」の制御ではない
 
 ### mcp-server 側: 権限の強制は何も無い
@@ -44,7 +45,7 @@ PBI #16。この文書は、ツール実行の権限（許可 / 確認 / 拒否�
 
 ## 比較表
 
-強制点は 2 つ。**agent 側**は agent プロセスの中でツール呼び出しの前に判断する場所（今は McpToolset の `require_confirmation` だけ。ADK の `before_tool_callback` を足せばツール名と引数で判断できる）。**MCP サーバ側**はツールを実行するプロセスの中（`policy.py` 相当。今は無い）。
+強制点は 3 種類。**agent 側**は agent プロセスの中でツール呼び出しの前に判断する場所（今は McpToolset の `require_confirmation` だけ。ADK の `before_tool_callback`（エージェントかプラグイン）を足せばツール名と引数で判断できる）。**MCP サーバ側**はツールを実行するプロセスの中（`policy.py` 相当。今は無い）。**実行環境**はそのプロセスの外（コンテナの設定）。
 
 | 強制点 | ローカル実行（同一 Compose の mcp-server）で強制できること | リモート実行（別ホストの MCP サーバ）で強制できること | 迂回可能性 | 実装コスト |
 |---|---|---|---|---|
