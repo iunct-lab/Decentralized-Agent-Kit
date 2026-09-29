@@ -14,6 +14,7 @@ the STRICTEST result wins for the whole command (deny > ask > allow).
 - any other MCP server: its URL
 """
 import fnmatch
+import re
 import shlex
 from dataclasses import dataclass
 from typing import Any, List, Literal, Mapping, Optional
@@ -101,7 +102,20 @@ def evaluate(rules: List[Rule], source: str, tool_name: str, args: Mapping[str, 
         return strictest("ask", evaluate_ruleset(rules, source, tool_name, value))
     if not segments:
         return evaluate_ruleset(rules, source, tool_name, value)
-    return strictest(*(evaluate_ruleset(rules, source, tool_name, s) for s in segments))
+    return strictest(*(_segment_action(rules, source, tool_name, s) for s in segments))
+
+
+# Brace, glob, variable and tilde expansion: the shell runs another text than
+# the rule saw (`git diff --outpu{t,t}=f` becomes `--output=f`).
+_EXPANSION = re.compile(r"[{}*?\[$]|(^|[\s=:'\"])~")
+
+
+def _segment_action(rules: List[Rule], source: str, tool_name: str, segment: str) -> Action:
+    """A segment the shell would expand is never allowed (a deny still applies)."""
+    action = evaluate_ruleset(rules, source, tool_name, segment)
+    if action == "allow" and _EXPANSION.search(segment):
+        return "ask"
+    return action
 
 
 _READ_ONLY_GIT = ("status", "log", "diff", "show")
