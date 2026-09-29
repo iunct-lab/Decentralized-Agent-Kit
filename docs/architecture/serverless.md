@@ -53,7 +53,7 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 |---|---|---|
 | プロセスに置いた状態 | 有効スキル（`agent/dak_agent/adaptive_agent.py:42`）、モード切替のフラグ（`agent/dak_agent/mode_manager.py:38-39`）、指示の直接書き換え（`agent/dak_agent/adaptive_agent.py:319`、`agent/dak_agent/skill_tools.py:212`）が、全セッションで共有される 1 インスタンスに載っている。**Docker でもセッションが混ざる不具合** | #133 |
 | 1 ターンの上限が無い | `RunConfig` の指定が無い。ADK の `max_llm_calls` は、プロセス全体の `ADK_MAX_LLM_CALLS` でしか変えられない | #134 |
-| 開発用サーバで起動 | `adk web --a2a`（`agent/Dockerfile` の末尾）。`agent/entrypoint.sh` が `agent.json` をファイルに書く | #135 |
+| 開発用サーバで起動 | ADK の開発用アプリ（`get_fast_api_app(web=True, a2a=True)`）を uvicorn で動かす（`agent/dak_agent/server.py`、`agent/Dockerfile` の末尾）。`agent/entrypoint.sh` が `agent.json` をファイルに書く | #135 |
 | シェル・ファイル系ツール | `mcp-server/main.py` の `run_command`（`shell=True`）。作業場所はバインドマウントの `/projects` | #136（呼び出しで外せる）|
 | 起動の重さ | import 時に Langfuse の `auth_check`（通信あり、`agent/dak_agent/patches.py:26-43`）と、solana などの読み込み | #135 |
 
