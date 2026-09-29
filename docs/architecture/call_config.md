@@ -19,13 +19,13 @@
   "app_name": "dak_agent",
   "user_id": "u1",
   "session_id": "s1",
-  "new_message": {"role": "user", "parts": [{"text": "来週の京都 2 泊の旅程を作って"}]},
+  "new_message": {"role": "user", "parts": [{"text": "次の問い合わせを要約して: …"}]},
   "state_delta": {
-    "dak:instruction": "あなたは旅程を作る。出力は JSON だけ。",
+    "dak:instruction": "問い合わせを要約する。出力は JSON だけ。",
     "dak:output_schema": {
       "type": "object",
-      "required": ["days"],
-      "properties": {"days": {"type": "array", "items": {"type": "string"}}}
+      "required": ["points"],
+      "properties": {"points": {"type": "array", "items": {"type": "string"}}}
     }
   }
 }
@@ -110,7 +110,7 @@
   "error": "output_schema_validation_failed",
   "issues": [
     {"path": "date", "message": "'date' is a required property"},
-    {"path": "trip/days", "message": "'three' is not of type 'integer'"}
+    {"path": "summary/count", "message": "'three' is not of type 'integer'"}
   ]
 }
 ```

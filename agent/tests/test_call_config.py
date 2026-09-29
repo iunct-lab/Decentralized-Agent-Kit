@@ -57,12 +57,12 @@ def test_validate_call_output_returns_field_path_and_reason():
 
 
 def test_validate_call_output_reports_nested_path():
-    schema = {"type": "object", "properties": {"trip": {"type": "object", "required": ["to"], "properties": {
-        "days": {"type": "integer"}, "to": {"type": "string"}}}}}
+    schema = {"type": "object", "properties": {"summary": {"type": "object", "required": ["title"], "properties": {
+        "count": {"type": "integer"}, "title": {"type": "string"}}}}}
 
-    _, issues = call_config.validate_call_output(schema, '{"trip": {"days": "three"}}')
+    _, issues = call_config.validate_call_output(schema, '{"summary": {"count": "three"}}')
 
-    assert sorted(i["path"] for i in issues) == ["trip/days", "trip/to"]
+    assert sorted(i["path"] for i in issues) == ["summary/count", "summary/title"]
 
 
 def test_validate_call_output_accepts_matching_json():
