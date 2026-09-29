@@ -18,15 +18,19 @@ from google.adk.tools.mcp_tool.mcp_tool import McpTool
 from google.genai import types
 from mcp.types import Tool as McpBaseTool
 
+from dak_agent import enforcer
 from dak_agent.adaptive_agent import AdaptiveAgent
 from dak_agent.config import load_agent_config
 from dak_agent.permission import (
     DEFAULT_RULES,
+    PERSISTED_ALLOW_KEY,
     PermissionPlugin,
     Rule,
+    always_approvals,
     evaluate,
     evaluate_ruleset,
     load_rules,
+    record_always_approval,
     split_command_segments,
     strictest,
     tool_source,
@@ -319,3 +323,65 @@ def test_config_rules_override_defaults(tmp_path):
 def test_malformed_config_rule_stops_startup(entry):
     with pytest.raises(ValueError):
         load_rules([entry])
+
+
+# --- Always approvals and the Ulysses Pact (#178) ---
+
+def test_evaluate_does_not_mutate_state():
+    state = {}
+    evaluate(DEFAULT_RULES, "default", "write_file", {"path": "a"}, always_approvals(state))
+    evaluate_ruleset(DEFAULT_RULES, "default", "write_file", "a")
+    assert PERSISTED_ALLOW_KEY not in state
+
+
+def test_always_does_not_override_deny_or_new_segments():
+    state = {}
+    record_always_approval(state, "default", "run_command", {"command": "make build"})
+    record_always_approval(state, "default", "run_command", {"command": "make build"})  # no duplicate
+    assert state[PERSISTED_ALLOW_KEY] == [{"source": "default", "tool": "run_command", "pattern": "make build"}]
+    record_always_approval(state, "default", "run_command", {"command": "rm -rf /"})
+    record_always_approval(state, "default", "run_command", {"command": "make build > out"})  # not remembered
+    assert len(state[PERSISTED_ALLOW_KEY]) == 2
+    always = always_approvals(state)
+
+    def run_(command):
+        return evaluate(DEFAULT_RULES, "default", "run_command", {"command": command}, always)
+
+    assert run_("make build") == "allow"
+    assert run_("make build && git status") == "allow"
+    assert run_("make build && rm x") == "ask"  # the new segment asks again
+    assert run_("make build && rm -rf /") == "deny"
+    assert run_("make build > out") == "ask"  # never allow what cannot be split
+    # Scoped to the source: another server's run_command still asks.
+    assert evaluate(DEFAULT_RULES, "http://other/mcp", "run_command", {"command": "make build"}, always) == "ask"
+
+
+def test_always_answer_persists_and_skips_next_confirmation():
+    for mode, asks_again in (("always", False), ("once", True)):
+        tool = mcp_tool("write_file")
+        h = Harness(tool, {"name": "write_file", "args": {"path": "a.txt"}})
+        h.answer(h.say("write"), True, {"mode": mode, "reason": ""})
+        assert tool.calls == [{"path": "a.txt"}]
+
+        h.llm.requests.clear()  # the model calls write_file again in the next turn
+        events = h.say("again")
+        asked = [fc for e in events for fc in e.get_function_calls() if fc.name == "adk_request_confirmation"]
+        assert bool(asked) is asks_again, mode
+        assert len(tool.calls) == (1 if asks_again else 2)
+
+
+def test_always_rule_does_not_bypass_active_plan():
+    tool = mcp_tool("run_command")
+    h = Harness(tool, {"name": "run_command", "args": {"command": "git status"}})
+    asyncio.run(h.sessions.append_event(h.session, _state_event({
+        enforcer.PLAN_KEY: ["read_file"],
+        PERSISTED_ALLOW_KEY: [{"source": "default", "tool": "run_command", "pattern": "git status"}],
+    })))
+    h.session = asyncio.run(h.sessions.get_session(app_name="dak_agent", user_id="u", session_id=h.session.id))
+
+    events = h.say("status?")
+
+    assert tool.calls == []
+    denied = responses(events, "run_command")[0]
+    assert denied["observation"] == "denied_by_policy"
+    assert "plan" in denied["reason"]
