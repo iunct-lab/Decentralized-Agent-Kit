@@ -86,6 +86,15 @@ def test_expansion_keeps_deny_and_plain_git_allowed():
     assert run("git status && rm -rf *") == "deny"
     assert run("git log HEAD~1") == "allow"
     assert run("git log --oneline -n 3") == "allow"
+    assert run("git log [ab]*") == "ask"
+
+
+def test_expansion_rules_are_only_defaults():
+    """Only the default server's git allows; the caller's tools and an
+    operator's own allow rule are not overridden."""
+    assert run("ls *.py", source="caller") == "allow"
+    assert run("echo $HOME", source="caller") == "allow"
+    assert run("ls *.py", DEFAULT_RULES + [Rule("default", "run_command", "ls *", "allow")]) == "allow"
 
 
 def test_unsplittable_command_still_honours_deny():
