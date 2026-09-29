@@ -86,7 +86,8 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
    - 尽きたら例外を投げず、先頭が `[CONTEXT_OVERFLOW]` の説明文（`CONTEXT_OVERFLOW_FAILURE_TEXT`）
      をそのターンの答えにする。invocation は失敗扱いにならず、同じセッションで次の入力を受け付ける。
    - 窓超過以外のエラーは扱わない（ADK が元の例外をそのまま送出する）。呼び直しの途中で
-     窓超過以外のエラー（接続断・レート制限など）が出たら、説明文に置き換えずにそのまま送出する。
+     窓超過以外のエラー（接続断・レート制限など）が出たら、説明文に置き換えずに送出する
+     （ADK のプラグイン機構が `RuntimeError` で包み、元の例外は `__cause__` に残る）。
 
 加えて:
 - mcp-server: `read_file(path, offset, limit)`（行範囲）を追加し、`read_file`/`run_command` は
