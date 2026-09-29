@@ -779,7 +779,8 @@ class ContextHarnessPlugin(BasePlugin):
         bounded number of times within this one call (no state carries over to
         the next turn); then answer with an explanation instead of raising.
         Other errors return None, so ADK re-raises them unchanged; a
-        different error during a retry is raised as is."""
+        different error during a retry is raised (ADK's plugin manager wraps
+        it in a RuntimeError, with this error as the cause)."""
         if not is_context_overflow_error(error):
             return None
         settings = self._settings_for(callback_context)
@@ -804,7 +805,7 @@ class ContextHarnessPlugin(BasePlugin):
                 continue
             logger.warning("Context harness: retry %d returned no content", attempt)
         logger.error("Context harness: request still rejected after %d retry(ies); ending the turn with an "
-                     "explanation", settings.model_error_retry_attempts)
+                     "explanation. Last error: %s", settings.model_error_retry_attempts, error)
         return LlmResponse(
             content=types.Content(role="model", parts=[types.Part(text=CONTEXT_OVERFLOW_FAILURE_TEXT)]),
             turn_complete=True,

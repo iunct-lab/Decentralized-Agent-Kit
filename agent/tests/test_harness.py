@@ -599,6 +599,16 @@ class TestOnModelErrorCallback:
         assert response.turn_complete
 
     @pytest.mark.asyncio
+    async def test_the_last_retrys_error_is_logged(self, caplog):
+        last = ValueError("request (7777 tokens) exceeds the available context size")
+        llm = self._llm([_context_error(), last])
+
+        with caplog.at_level("ERROR", logger="dak_agent.harness"):
+            await self._callback(llm, _context_error())
+
+        assert "7777 tokens" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_zero_attempts_fails_explicitly_without_calling_the_model(self):
         self.settings = HarnessSettings(context_window=8192, model_error_retry_attempts=0)
         llm = self._llm([])
@@ -610,6 +620,8 @@ class TestOnModelErrorCallback:
 
     @pytest.mark.asyncio
     async def test_a_different_error_during_a_retry_is_raised_not_reported_as_overflow(self):
+        """Raised from the callback; ADK's plugin manager then wraps it in a
+        RuntimeError whose __cause__ is this error."""
         llm = self._llm([ConnectionError("connection refused")])
 
         with pytest.raises(ConnectionError):
