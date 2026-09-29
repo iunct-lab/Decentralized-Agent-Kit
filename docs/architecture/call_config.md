@@ -110,7 +110,7 @@
   "error": "output_schema_validation_failed",
   "issues": [
     {"path": "date", "message": "'date' is a required property"},
-    {"path": "trip/days", "message": "'three' is not of type 'integer'"}
+    {"path": "summary/count", "message": "'three' is not of type 'integer'"}
   ]
 }
 ```
