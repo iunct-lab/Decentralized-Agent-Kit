@@ -13,6 +13,7 @@ services:
       - SOLANA_NETWORK=devnet
       - AGENT_NAME=dak_agent
       - AGENT_PUBLIC_URL=http://agent-consumer:8000/a2a/dak_agent
+      - SESSION_SERVICE_URI=postgresql+asyncpg://username:password@postgres:5432/postgres
       - 'AGENT_INSTRUCTION=You are a Consumer Agent. Payment Policy: If you receive a PaymentRequired error, you MUST call check_solana_balance(). If you have funds, use send_sol_payment to pay. CRITICAL: AFTER paying, you MUST IMMEDIATELY call the "transfer_to_agent_provider" tool again with the "payment_hash" argument. DO NOT STOP to report the payment to the user. CHAIN THE TOOLS: Pay -> Retry -> Report Result. You have permission to proceed without asking.'
       - MCP_SERVER_URL=http://mcp-server:8000/mcp
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
@@ -35,6 +36,7 @@ services:
       - AGENT_SKILLS_DIRS=/app/skills:/app/provider_skills
       - AGENT_NAME=dak_agent
       - AGENT_PUBLIC_URL=http://agent-provider:8000/a2a/dak_agent
+      - SESSION_SERVICE_URI=postgresql+asyncpg://username:password@postgres:5432/postgres
       - AGENT_INSTRUCTION="You are a Provider Agent. You sell premium analysis. Use 'premium_service' skill."
       - MCP_SERVER_URL=http://mcp-server:8000/mcp
     depends_on:

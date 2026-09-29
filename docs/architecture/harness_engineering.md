@@ -48,8 +48,8 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
 
 ## 3. 実装したコンテキストハーネス（`agent/dak_agent/harness.py`）
 
-`agent.py` は `root_agent` に加えて ADK の `App` を公開し、`adk web`（A2A を含む）は
-`app` のほうを優先して読み込む。安いものから順に 3 段で防ぐ。
+`agent.py` は `root_agent` に加えて ADK の `App` を公開し、ADK の FastAPI アプリ（A2A を含む。
+`agent/dak_agent/server.py` が `get_fast_api_app` で作る）は `app` のほうを優先して読み込む。安いものから順に 3 段で防ぐ。
 
 1. **ツール出力の上限**（`ContextHarnessPlugin.after_tool_callback`）
    - 上限を超えた結果は先頭 70% と末尾 30% のプレビューに置き換え、全文は Artifact
@@ -122,6 +122,31 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 - 指示に入れる計画は、窓の 5%（1,000〜8,000 文字、`HarnessSettings.plan_chars`）までにする（#364）。超えたら、まず done の項目を件数の 1 行にまとめ、それでも超えたら項目の区切りで切って `read_plan` を案内する（先頭の未完了の項目は、長くても途中で切って必ず見せる）。state の計画と `read_plan` はこの上限で切り詰めない。ただし `read_plan` の結果も、ほかのツールと同じくツール出力の上限を受け、長ければ `read_tool_output` でページ送りする。
 - `planner`（Ulysses Pact）は「これから使ってよいツール」を絞るもので、進捗は持たない。`write_todos` / `read_plan` は Pact で絞っていても常に呼べる。
 - 検証: `test_harness.py::test_plan_survives_compaction`（圧縮後の最後のリクエストに計画がある）、`test_ulysses_pact.py::test_planner_restriction_does_not_block_write_todos_and_read_plan`。
+
+### 承認の保留と reply（#100）
+
+承認待ち（ツールの確認）と質問待ち（`ask_question`）を、どのクライアントからでも一覧して答えられる。
+設計と根拠は `docs/design/approval-queue.md`。保留は ADK のセッションのイベントそのもので、別に保存しない。
+入口は `agent/dak_agent/server.py`（ADK の FastAPI アプリに 3 本を足す。ADK の REST を同じプロセスの中で呼ぶ）。
+
+| エンドポイント | 中身 |
+|---|---|
+| `GET /approvals?user_id=&session_id=[&app_name=dak_agent]` | 保留の一覧。1 件は `id`・`kind`（`approval` / `question`）・`tool_name`・`tool_args` / `hint`（承認）・`questions` / `context`（質問）・`requested_at`・`status`（`pending` / `timed_out`）・`session_id` |
+| `POST /approvals/{id}/reply` | 本文 `{user_id, session_id, mode, reason}`（承認）か `{user_id, session_id, answer}`（質問）。セッションを再開して ADK のイベントを返す。保留に無い `id` は `404`、`mode` の誤りは `422` |
+| `GET /approvals/stream?user_id=&session_id=` | 同じ一覧を server-sent events で。新しい保留に `approval.asked`、一覧から消えたら `approval.replied`（2 秒ごとに読む） |
+
+| 答え | モデルに届く Observation |
+|---|---|
+| `once` | ツールの実行結果 |
+| `always` | ツールの実行結果（`payload.mode: "always"` がセッションに残る。継続許可の保存は #101） |
+| `reject` + `reason` | `{"observation": "denied_by_user", "reason": ...}`（`AdaptiveAgent._restore_reject_reason`） |
+| `timed_out` | `{"observation": "timed_out"}`。`DAK_APPROVAL_TIMEOUT_SECONDS`（既定 900）を過ぎた承認に reply すると、その答えの代わりに流し、HTTP は `409`。一覧（GET / SSE）は示すだけで消費しない |
+
+MRTR（MCP 2026-07-28、SEP-2322）との対応: 保留の 1 件 ↔ `InputRequiredResult`（`resultType: "input_required"`）、`id` ↔ `inputRequests` のキー、
+`once` / `always` ↔ `ElicitResult.action: "accept"`、`reject` ↔ `"decline"`、`timed_out` ↔ `"cancel"`、質問の `answer` ↔ `accept` の `content`。
+`requestState`（状態をクライアントが運ぶ）と、mcp-server が返す `input_required` の透過は未対応（表の全体は設計文書の 5）。
+
+確認を求めるツールは今は `planner`（`DAK_PLANNER_REQUIRE_CONFIRMATION=true`）だけ。MCP のツールは #101 で確認を求めるようになる。
 
 ## 4. 残りのギャップとバックログ（優先度順）
 

@@ -22,6 +22,9 @@ services:
       - OPENAI_API_BASE=http://fake-llm:8080/v1
       - OPENAI_API_KEY=dummy
       - DAK_ALLOWED_MODELS=openai/fake-default,openai/fake-alt
+      # tests/integration/test_approvals.py: planner is the one tool that asks for confirmation today
+      - DAK_PLANNER_REQUIRE_CONFIRMATION=true
+      - DAK_APPROVAL_TIMEOUT_SECONDS=5
       # The stack's own mcp-server stands in for a caller's MCP server (dak:tools.mcp_servers).
       - DAK_ALLOWED_MCP_URLS=http://mcp-server:8000/mcp,http://caller-mcp-unreachable:8000/mcp
     depends_on:
@@ -41,6 +44,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://username:password@postgres:5432/postgres
+      - SESSION_SERVICE_URI=postgresql+asyncpg://username:password@postgres:5432/postgres
       - MCP_SERVER_URL=http://mcp-server:8000/mcp
       - MODEL_NAME=openai/fake-enforcer
       - OPENAI_API_BASE=http://fake-llm:8080/v1
@@ -63,6 +67,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://username:password@postgres:5432/postgres
+      - SESSION_SERVICE_URI=postgresql+asyncpg://username:password@postgres:5432/postgres
       - MCP_SERVER_URL=http://mcp-server:8000/mcp
       - MODEL_NAME=openai/fake-ap2
       - OPENAI_API_BASE=http://fake-llm:8080/v1

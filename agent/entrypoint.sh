@@ -43,5 +43,5 @@ EOF
 
 echo "[entrypoint] Generated agent.json with URL: ${AGENT_PUBLIC_URL}"
 
-# Execute the original command (adk web ...)
+# Execute the original command (uvicorn dak_agent.server:app ...)
 exec "$@"
