@@ -1,9 +1,10 @@
 """Pending approvals and questions answered through the agent's /approvals
 routes (PBI #100, docs/design/approval-queue.md).
 
-The approval is started from the BFF, the way a user would. `planner` is the
-one tool that asks for confirmation today (DAK_PLANNER_REQUIRE_CONFIRMATION in
-docker-compose.test.yml); MCP tools follow once #101 adds confirmation there.
+The approval is started from the BFF, the way a user would, with `planner`
+(DAK_PLANNER_REQUIRE_CONFIRMATION in docker-compose.test.yml): an agent-side
+tool, so the scripted turn does not depend on the MCP server. MCP tools ask
+through PermissionPlugin in the same `adk_request_confirmation` shape.
 """
 import json
 import re
