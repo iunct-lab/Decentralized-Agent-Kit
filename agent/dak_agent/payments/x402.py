@@ -66,7 +66,7 @@ def _requirement(item: Any, version: int, resource: str) -> X402Requirement:
     timeout = item.get("maxTimeoutSeconds")
     if type(timeout) is not int:
         raise ValueError(f"maxTimeoutSeconds must be an integer: {timeout!r}")
-    extra = item.get("extra") or {}
+    extra = item.get("extra", {})
     if not isinstance(extra, dict):
         raise ValueError("extra must be an object")
     return X402Requirement(
