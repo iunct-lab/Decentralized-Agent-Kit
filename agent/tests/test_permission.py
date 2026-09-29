@@ -62,6 +62,7 @@ def test_hash_inside_a_word_does_not_hide_a_chained_command(command):
 
 @pytest.mark.parametrize("command", [
     "git diff --output=/projects/x.yml", "git log -p --output=x", "git show --ext-diff HEAD", "git diff --textconv",
+    "git diff --output=$HOME/.bashrc", "git diff --output='/tmp/a b'", "git diff --output=~/x", "git diff --ext-diff=$X",
 ])
 def test_read_only_git_that_writes_or_runs_programs_asks(command):
     assert run(command) == "ask"
@@ -69,7 +70,7 @@ def test_read_only_git_that_writes_or_runs_programs_asks(command):
 
 @pytest.mark.parametrize("command", ["rm -r -f /", "/bin/rm -rf /", "sudo rm -rf /"])
 def test_other_spellings_of_destructive_commands_are_at_least_ask(command):
-    """Not denied by the default patterns, but never allowed either."""
+    """Other spellings than the deny patterns: never allowed."""
     assert run(command) in ("ask", "deny")
 
 

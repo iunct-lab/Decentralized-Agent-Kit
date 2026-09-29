@@ -117,7 +117,8 @@ DEFAULT_RULES: List[Rule] = [
     *(Rule("default", t, p, "ask") for t in ("read_file", "grep") for p in ("*.env", "*.env.*")),
     *(Rule("default", "run_command", p, "allow") for g in _READ_ONLY_GIT for p in (f"git {g}", f"git {g} *")),
     # Options that make those git commands write a file or run a program.
-    *(Rule("default", "run_command", f"git * {o}*", "ask") for o in ("--output", "--ext-diff", "--textconv")),
+    # No space before the option: shlex.join may quote the word (`'--output=a b'`).
+    *(Rule("default", "run_command", f"git *{o}*", "ask") for o in ("--output", "--ext-diff", "--textconv")),
     *(Rule("default", "run_command", p, "deny")
       for p in ("rm -rf *", "rm -fr *", "git push --force*", "git push -f*", "git push * --force*", "git push * -f*")),
 ]
