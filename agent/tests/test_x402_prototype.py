@@ -179,3 +179,45 @@ def test_approved_is_keyword_only_without_default(client):
         retry_with_payment(client, URL, reqs[0])  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         retry_with_payment(client, URL, reqs[0], True)  # type: ignore[misc]
+
+
+def _v1_with(**fields) -> httpx.Response:
+    body = json.loads(json.dumps(V1_BODY))
+    body["accepts"][0].update(fields)
+    return httpx.Response(402, json=body)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"maxAmountRequired": None},
+        {"maxAmountRequired": 10000},
+        {"maxAmountRequired": "1.5"},
+        {"asset": None},
+        {"payTo": ""},
+        {"maxTimeoutSeconds": 1.9},
+        {"maxTimeoutSeconds": "60"},
+        {"maxTimeoutSeconds": True},
+        {"extra": "USDC"},
+    ],
+    ids=["amount-null", "amount-number", "amount-decimal", "asset-null", "payto-empty",
+         "timeout-float", "timeout-string", "timeout-bool", "extra-not-object"],
+)
+def test_parse_rejects_bad_field_values(fields):
+    with pytest.raises(ValueError):
+        parse_payment_required(_v1_with(**fields))
+
+
+@pytest.mark.parametrize("approved", ["yes", 1, None])
+def test_non_boolean_approval_sends_nothing(client, server, approved):
+    reqs = parse_payment_required(client.get(URL))
+    with pytest.raises(PermissionError):
+        retry_with_payment(client, URL, reqs[0], approved=approved)
+    assert len(server.requests) == 1
+
+
+def test_approved_payload_echoes_extra(client, server):
+    reqs = parse_payment_required(client.get(URL))
+    retry_with_payment(client, URL, reqs[0], approved=True)
+    payload = _b64json(server.requests[1].headers["PAYMENT-SIGNATURE"])
+    assert payload["accepted"]["extra"] == {"name": "USDC", "version": "2"}

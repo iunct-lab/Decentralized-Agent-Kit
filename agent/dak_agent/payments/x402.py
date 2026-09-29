@@ -49,25 +49,38 @@ def _decode_header(value: str) -> dict:
     return data
 
 
+def _text(item: dict, key: str) -> str:
+    value = item.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"accepts item field {key!r} must be a non-empty string")
+    return value
+
+
 def _requirement(item: Any, version: int, resource: str) -> X402Requirement:
     if not isinstance(item, dict):
         raise ValueError("accepts item is not an object")
-    try:
-        return X402Requirement(
-            scheme=str(item["scheme"]),
-            network=str(item["network"]),
-            # v1 は maxAmountRequired、v2 は amount
-            amount=str(item["amount"] if version == 2 else item["maxAmountRequired"]),
-            asset=str(item["asset"]),
-            pay_to=str(item["payTo"]),
-            max_timeout_seconds=int(item["maxTimeoutSeconds"]),
-            # v1 は要求ごとに resource（URL）を持つ
-            resource=resource if version == 2 else str(item["resource"]),
-            x402_version=version,
-            extra=dict(item.get("extra") or {}),
-        )
-    except (KeyError, TypeError, ValueError) as e:
-        raise ValueError(f"accepts item is missing or has a bad field: {e}") from e
+    # v1 は maxAmountRequired、v2 は amount。どちらも最小単位の整数を文字列で持つ
+    amount = _text(item, "amount" if version == 2 else "maxAmountRequired")
+    if not amount.isdigit():
+        raise ValueError(f"amount must be an integer string in atomic units: {amount!r}")
+    timeout = item.get("maxTimeoutSeconds")
+    if type(timeout) is not int:
+        raise ValueError(f"maxTimeoutSeconds must be an integer: {timeout!r}")
+    extra = item.get("extra") or {}
+    if not isinstance(extra, dict):
+        raise ValueError("extra must be an object")
+    return X402Requirement(
+        scheme=_text(item, "scheme"),
+        network=_text(item, "network"),
+        amount=amount,
+        asset=_text(item, "asset"),
+        pay_to=_text(item, "payTo"),
+        max_timeout_seconds=timeout,
+        # v1 は要求ごとに resource（URL）を持つ
+        resource=resource if version == 2 else _text(item, "resource"),
+        x402_version=version,
+        extra=extra,
+    )
 
 
 def parse_payment_required(response: httpx.Response) -> list[X402Requirement]:
