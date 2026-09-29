@@ -4,9 +4,12 @@ import pytest
 
 from dak_agent.approvals import (
     PENDING_TIMEOUT_SECONDS,
+    build_question_reply,
     build_reply_function_response,
     is_expired,
+    list_pending,
     list_pending_approvals,
+    list_pending_questions,
 )
 
 
@@ -136,3 +139,40 @@ def test_compaction_after_the_request_keeps_it_pending():
 def test_compaction_does_not_revive_an_answered_request():
     events = [_user_text("plan it"), _confirmation_call(), _confirmation_answer(), _compaction(ts=3.5)]
     assert list_pending_approvals(events) == []
+
+
+def _question_call(fc_id="call-q", ts=5.0):
+    """`ask_question` ends the invocation right after its own response."""
+    args = {"questions": ["Which branch?"], "context": "Two branches match"}
+    return [
+        {"author": "dak_agent", "timestamp": ts, "content": {"role": "model", "parts": [
+            {"functionCall": {"id": fc_id, "name": "ask_question", "args": args}}]}},
+        {"author": "dak_agent", "timestamp": ts + 0.1, "content": {"role": "user", "parts": [
+            {"functionResponse": {"id": fc_id, "name": "ask_question", "response": {"result": "Questions for user"}}}]}},
+    ]
+
+
+def test_list_pending_includes_open_question():
+    pending = list_pending_questions([_user_text("deploy it"), *_question_call()])
+    assert pending == [{
+        "id": "call-q",
+        "kind": "question",
+        "tool_name": "ask_question",
+        "questions": ["Which branch?"],
+        "context": "Two branches match",
+        "requested_at": 5.0,
+    }]
+
+
+def test_list_pending_excludes_answered_question():
+    events = [_user_text("deploy it"), *_question_call(), _user_text("main", ts=6.0)]
+    assert list_pending_questions(events) == []
+
+
+def test_list_pending_orders_approvals_and_questions_by_time():
+    events = [_user_text("go"), *_question_call(ts=1.5), _confirmation_call(ts=2.0)]
+    assert [(p["kind"], p["id"]) for p in list_pending(events)] == [("question", "call-q"), ("approval", "adk-1")]
+
+
+def test_build_question_reply_is_a_plain_message():
+    assert build_question_reply("main") == {"parts": [{"text": "main"}]}

@@ -485,3 +485,42 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestRestoreRejectReason(unittest.TestCase):
+    """ADK answers a rejected confirmation with a fixed text; the reason the
+    user gave travels in the confirmation payload (docs/design/approval-queue.md)."""
+
+    REJECTED = {"error": "This tool call is rejected."}
+
+    def _agent(self):
+        return AdaptiveAgent(model="test-model", name="test_agent", instruction="i", tools=[])
+
+    def _context(self, confirmed, payload):
+        from google.adk.tools.tool_confirmation import ToolConfirmation
+        ctx = MagicMock()
+        ctx.tool_confirmation = ToolConfirmation(confirmed=confirmed, payload=payload)
+        return ctx
+
+    def test_restore_reject_reason_rewrites_rejected_observation(self):
+        ctx = self._context(False, {"mode": "reject", "reason": "not now"})
+        result = self._agent()._restore_reject_reason(MagicMock(), {}, ctx, self.REJECTED)
+        self.assertEqual(result, {"observation": "denied_by_user", "reason": "not now"})
+
+    def test_restore_reject_reason_reports_timeout(self):
+        ctx = self._context(False, {"mode": "timed_out", "reason": ""})
+        result = self._agent()._restore_reject_reason(MagicMock(), {}, ctx, self.REJECTED)
+        self.assertEqual(result, {"observation": "timed_out"})
+
+    def test_restore_reject_reason_is_noop_without_payload(self):
+        """The CLI answers with `confirmed` only: the fixed text stays."""
+        ctx = self._context(False, None)
+        self.assertIsNone(self._agent()._restore_reject_reason(MagicMock(), {}, ctx, self.REJECTED))
+
+    def test_restore_reject_reason_is_noop_for_other_results(self):
+        ctx = MagicMock()
+        ctx.tool_confirmation = None
+        self.assertIsNone(self._agent()._restore_reject_reason(MagicMock(), {}, ctx, {"result": "ok"}))
+
+    def test_restore_reject_reason_is_registered(self):
+        self.assertEqual(self._agent().after_tool_callback.__name__, "_restore_reject_reason")

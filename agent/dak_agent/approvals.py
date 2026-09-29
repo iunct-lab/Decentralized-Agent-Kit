@@ -14,6 +14,7 @@ import os
 import time
 
 REQUEST_CONFIRMATION = "adk_request_confirmation"
+ASK_QUESTION = "ask_question"
 REPLY_MODES = ("once", "always", "reject", "timed_out")
 
 PENDING_TIMEOUT_SECONDS = float(os.getenv("DAK_APPROVAL_TIMEOUT_SECONDS", "900"))
@@ -63,6 +64,33 @@ def list_pending_approvals(events: list[dict]) -> list[dict]:
     return pending
 
 
+def list_pending_questions(events: list[dict]) -> list[dict]:
+    """`ask_question` calls after the last user event. The tool ends the
+    invocation, and the next user message (from any client) is the answer."""
+    pending = []
+    for event in _since_last_user_event(events):
+        for part in _parts(event):
+            call = part.get("functionCall")
+            if not call or call.get("name") != ASK_QUESTION:
+                continue
+            args = call.get("args") or {}
+            pending.append({
+                "id": call.get("id"),
+                "kind": "question",
+                "tool_name": ASK_QUESTION,
+                "questions": args.get("questions") or [],
+                "context": args.get("context", ""),
+                "requested_at": event.get("timestamp"),
+            })
+    return pending
+
+
+def list_pending(events: list[dict]) -> list[dict]:
+    """Every pending approval and question, oldest first."""
+    return sorted(list_pending_approvals(events) + list_pending_questions(events),
+                  key=lambda p: p["requested_at"] or 0)
+
+
 def build_reply_function_response(fc_id: str, mode: str, reason: str = "") -> dict:
     """The `new_message` that answers a confirmation: `mode` is once / always /
     reject (timed_out when DAK answers an expired one). `confirmed` is always
@@ -74,6 +102,11 @@ def build_reply_function_response(fc_id: str, mode: str, reason: str = "") -> di
         "name": REQUEST_CONFIRMATION,
         "response": {"confirmed": mode in ("once", "always"), "payload": {"mode": mode, "reason": reason}},
     }}]}
+
+
+def build_question_reply(answer: str) -> dict:
+    """The `new_message` that answers a question: a plain user message."""
+    return {"parts": [{"text": answer}]}
 
 
 def is_expired(requested_at: float) -> bool:

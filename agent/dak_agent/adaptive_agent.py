@@ -24,6 +24,9 @@ from .skill_registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
+# What google-adk returns for a tool call the user rejected (function_tool.py / mcp_tool.py).
+REJECTED_TOOL_CALL = {"error": "This tool call is rejected."}
+
 # Last-resort bound on listing one caller MCP server's tools. ADK's own
 # connection timeout (5 s, retried once) normally ends it first; cancelling
 # ADK mid-connection can orphan a session, so this stays well above that.
@@ -92,6 +95,7 @@ class AdaptiveAgent(LlmAgent):
             "before_agent_callback": self._restore_session_config,
             "after_model_callback": self._wrapped_callback,
             "on_tool_error_callback": self._on_tool_error,
+            "after_tool_callback": self._restore_reject_reason,
         }
         if sub_agents:
             init_kwargs["sub_agents"] = sub_agents
@@ -496,6 +500,23 @@ class AdaptiveAgent(LlmAgent):
         error_msg = str(error)
         logger.warning(f"Tool error caught: {tool_name} - {error_msg}")
         return {"error": f"Tool '{tool_name}' failed: {error_msg}"}
+
+    def _restore_reject_reason(self, tool, args: dict, tool_context, tool_response) -> Optional[dict]:
+        """
+        ADK answers a rejected confirmation with a fixed text and drops the
+        reason. The reply put it in the confirmation payload
+        (`approvals.build_reply_function_response`), so hand it to the model
+        as an observation. Anything else is left as is.
+        """
+        confirmation = getattr(tool_context, "tool_confirmation", None)
+        if tool_response != REJECTED_TOOL_CALL or confirmation is None or confirmation.confirmed:
+            return None
+        payload = confirmation.payload if isinstance(confirmation.payload, dict) else {}
+        if payload.get("mode") == "reject":
+            return {"observation": "denied_by_user", "reason": payload.get("reason", "")}
+        if payload.get("mode") == "timed_out":
+            return {"observation": "timed_out"}
+        return None
 
     async def _wrapped_callback(
         self, llm_response: LlmResponse, callback_context: CallbackContext
