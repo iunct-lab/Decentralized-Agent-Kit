@@ -23,9 +23,18 @@ def _parts(event: dict) -> list[dict]:
     return (event.get("content") or {}).get("parts") or []
 
 
+def _is_compaction(event: dict) -> bool:
+    """A compaction event (ADK's, or harness._compaction_event) is authored
+    "user" but carries only `actions.compaction`: it is not an answer."""
+    return bool((event.get("actions") or {}).get("compaction")) and not _parts(event)
+
+
 def _since_last_user_event(events: list[dict]) -> list[dict]:
     """ADK only reads a confirmation from the last user event, so anything
-    asked before it was either answered or abandoned."""
+    asked before it was either answered or abandoned. Compaction events are
+    dropped, as they are appended after an invocation that may end on a
+    request."""
+    events = [e for e in events if not _is_compaction(e)]
     for i in range(len(events) - 1, -1, -1):
         if events[i].get("author") == "user":
             return events[i + 1:]

@@ -26,7 +26,7 @@ Task 本文の `python3.13` は誤りで、agent の venv は 3.12。
 
   `_RequestConfirmationLlmRequestProcessor`（`<adk>/flows/llm_flows/request_confirmation.py`）が**最後の user イベント**の functionResponse を読み、`originalFunctionCall` を引いて元のツールを `tool_confirmation` 付きでもう一度実行する（Step 1〜4）。すでに応答済みの元の呼び出しは飛ばす（Step 2）
 - したがって「どのクライアントが答えても同じ結果になる」は ADK の標準 REST API だけで成立している。保留はセッションのイベント列そのもので、別のストア（pending dict、`asyncio.Future`）は要らない。今この形で答えているクライアントは CLI だけ（`cli/src/client.py:83-102`、`response` は `{"confirmed": bool}` のみ）
-- 答えずに新しい文を送ると、最後の user イベントが functionResponse でなくなるので、その確認は二度と処理されない（Step 1 で `return`）。保留は「最後の user イベントより後にある `adk_request_confirmation`」だけ（答えはそれ自体が user のイベントなので、それより後の確認は全部未回答）
+- 答えずに新しい文を送ると、最後の user イベントが functionResponse でなくなるので、その確認は二度と処理されない（Step 1 で `return`）。保留は「最後の user イベントより後にある `adk_request_confirmation`」だけ（答えはそれ自体が user のイベントなので、それより後の確認は全部未回答）。ただし圧縮のイベント（ADK と `harness._compaction_event` が invocation の後に足す。author は user だが `actions.compaction` だけで content が無い）は答えではないので、user イベントに数えない。ADK は答えのイベントそのものを Step 1 で読むので、圧縮の後に答えても再開する
 - `ToolConfirmation`（`<adk>/tools/tool_confirmation.py`）のフィールドは `hint` / `confirmed` / `payload` の 3 つだけ（`extra="forbid"`）。`once` / `always` / `reject` と理由は DAK が `payload` に載せる独自の拡張になる
 - 拒否（`confirmed: false`）されたツールは、理由を見ずに固定の `{"error": "This tool call is rejected."}` を返す（`function_tool.py:350-351`、`mcp_tool.py:414-415`。vendor のコードなので変えない）
 - ただし、もう一度実行されるときの `ToolContext` は答えの `ToolConfirmation` を持つ（`functions.py:1334-1344` の `_create_tool_context`）。**エージェントの `after_tool_callback` は `tool_context.tool_confirmation.payload` から理由を直接読める**。答えるときに理由を session state に退避しておく必要は無い（#174 の手順 3・4 を変える。下の「Task への影響」）

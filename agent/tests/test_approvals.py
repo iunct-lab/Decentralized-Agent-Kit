@@ -111,3 +111,28 @@ def test_list_pending_reads_dumped_adk_events():
     assert pending["id"] == "adk-1"
     assert pending["tool_name"] == "planner"
     assert pending["requested_at"] == events[1].timestamp
+
+
+def _compaction(ts=2.5):
+    """The event DAK's summarizer appends after an invocation (harness._compaction_event): author "user", no content."""
+    from google.adk.events.event import Event
+    from google.genai import types
+
+    from dak_agent.harness import BudgetedEventSummarizer
+
+    source = [Event(author="user", timestamp=1.0), Event(author="dak_agent", timestamp=ts)]
+    event = BudgetedEventSummarizer._compaction_event(
+        source, types.Content(role="model", parts=[types.Part(text="summary")]), None)
+    event.timestamp = ts
+    return event.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+def test_compaction_after_the_request_keeps_it_pending():
+    """The compaction event is authored "user" but is not an answer: the request stays pending."""
+    events = [_user_text("plan it"), _confirmation_call(), _compaction(ts=2.5)]
+    assert [p["id"] for p in list_pending_approvals(events)] == ["adk-1"]
+
+
+def test_compaction_does_not_revive_an_answered_request():
+    events = [_user_text("plan it"), _confirmation_call(), _confirmation_answer(), _compaction(ts=3.5)]
+    assert list_pending_approvals(events) == []
