@@ -1,6 +1,7 @@
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.live import Live
@@ -13,7 +14,7 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.styles import Style
 
 from .config import ConfigManager
-from .client import AgentClient
+from .client import AgentClient, ApprovalError
 from . import commands as cmd_lib
 
 # Marker used by enforcer_validator to indicate a blocked response
@@ -55,6 +56,26 @@ def _extract_response_text(response_data) -> tuple[str, list]:
     
     return response_text, function_outputs
 
+def _answer_approvals(client: AgentClient, response_data):
+    """Ask the user about each confirmation the turn stopped on and answer it
+    through the agent's /approvals (the same route every client uses)."""
+    while isinstance(response_data, dict) and response_data.get("status") == "needs_approval":
+        tool_call = response_data.get("tool_call", {})
+        console.print(Panel(
+            f"Tool: [bold cyan]{tool_call.get('tool_name')}[/bold cyan]\nArgs: {tool_call.get('tool_args')}",
+            title="[yellow]Approval Required[/yellow]",
+            border_style="yellow"
+        ))
+        approved = typer.confirm("Allow this tool execution?")
+        try:
+            with console.status("[bold green]Executing tool..." if approved else "[bold red]Denying tool..."):
+                response_data = client.reply_approval(
+                    tool_call.get("tool_call_id"), client.session_id, "once" if approved else "reject")
+        except ApprovalError as e:
+            console.print(f"[red]The agent did not take the answer ({e}).[/red]")
+            return []
+    return response_data
+
 app = typer.Typer(help="DAK CLI - Decentralized Agent Kit Command Line Interface")
 console = Console()
 config_manager = ConfigManager()
@@ -82,43 +103,7 @@ def run(prompt: str):
         with console.status("[bold green]Waiting for agent response..."):
             response_data = client.run_task(prompt, permissions={"default": "ask"})
         
-        # Handle approval loop
-        while isinstance(response_data, dict) and response_data.get("status") == "needs_approval":
-            tool_call = response_data.get("tool_call", {})
-            tool_name = tool_call.get("tool_name")
-            tool_args = tool_call.get("tool_args")
-            tool_call_id = tool_call.get("tool_call_id")
-            
-            console.print(Panel(
-                f"Tool: [bold cyan]{tool_name}[/bold cyan]\\nArgs: {tool_args}",
-                title="[yellow]Approval Required[/yellow]",
-                border_style="yellow"
-            ))
-            
-            if typer.confirm("Allow this tool execution?"):
-                with console.status("[bold green]Executing tool..."):
-                    response_data = client.run_task(
-                        prompt, 
-                        tool_approval={
-                            "approved": True,
-                            "tool_name": tool_name,
-                            "tool_args": tool_args,
-                            "tool_call_id": tool_call_id,
-                            "invocation_id": tool_call.get("invocation_id")
-                        }
-                    )
-            else:
-                with console.status("[bold red]Denying tool..."):
-                    response_data = client.run_task(
-                        prompt, 
-                        tool_approval={
-                            "approved": False,
-                            "tool_name": tool_name,
-                            "tool_args": tool_args,
-                            "tool_call_id": tool_call_id,
-                            "invocation_id": tool_call.get("invocation_id")
-                        }
-                    )
+        response_data = _answer_approvals(client, response_data)
 
         # ADK returns an array of events, extract both model text and function responses
         response_text = ""
@@ -239,43 +224,7 @@ def chat(
                     # For this implementation, we'll set a default policy of "ask" to demonstrate the feature
                     response_data = client.run_task(user_input, permissions={"default": "ask"})
                 
-                # Handle approval loop (if response is dict with status)
-                while isinstance(response_data, dict) and response_data.get("status") == "needs_approval":
-                    tool_call = response_data.get("tool_call", {})
-                    tool_name = tool_call.get("tool_name")
-                    tool_args = tool_call.get("tool_args")
-                    tool_call_id = tool_call.get("tool_call_id")  # Extract the ID
-                    
-                    console.print(Panel(
-                        f"Tool: [bold cyan]{tool_name}[/bold cyan]\\nArgs: {tool_args}",
-                        title="[yellow]Approval Required[/yellow]",
-                        border_style="yellow"
-                    ))
-                    
-                    if typer.confirm("Allow this tool execution?"):
-                        with console.status("[bold green]Executing tool..."):
-                            response_data = client.run_task(
-                                user_input, 
-                                tool_approval={
-                                    "approved": True,
-                                    "tool_name": tool_name,
-                                    "tool_args": tool_args,
-                                    "tool_call_id": tool_call_id,
-                                    "invocation_id": tool_call.get("invocation_id")
-                                }
-                            )
-                    else:
-                        with console.status("[bold red]Denying tool..."):
-                            response_data = client.run_task(
-                                user_input, 
-                                tool_approval={
-                                    "approved": False,
-                                    "tool_name": tool_name,
-                                    "tool_args": tool_args,
-                                    "tool_call_id": tool_call_id,
-                                    "invocation_id": tool_call.get("invocation_id")
-                                }
-                            )
+                response_data = _answer_approvals(client, response_data)
 
                 # Use helper function to extract response
                 response_text, function_outputs = _extract_response_text(response_data)
@@ -378,6 +327,68 @@ def resume(
 
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
+
+
+@app.command()
+def approvals(
+    session: str = typer.Option(..., "--session", "-s", help="Session ID (any client's, e.g. the BFF's)"),
+    user: Optional[str] = typer.Option(None, "--user", "-u", help="User ID of the session (default: logged-in user)"),
+):
+    """
+    List the pending approvals and questions of a session.
+    """
+    try:
+        pending = AgentClient(session_id=session).list_approvals(session, user_id=user)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    if not pending:
+        console.print("[green]Nothing is pending.[/green]")
+        return
+    # One block per item, not a table: the ID is what `dak-cli approve` takes and must not wrap
+    for item in pending:
+        console.print(f"[bold]{escape(item.get('id') or '')}[/bold]  {item.get('kind')}  {item.get('status')}",
+                      soft_wrap=True)
+        if item.get("kind") == "question":
+            lines = [*(item.get("questions") or []), item.get("context", "")]
+        else:
+            lines = [f"{item.get('tool_name')} {item.get('tool_args') or {}}"]
+        for line in filter(None, lines):
+            console.print(f"  {escape(str(line))}", soft_wrap=True)
+
+
+@app.command()
+def approve(
+    approval_id: str = typer.Argument(..., help="ID from `dak-cli approvals`"),
+    session: str = typer.Option(..., "--session", "-s", help="Session ID (any client's, e.g. the BFF's)"),
+    user: Optional[str] = typer.Option(None, "--user", "-u", help="User ID of the session (default: logged-in user)"),
+    reject: bool = typer.Option(False, "--reject", help="Reject instead of approving"),
+    reason: str = typer.Option("", "--reason", help="Why it is rejected (reaches the model)"),
+    always: bool = typer.Option(False, "--always", help="Approve this call for good"),
+):
+    """
+    Answer a pending approval, in this or another client's session.
+    """
+    if reject and always:
+        console.print("[red]--reject and --always cannot be used together.[/red]")
+        raise typer.Exit(2)
+    mode = "reject" if reject else "always" if always else "once"
+    client = AgentClient(session_id=session)
+    try:
+        with console.status("[bold green]Answering..."):
+            response_data = client.reply_approval(approval_id, session, mode, reason=reason, user_id=user)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+    if isinstance(response_data, dict) and response_data.get("status") == "needs_approval":
+        tool_call = response_data["tool_call"]
+        console.print(f"[yellow]Another approval is pending: {tool_call.get('tool_call_id')} "
+                      f"({tool_call.get('tool_name')})[/yellow]")
+        return
+    response_text, function_outputs = _extract_response_text(response_data)
+    output = "\n".join([*function_outputs, response_text] if response_text else function_outputs)
+    console.print(Panel(Markdown(output), title=f"Answered ({mode})", border_style="blue") if output
+                  else f"[green]Answered ({mode}).[/green]")
 
 
 history_app = typer.Typer(help="Manage chat history")

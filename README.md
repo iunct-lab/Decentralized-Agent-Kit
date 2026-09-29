@@ -104,6 +104,10 @@ uv run dak-cli run "Use deep_think to analyze AI ethics"
 
 # Interactive chat
 uv run dak-cli chat
+
+# Pending approvals of any client's session (e.g. one started in the web UI), and answering one
+uv run dak-cli approvals --session <session-id> --user <user-id>
+uv run dak-cli approve <id> --session <session-id> --user <user-id>   # --always, or --reject --reason "..."
 ```
 
 ## Adding MCP Servers

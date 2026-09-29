@@ -7,7 +7,9 @@ tool, so the scripted turn does not depend on the MCP server. MCP tools ask
 through PermissionPlugin in the same `adk_request_confirmation` shape.
 """
 import json
+import os
 import re
+import subprocess
 import time
 import uuid
 
@@ -159,3 +161,40 @@ def test_stream_announces_asked_and_replied(fake_llm):
                 assert line == "event: approval.replied"
                 assert json.loads(next(lines).removeprefix("data: ")) == {"id": asked["id"]}
                 break
+
+
+CLI_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "cli"))
+
+
+def _dak_cli(tmp_path, *args):
+    """dak-cli with its config (~/.dak-cli) isolated, as test_cli.py does. Logged in as someone else
+    than the BFF's user, so the session is reached only through --user."""
+    env = {**os.environ, "HOME": str(tmp_path), "DAK_AGENT_URL": AGENT_URL}
+    config_dir = tmp_path / ".dak-cli"
+    config_dir.mkdir(exist_ok=True)
+    (config_dir / "config.json").write_text(json.dumps({"username": "it_cli_user"}))
+    return subprocess.run(["uv", "run", "dak-cli", *args], cwd=CLI_DIR, env=env,
+                          capture_output=True, text=True, timeout=300)
+
+
+def test_bff_pending_answered_by_dak_cli(fake_llm, tmp_path):
+    """Acceptance 1 from the CLI side: a pending approval the BFF started is listed and answered by dak-cli,
+    with the same result as any other client, and a second answer is refused."""
+    user_id, session_id = _start_from_bff(fake_llm, fake_llm.text("Answered from the CLI."))
+    [item] = _pending(user_id, session_id)
+
+    listed = _dak_cli(tmp_path, "approvals", "--session", session_id, "--user", user_id)
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    assert item["id"] in listed.stdout and "planner" in listed.stdout
+
+    answered = _dak_cli(tmp_path, "approve", item["id"], "--session", session_id, "--user", user_id)
+    assert answered.returncode == 0, answered.stdout + answered.stderr
+    assert "Answered from the CLI." in answered.stdout
+    assert _pending(user_id, session_id) == []
+    events = _session_events(user_id, session_id)
+    assert _answers(events)[-1]["payload"]["mode"] == "once"
+    assert "Answered from the CLI." in json.dumps(events)
+
+    again = _dak_cli(tmp_path, "approve", item["id"], "--session", session_id, "--user", user_id)
+    assert again.returncode != 0
+    assert "404" in again.stdout
