@@ -7,10 +7,15 @@ It is not the MCP transport's `Mcp-Session-Id`, which the MCP server assigns
 per connection (ADK's `mcp_session_manager.py` reads it from the response
 headers) and which says nothing about which user session made the call.
 
+Each part is percent-encoded before the two are joined with `:`, so the value
+is always a valid ASCII header value and `("a:b", "c")` cannot collide with
+`("a", "b:c")`.
+
 ADK pools MCP connections by their headers, so a different session key also
 means a different pooled connection.
 """
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 
 if TYPE_CHECKING:
     from google.adk.agents.readonly_context import ReadonlyContext
@@ -20,4 +25,5 @@ SESSION_KEY_HEADER = "X-DAK-Session-Key"
 
 def session_key_header(context: "ReadonlyContext") -> dict[str, str]:
     """`header_provider` for an ADK `McpToolset`."""
-    return {SESSION_KEY_HEADER: f"{context.user_id}:{context.session.id}"}
+    user_id, session_id = (quote(part, safe="") for part in (context.user_id, context.session.id))
+    return {SESSION_KEY_HEADER: f"{user_id}:{session_id}"}
