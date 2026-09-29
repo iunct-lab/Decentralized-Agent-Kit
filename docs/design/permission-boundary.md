@@ -81,7 +81,7 @@ PBI #16。この文書は、ツール実行の権限（許可 / 確認 / 拒否�
 1. **許可・確認・拒否（allow / ask / deny）の判断は agent 側の `before_tool_callback` に一元化する**
    - 根拠: 比較表の 2 行目。どのツールセット（既定 / スキル / `dak:tools`）から来た呼び出しにも同じ規則を当てられ、リモートの MCP サーバが他者のものでも効くのは agent 側だけ
    - ツールセットの `require_confirmation`（比較表の 1 行目）には判断を置かない。ツールセットを組み直す箇所ごとに設定が要り、今まさに 1 か所（`skill_tools.py:125-129`）の `False` で全部が確認なしになっている
-   - 置き場は App のプラグインの `before_tool_callback`。ADK 2.8.0 では、プラグインの `before_tool_callback` がエージェントの callback とツールの実行（`McpTool.run_async` の中の `require_confirmation` の判定を含む）より先に呼ばれ、値を返せばツールは実行されない（`google/adk/flows/llm_flows/functions.py:611-632`）。ask は callback の中で `tool_context.request_confirmation(...)` を呼んで返せばよく、`McpTool` が確認に使う仕組みと同じもの（`google/adk/tools/mcp_tool/mcp_tool.py:395-412`、`google/adk/agents/context.py:856`）
+   - 置き場は App のプラグインの `before_tool_callback`。ADK 2.8.0 では、プラグインの `before_tool_callback` がエージェントの callback とツールの実行（`McpTool.run_async` の中の `require_confirmation` の判定を含む）より先に呼ばれ、値を返せばツールは実行されない（`google/adk/flows/llm_flows/functions.py:611-632`）。ask は callback の中で `tool_context.request_confirmation(...)` を呼んで返せばよく、`McpTool` が確認に使う仕組みと同じもの（`google/adk/tools/mcp_tool/mcp_tool.py:395-412`、`google/adk/agents/context.py:856`）。利用者が答えると同じ呼び出しがもう一度 callback を通り、そのときは `tool_context.tool_confirmation` に答えが入っている（`functions.py:585-587`）。callback はこれを見て、未確認なら確認を求め、拒否なら拒否を返し、承認ならツールを実行させる（`mcp_tool.py:398-412` と同じ分岐）。見ないと、答えるたびにまた確認を求めてツールが動かない
 2. **mcp-server 側（このリポジトリの `mcp-server/`。`policy.py` は未実装）には、そこでしか物理的に強制できないものだけを置く**
    - 保護パス（`.git`・`.github/workflows`・スキル定義）への書き込みの拒否（#109）。パスを実際に解決した後でしか確かめられないため（比較表の 3 行目）
    - allow / ask / deny の規則の評価は置かない。MCP のツール呼び出しは同期で、途中で人に確認を挟めない（#109 の決定ログ）
@@ -98,7 +98,8 @@ PBI #16。この文書は、ツール実行の権限（許可 / 確認 / 拒否�
 - 判断は 1 つの `before_tool_callback`（App のプラグイン）で行う。ツールセットごとに `require_confirmation` のコーラブルを配る形（#177 の手順が前提にしている形）にはしない。配る箇所を 1 つ漏らせば外れる（`adaptive_agent.py:356-371` と `skill_tools.py:110-129` は今そうなっている）
 - プラグインは harness の有無に関係なく App に付ける。今の App のプラグインは `use_harness` のときだけ付く（`agent.py:111-116`）
 - deny はツールを実行せず、理由つきの Observation（callback の戻り値）で返す（AGENTS.md の Observation-Driven）
-- 呼び出し元が `dak:tools` で渡すツールも同じ callback を通る。確認なしで動かすなら（#101 の決定ログ、#136）、callback の規則で allow にする。ツールセットの設定で迂回しない
+- 呼び出し元が `dak:tools` で渡すツールも同じ callback を通る。確認なしで動かすなら、callback の規則で allow にする。ツールセットの設定で迂回しない。**これは #101 の決定ログ（2026-09-23）の「#136 のツールは規則の評価に合流させず、#136 が自分のツールセットに `require_confirmation=False` を付ける」を置き換える**
+- 規則は、ツール名だけでなく出どころ（どの MCP サーバのツールか）でも分けられる鍵で引く。MCP のツール名は接頭辞なし（#101 の決定ログ）なので、名前だけだと呼び出し元が渡したサーバの `write_file` と既定の mcp-server の `write_file` を区別できず、一方を allow にすると他方も通る。鍵の形（ツールが持つ接続先の URL、接頭辞など）は #101 で決める
 
 ## #20 への制約
 
@@ -107,11 +108,11 @@ PBI #16。この文書は、ツール実行の権限（許可 / 確認 / 拒否�
 - ネットワークの遮断、CPU / メモリ / PID の上限、使い捨ての隔離は、実行環境（mcp-server の側）でしか強制できない。agent 側に判断を一元化したこととは独立に、mcp-server の実行環境の隔離として持つ
 - mcp-server 側の隔離は「どの呼び出しを許すか」を判断しない。許された呼び出しを「どの隔離環境で実行するか」だけを受け持つ（#20 の決定ログと同じ）
 - Docker ソケット（`/var/run/docker.sock`）を mcp-server に見せるかどうかは、#20 で利用者が判断する（#282）。この文書では決めない
-- 置き場 A により、隔離は DAK の統合テスト（`tests/integration/`）で確かめる
+- 置き場 A により、隔離は DAK のテスト（#20 の受け入れ条件にある `cd mcp-server && uv run pytest -q` と `tests/integration/`）で確かめる。ただし Docker ソケットを使う隔離は、ソケットを安全にマウントできる実機でしか確かめられない（#20 の決定ログ）。`tests/integration/` が通っても、その経路を確かめたことにはならない
 
 ## 未検証事項
 
 - 別ホストの MCP サーバに接続した構成は動かしていない。この文書のリモート実行の列はコードから読んだもので、実構成では確かめていない
 - リモート構成で、どの利用者のセッションの呼び出しか（と、agent が決めた強制の情報）を mcp-server へ伝える方法は #19 の調査に委ねる
-- 決定 1 の callback の順番は ADK 2.8.0 のコードを読んで確かめたもので、動かしてはいない（#101 のテストで確かめる）
+- 決定 1 の callback の順番と、確認の答えが callback に戻る流れは ADK 2.8.0 のコードを読んで確かめたもので、動かしてはいない（#101 のテストで確かめる）
 - mcp-server を agent 以外から呼べないようにする方法（ホストへの公開をやめる / 認証を付ける）は決めていない。決めるまでは、決定 1 は `8001` に届く相手には効かない
