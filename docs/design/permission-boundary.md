@@ -100,6 +100,7 @@ PBI #16。この文書は、ツール実行の権限（許可 / 確認 / 拒否�
 - deny はツールを実行せず、理由つきの Observation（callback の戻り値）で返す（AGENTS.md の Observation-Driven）
 - 呼び出し元が `dak:tools` で渡すツールも同じ callback を通る。確認なしで動かすなら、callback の規則で allow にする。ツールセットの設定で迂回しない。**これは #101 の決定ログ（2026-09-23）の「#136 のツールは規則の評価に合流させず、#136 が自分のツールセットに `require_confirmation=False` を付ける」を置き換える**
 - 規則は、ツール名だけでなく出どころ（どの MCP サーバのツールか）でも分けられる鍵で引く。MCP のツール名は接頭辞なし（#101 の決定ログ）なので、名前だけだと呼び出し元が渡したサーバの `write_file` と既定の mcp-server の `write_file` を区別できず、一方を allow にすると他方も通る。鍵の形（ツールが持つ接続先の URL、接頭辞など）は #101 で決める
+  - 決めた形（#177）: 規則は `source × tool × pattern`（`agent/dak_agent/permission.py` の `Rule`）。`source` は McpTool の接続先 URL から求め、既定の mcp-server（`MCP_SERVER_URL`）は `default`、`DAK_ALLOWED_MCP_URLS` のサーバ（呼び出し元が `dak:tools` で渡すもの）は `caller`、それ以外の MCP サーバは URL そのもの、MCP でないツール（組み込み・スキルのローカルツール）は `local`。既定の規則は `local` と `caller` を allow（今の挙動と #136）、`default` を読み取り系だけ allow・残りは ask・`rm -rf` などは deny。規則は `agent_config.yaml` の `permissions:` で足す（後勝ち）。同じ URL が既定と `DAK_ALLOWED_MCP_URLS` の両方にあれば `default` として扱う
 
 ## #20 への制約
 
