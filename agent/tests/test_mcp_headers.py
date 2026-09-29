@@ -14,6 +14,20 @@ def test_session_key_header_differs_for_different_sessions():
     assert session_key_header(_ctx("u1", "s1")) != session_key_header(_ctx("u2", "s2"))
 
 
+def test_session_key_header_differs_when_only_one_part_differs():
+    assert session_key_header(_ctx("u1", "s1")) != session_key_header(_ctx("u1", "s2"))
+    assert session_key_header(_ctx("u1", "s1")) != session_key_header(_ctx("u2", "s1"))
+
+
+def test_session_key_header_does_not_collide_across_the_separator():
+    assert session_key_header(_ctx("a:b", "c")) != session_key_header(_ctx("a", "b:c"))
+
+
+def test_session_key_header_value_is_a_safe_header_value():
+    value = session_key_header(_ctx("ユーザー\r\nX-Evil: 1", "s 1"))[SESSION_KEY_HEADER]
+    assert value.isascii() and value.isprintable() and " " not in value
+
+
 def test_session_key_header_is_stable_for_same_session():
     assert session_key_header(_ctx("u1", "s1")) == session_key_header(_ctx("u1", "s1"))
 
