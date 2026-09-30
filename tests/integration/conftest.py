@@ -64,6 +64,11 @@ class FakeLlm:
     def tool_call(name: str, **args) -> dict:
         return {"tool_call": {"name": name, "args": args}}
 
+    @staticmethod
+    def tool_calls(*calls: dict) -> dict:
+        """Parallel calls in one response: `tool_calls(tool_call(...), tool_call(...))`."""
+        return {"tool_calls": [c["tool_call"] for c in calls]}
+
 
 @pytest.fixture
 def fake_llm():

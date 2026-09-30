@@ -12,11 +12,13 @@ shape `GET /apps/{app}/users/{user}/sessions/{session}` returns.
 """
 import os
 import time
+from typing import Iterable, Tuple
 
 REQUEST_CONFIRMATION = "adk_request_confirmation"
 ASK_QUESTION = "ask_question"
 REPLY_MODES = ("once", "always", "reject", "timed_out")
 
+UNANSWERED_REASON = "Another confirmation from the same turn was answered; this one was not."
 PENDING_TIMEOUT_SECONDS = float(os.getenv("DAK_APPROVAL_TIMEOUT_SECONDS", "900"))
 
 
@@ -100,17 +102,33 @@ def list_pending(events: list[dict]) -> list[dict]:
                   key=lambda p: p["requested_at"] or 0)
 
 
-def build_reply_function_response(fc_id: str, mode: str, reason: str = "") -> dict:
-    """The `new_message` that answers a confirmation: `mode` is once / always /
-    reject (timed_out when DAK answers an expired one). `confirmed` is always
-    set: it is what ADK reads; `payload` carries DAK's mode and reason."""
+def _confirmation_answer(fc_id: str, mode: str, reason: str) -> dict:
     if mode not in REPLY_MODES:
         raise ValueError(f"unknown reply mode: {mode!r}")
-    return {"parts": [{"functionResponse": {
+    return {"functionResponse": {
         "id": fc_id,
         "name": REQUEST_CONFIRMATION,
         "response": {"confirmed": mode in ("once", "always"), "payload": {"mode": mode, "reason": reason}},
-    }}]}
+    }}
+
+
+def build_reply_function_response(
+    fc_id: str, mode: str, reason: str = "", unanswered: Iterable[Tuple[str, str]] = (),
+) -> dict:
+    """The `new_message` that answers a confirmation: `mode` is once / always /
+    reject (timed_out when DAK answers an expired one). `confirmed` is always
+    set: it is what ADK reads; `payload` carries DAK's mode and reason.
+
+    `unanswered`: (id, status) of the other pending confirmations from the
+    same turn. ADK reads only the last user message, so they would be dropped
+    without the model ever hearing of them (#406); each is rejected here with
+    UNANSWERED_REASON, or answered timed_out if it had expired."""
+    parts = [_confirmation_answer(fc_id, mode, reason)]
+    for other_id, status in unanswered:
+        expired = status == "timed_out"
+        parts.append(_confirmation_answer(other_id, "timed_out" if expired else "reject",
+                                          "" if expired else UNANSWERED_REASON))
+    return {"parts": parts}
 
 
 def build_question_reply(answer: str) -> dict:
