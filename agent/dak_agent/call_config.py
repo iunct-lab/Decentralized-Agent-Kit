@@ -91,7 +91,7 @@ def _as_limit(raw: Any, cast, source: str) -> float:
         return 0
     try:
         value = cast(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError: int(float("inf"))
         value = -1
     if value < 0:
         logger.warning("Ignoring invalid %s=%r; no limit from it.", source, raw)

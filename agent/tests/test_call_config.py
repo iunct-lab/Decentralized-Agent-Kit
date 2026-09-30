@@ -275,3 +275,14 @@ def test_resolve_call_limits_ignores_invalid_values(monkeypatch):
     # A broken operator value is unset (the caller's 3 applies); a broken
     # caller value is ignored (the operator's 4 s applies).
     assert limits == call_config.CallLimits(max_llm_calls=3, max_seconds=4.0, max_output_tokens=0)
+
+
+def test_resolve_call_limits_ignores_overflowing_values(monkeypatch):
+    """JSON `1e309` arrives as float("inf"); int() of it raises OverflowError."""
+    _no_operator_limits(monkeypatch)
+    monkeypatch.setenv("DAK_MAX_LLM_CALLS", "5")
+
+    limits = call_config.resolve_call_limits(
+        {"dak:max_llm_calls": float("inf"), "dak:max_output_tokens": float("inf")})
+
+    assert limits == call_config.CallLimits(max_llm_calls=5, max_seconds=0.0, max_output_tokens=0)
