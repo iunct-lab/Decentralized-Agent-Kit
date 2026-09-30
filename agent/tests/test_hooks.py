@@ -1,6 +1,7 @@
 """Tests for the external hooks declared in DAK_HOOKS (dak_agent.hooks)."""
 import json
 import logging
+import os
 import socket
 import threading
 import time
@@ -254,3 +255,23 @@ def test_run_http_hook_connect_timeout_says_timed_out(monkeypatch):
     outcome = hooks.run_hook(HookSpec(event="PreToolUse", type="http", url="http://hooks.example/", timeout=1), _payload())
     assert outcome["decision"] == "error"
     assert outcome["reason"].startswith("hook timed out after 1s")
+
+
+def test_load_hooks_skips_non_positive_timeout(monkeypatch):
+    monkeypatch.setenv("DAK_HOOKS", json.dumps([
+        {"event": "PreToolUse", "type": "command", "command": "exit 0", "timeout": 0},
+        {"event": "PreToolUse", "type": "command", "command": "exit 0", "timeout": -1},
+    ]))
+    assert hooks.load_hooks() == []
+    monkeypatch.setenv("DAK_HOOKS", '[{"event": "PreToolUse", "type": "command", "command": "exit 0", "timeout": NaN}]')
+    assert hooks.load_hooks() == []
+
+
+def test_run_command_hook_timeout_when_group_already_gone(monkeypatch):
+    # The hook may exit between the timeout and the kill.
+    def gone(pid, sig):
+        raise ProcessLookupError
+    monkeypatch.setattr(os, "killpg", gone)
+    outcome = hooks.run_hook(_command("sleep 0.3", timeout=0.1), _payload())
+    assert outcome["decision"] == "error"
+    assert "timed out" in outcome["reason"]

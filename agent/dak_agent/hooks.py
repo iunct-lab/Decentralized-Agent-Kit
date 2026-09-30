@@ -17,9 +17,9 @@ Every hook's answer becomes one outcome:
 import fnmatch
 import json
 import logging
+import math
 import os
 import signal
-import socket
 import subprocess
 import urllib.error
 import urllib.request
@@ -81,8 +81,8 @@ def _entry_problem(entry: Any) -> str:
     if entry["type"] == "http" and not entry.get("url"):
         return "an http hook needs url"
     timeout = entry.get("timeout", 30.0)
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
-        return "timeout must be a number"
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not timeout > 0 or math.isinf(timeout):
+        return "timeout must be a positive number"
     return ""
 
 
@@ -151,7 +151,10 @@ def run_command_hook(hook: HookSpec, payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         stdout, stderr = proc.communicate(json.dumps(payload, default=str), timeout=hook.timeout)
     except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         proc.communicate()
         return _outcome("error", f"hook timed out after {hook.timeout}s: {hook.command}")
     if proc.returncode == 2:
@@ -167,10 +170,10 @@ def run_http_hook(hook: HookSpec, payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         with urllib.request.urlopen(req, timeout=hook.timeout) as resp:
             body = resp.read().decode("utf-8", errors="replace")
-    except (TimeoutError, socket.timeout):
+    except TimeoutError:
         return _outcome("error", f"hook timed out after {hook.timeout}s: {hook.url}")
     except urllib.error.URLError as exc:
-        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+        if isinstance(exc.reason, TimeoutError):
             return _outcome("error", f"hook timed out after {hook.timeout}s: {hook.url}")
         return _outcome("error", f"hook request to {hook.url} failed: {exc}")
     except (OSError, ValueError) as exc:
