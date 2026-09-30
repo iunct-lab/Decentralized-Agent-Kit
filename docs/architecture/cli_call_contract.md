@@ -188,7 +188,7 @@ PBI #17。外部のシステム（シェルスクリプト、CI、別のエー�
 
 **決定: A1。** 非対話の `run` は、ターンが確認か質問で止まったら reply を送らずに終わる。
 
-- `--format json` の出力は `{"status": "needs_approval", "session_id": "...", "output": "<止まるまでのモデルのテキスト>", "error": "needs_approval", "approvals": [...]}`、exit 3
+- `--format json` の出力は `{"status": "needs_approval", "session_id": "...", "output": "<最後のモデルのイベントのテキスト（§3-4 と同じ。無ければ空）>", "error": "needs_approval", "approvals": [...]}`、exit 3
 - `approvals` の要素は `GET /approvals` の要素をそのまま（`id`・`kind`（`approval` / `question`）・`tool_name`・`tool_args`・`questions` など）。取得は、ターンが確認か質問で止まったときだけ `AgentClient.list_approvals(session_id)` を呼ぶ。止まったことは応答のイベントから判定する: 確認は今の `_needs_approval` と同じく `adk_request_confirmation` の functionCall、質問は最後のイベントが `ask_question` の functionResponse で `error` を持たないこと（agent 側の `list_pending_questions` と同じ条件、`approvals.py:77-79`）。`_needs_approval` の 1 件ではなく一覧を返すのは、1 回のモデルの応答が複数の確認を出すことがあるため
 - `--format markdown` では、保留ごとに `dak-cli approve <id> --session <session_id>` で答えられることを stderr に書く
 - 非対話かどうかは **stdin が端末かどうか**で決める（`typer.confirm` が読む先）。stdin が端末なら、`--format json` でも今までどおり対話で聞く（問いは stderr に出す）
