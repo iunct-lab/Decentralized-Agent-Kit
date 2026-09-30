@@ -34,6 +34,8 @@ CALLER_MCP_PROBE_TIMEOUT_S = 30.0
 # Per-invocation (ADK drops `temp:` state after the invocation): the tool names
 # each reachable caller MCP server listed on this call, {url: [names]}.
 STATE_CALLER_MCP_TOOLS = "temp:dak_caller_mcp_tools"
+# The session's first user message, kept verbatim so compaction never loses it.
+STATE_ORIGINAL_REQUEST = "dak_original_request"
 
 
 class AdaptiveAgent(LlmAgent):
@@ -210,7 +212,13 @@ class AdaptiveAgent(LlmAgent):
                     f"\n\n# Tool Enabled: {skill_name}\n"
                     f"You have enabled the raw tool '{skill_name}'. Use it according to its schema."
                 )
-        return instruction + self._tools_error_section(state) + self._plan_section(state)
+        return instruction + self._tools_error_section(state) + self._verbatim_sections(state)
+
+    def _verbatim_sections(self, state: MutableMapping[str, Any]) -> str:
+        """The instruction's tail built from text the user or the model wrote
+        (the plan, the original request): sent as is, never through ADK's
+        `{var}` session-state injection."""
+        return self._plan_section(state) + self._original_request_section(state)
 
     @staticmethod
     def _tools_error_section(state: MutableMapping[str, Any]) -> str:
@@ -256,6 +264,30 @@ class AdaptiveAgent(LlmAgent):
             return ""
         max_chars = HarnessSettings(context_window=self._mode_manager.max_context_tokens).plan_chars
         return f"\n\n# Current Plan\n{builtin_tools.format_todos(todos, max_chars=max_chars)}"
+
+    def _original_request_section(self, state: MutableMapping[str, Any]) -> str:
+        """The session's first user message, rebuilt from state every turn so
+        compaction of the event history never loses it (the summary's own
+        `User request` depends on the model). Capped like the plan."""
+        request = state.get(STATE_ORIGINAL_REQUEST)
+        if not isinstance(request, str) or not request:
+            return ""
+        max_chars = HarnessSettings(context_window=self._mode_manager.max_context_tokens).plan_chars
+        if len(request) > max_chars:
+            marker = "\n[truncated]"
+            request = request[: max_chars - len(marker)] + marker
+        return f"\n\n# Original Request\n{request}"
+
+    @staticmethod
+    def _capture_original_request(context: CallbackContext) -> None:
+        """Keep the text of the session's first user message, once."""
+        state = context.state
+        if state.get(STATE_ORIGINAL_REQUEST):
+            return
+        content = context.user_content
+        text = "\n".join(p.text for p in (content.parts or []) if p.text) if content else ""
+        if text:
+            state[STATE_ORIGINAL_REQUEST] = text
 
     def _resolve_session_tools(
         self, state: MutableMapping[str, Any], call_settings: Dict[str, Any]
@@ -408,21 +440,22 @@ class AdaptiveAgent(LlmAgent):
         model_name, model_error = call_config.resolve_model_selection(call_settings, self._base_model_name)
         tools_error = call_config.validate_call_tools(call_settings)
         instruction = self._resolve_session_instruction(state, call_settings)
-        plan = self._plan_section(state)
+        verbatim = self._verbatim_sections(state)
         if call_settings.get(call_config.STATE_CALL_INSTRUCTION):
             # A provider (callable) makes ADK skip `{var}` session-state
             # injection, so the caller's text reaches the model verbatim
             # (`{date}` in it would otherwise fail the turn with a KeyError).
             live.instruction = lambda _ctx, text=instruction: text
-        elif plan:
-            # The plan is model-written text: keep it out of `{var}` injection
-            # (same KeyError), but still inject the operator's instruction.
-            templated = instruction[: -len(plan)]
+        elif verbatim:
+            # The plan and the original request are model- or user-written
+            # text: keep them out of `{var}` injection (same KeyError), but
+            # still inject the operator's instruction.
+            templated = instruction[: -len(verbatim)]
 
-            async def with_plan(ctx, templated=templated, plan=plan):
-                return await instructions_utils.inject_session_state(templated, ctx) + plan
+            async def with_verbatim(ctx, templated=templated, verbatim=verbatim):
+                return await instructions_utils.inject_session_state(templated, ctx) + verbatim
 
-            live.instruction = with_plan
+            live.instruction = with_verbatim
         else:
             live.instruction = instruction
         # None (unspecified) keeps free-form text/tool-call responses. ADK puts
@@ -468,6 +501,7 @@ class AdaptiveAgent(LlmAgent):
         elif callback_context.state.get(call_config.STATE_TOOLS_ERROR):
             callback_context.state[call_config.STATE_TOOLS_ERROR] = None  # stale: not about this call
         try:
+            self._capture_original_request(callback_context)
             error = self._apply_session_config(callback_context)
         except Exception as e:
             logger.error(f"CRITICAL ERROR restoring session config: {e}", exc_info=True)

@@ -16,6 +16,12 @@ DEFAULT_INSTRUCTION = "Base instruction."
 IDENTITY = '\n\nYou are an agent. Your internal name is "dak_agent".'
 
 
+def _original_request(text: str) -> str:
+    """The session's first user message, appended to the default instruction
+    on every call (PBI #103); `dak:instruction` replaces it too."""
+    return f"\n\n# Original Request\n{text}"
+
+
 @pytest.fixture(autouse=True)
 def no_remote_mcp_discovery():
     with patch("dak_agent.remote_tools.discover_remote_tools", AsyncMock(return_value={})):
@@ -87,7 +93,7 @@ async def test_call_instruction_replaces_system_prompt_for_that_session_only():
     await _run(app, sessions, without_call.id)
 
     assert _system(requests[0]) == "Answer in one word." + IDENTITY
-    assert _system(requests[1]) == DEFAULT_INSTRUCTION + IDENTITY
+    assert _system(requests[1]) == DEFAULT_INSTRUCTION + _original_request("hi") + IDENTITY
 
 
 @pytest.mark.asyncio
@@ -108,7 +114,7 @@ async def test_call_instruction_does_not_leak_between_concurrent_sessions():
     ), timeout=10)
 
     by_user = {_user_text(r): _system(r) for r in requests}
-    assert by_user == {"A": "One word." + IDENTITY, "B": DEFAULT_INSTRUCTION + IDENTITY}
+    assert by_user == {"A": "One word." + IDENTITY, "B": DEFAULT_INSTRUCTION + _original_request("B") + IDENTITY}
 
 
 @pytest.mark.asyncio
@@ -144,5 +150,5 @@ async def test_call_instruction_stays_for_the_session_until_cleared_with_null():
     await _run(app, sessions, session.id, state_delta={"dak:instruction": None})
 
     assert [_system(r) for r in requests] == [
-        "One word." + IDENTITY, "One word." + IDENTITY, DEFAULT_INSTRUCTION + IDENTITY,
+        "One word." + IDENTITY, "One word." + IDENTITY, DEFAULT_INSTRUCTION + _original_request("hi") + IDENTITY,
     ]
