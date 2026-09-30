@@ -64,6 +64,8 @@ class SandboxManager:
                 "--cap-drop", "ALL", "--user", "nobody",
                 SANDBOX_IMAGE, "sleep", "infinity",
             ]
+            # A create that finished after an earlier `docker run` timed out leaves this name behind.
+            self._remove_container(name)
             # Bounded: a hung daemon must not hold the lock forever (300 s leaves room for an image pull).
             self._run(cmd, check=True, capture_output=True, text=True, timeout=300)
             return {"mode": "docker", "container_name": name, "workdir": DOCKER_WORKDIR}
@@ -87,10 +89,16 @@ class SandboxManager:
         if entry is None:
             return
         if entry["mode"] == "docker":
-            self._run(["docker", "rm", "-f", entry["container_name"]],
-                      check=False, capture_output=True, text=True, timeout=60)
+            self._remove_container(entry["container_name"])
         elif entry["mode"] == "inproc":
             shutil.rmtree(entry["workdir"], ignore_errors=True)
+
+    def _remove_container(self, *names: str) -> None:
+        # Best effort: a timed-out removal must not stop the others; sweep() at the next start catches it.
+        try:
+            self._run(["docker", "rm", "-f", *names], check=False, capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            pass
 
     def destroy_session(self, session_key: str) -> None:
         with self._lock:
@@ -113,7 +121,7 @@ class SandboxManager:
                            check=True, capture_output=True, text=True, timeout=60)
         ids = listed.stdout.split()
         if ids:
-            self._run(["docker", "rm", "-f", *ids], check=False, capture_output=True, text=True, timeout=60)
+            self._remove_container(*ids)
 
     def destroy_all(self) -> None:
         """Destroy every session (server shutdown): no container outlives the server."""
