@@ -84,7 +84,7 @@ ADK の標準の形はスクリプトの実行（`scripts/` を `code_executor` 
 移行を見直す条件（どれかが起きたら、この文書を更新して判断し直す）:
 
 - `references/` や `scripts/` を持つスキルを足したくなった
-- ADK が snake_case の名前を既定で受け付けるようになった、またはスキルのツールをセッションごとに動的に選ぶ仕組みを持った
+- ADK が snake_case の名前を既定で受け付けるようになった、またはスキルのツールの候補を構築時の `additional_tools` の外から（スキルごとのローカル関数や接続先から）用意できるようになった。有効にしたスキルに応じてセッションごとにツールを選ぶこと自体は、ADK 2.8.0 でも `LoadSkillTool` が状態に記録し `_resolve_additional_tools_from_state` が選ぶ形で既にできる
 - 外部の Agent Skills（agentskills.io 形式）のスキルをそのまま読み込みたくなった
 
 移行すると決めたときは、実装を別の Issue に切り出す（このPBIのスコープ外）。
