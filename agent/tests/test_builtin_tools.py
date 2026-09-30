@@ -1,3 +1,4 @@
+import asyncio
 import os
 import unittest
 from unittest.mock import MagicMock, patch
@@ -50,7 +51,9 @@ class TestBuiltinTools(unittest.TestCase):
         self.assertNotIn("Ulysses Pact", result)
 
     def test_switch_mode_message(self):
-        result = switch_mode(reason="too much context", new_focus="coding")
+        tool_context = MagicMock()
+        tool_context._invocation_context.agent = None  # no AdaptiveAgent: nothing to switch
+        result = asyncio.run(switch_mode(tool_context, reason="too much context", new_focus="coding"))
         self.assertIn("too much context", result)
         self.assertIn("coding", result)
 

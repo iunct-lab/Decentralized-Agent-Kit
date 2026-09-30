@@ -129,14 +129,10 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         # mock's "live copy" back at `agent` itself so the assertions below
         # can observe the switch (see AdaptiveAgent._live_agent).
         context._invocation_context.agent = agent
-        context.tool_confirmation = None
-        tool = MagicMock()
-        tool.name = "switch_mode"
 
-        # The switch happens once the switch_mode tool has run (after the
+        # The switch happens while the switch_mode tool runs (after the
         # permission plugin let it through), not when the model asks (#410).
-        await agent._after_tool(tool, {"reason": "test", "new_focus": "debugging"}, context,
-                                "Mode switch requested: test. New focus: debugging")
+        await agent.apply_switch_request(context, "test", "debugging")
 
         # Verify Switch happened
         self.assertEqual(agent.instruction, "New Instruction")

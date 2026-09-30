@@ -185,7 +185,7 @@ class ScriptedLlm(BaseLlm):
 
 
 class Harness:
-    def __init__(self, tool, call, rules=DEFAULT_RULES, agent=None):
+    def __init__(self, tool, call, rules=DEFAULT_RULES, agent=None, plugins=()):
         if agent is None:
             self.llm = ScriptedLlm(model="scripted", call=call, requests=[])
             agent = LlmAgent(model=self.llm, name="dak_agent", instruction="x", tools=[tool])
@@ -193,7 +193,7 @@ class Harness:
             self.llm = agent.model
         self.sessions = InMemorySessionService()
         self.runner = Runner(
-            app=App(name="dak_agent", root_agent=agent, plugins=[PermissionPlugin(rules, DEFAULT_URL)]),
+            app=App(name="dak_agent", root_agent=agent, plugins=[PermissionPlugin(rules, DEFAULT_URL), *plugins]),
             session_service=self.sessions, artifact_service=InMemoryArtifactService(),
         )
         self.session = asyncio.run(self.sessions.create_session(app_name="dak_agent", user_id="u"))
@@ -394,14 +394,14 @@ def test_always_rule_does_not_bypass_active_plan():
 
 # --- switch_mode goes through the same judgement (#410) ---
 
-def _switch_mode_run(rules, confirm=None):
+def _switch_mode_run(rules, confirm=None, plugins=()):
     """The model calls switch_mode once; returns (harness, events, final state)."""
     from dak_agent.builtin_tools import switch_mode
 
     llm = ScriptedLlm(model="scripted", call={"name": "switch_mode", "args": {"reason": "r", "new_focus": "files"}},
                       requests=[])
     agent = AdaptiveAgent(model=llm, name="dak_agent", instruction="Base.", tools=[FunctionTool(switch_mode)])
-    h = Harness(None, {}, rules=rules, agent=agent)
+    h = Harness(None, {}, rules=rules, agent=agent, plugins=plugins)
     with patch("dak_agent.remote_tools.discover_remote_tools", return_value={}), \
             patch("dak_agent.mode_manager.ModeManager.generate_mode_config",
                   return_value=("Switched instruction.", [], [])) as generate:
@@ -438,3 +438,18 @@ def test_switch_mode_waits_for_confirmation():
     _, rejected, generate = _switch_mode_run(ask, confirm=False)
     generate.assert_not_called()
     assert STATE_MODE_INSTRUCTION not in rejected
+
+
+def test_switch_mode_is_applied_even_when_a_plugin_replaces_its_result():
+    """ADK skips the agent's after-tool callbacks when a plugin replaces the
+    result (the context harness does for long results): the switch must not
+    depend on them."""
+    from google.adk.plugins.base_plugin import BasePlugin
+
+    class Replacing(BasePlugin):
+        async def after_tool_callback(self, *, tool, tool_args, tool_context, result):
+            return {"replaced": True}
+
+    _, state, generate = _switch_mode_run(DEFAULT_RULES, plugins=[Replacing(name="replacing")])
+    generate.assert_called_once()
+    assert state.get(STATE_MODE_INSTRUCTION) == "Switched instruction."

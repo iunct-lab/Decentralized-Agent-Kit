@@ -95,7 +95,7 @@ class AdaptiveAgent(LlmAgent):
             "before_agent_callback": self._restore_session_config,
             "after_model_callback": self._wrapped_callback,
             "on_tool_error_callback": self._on_tool_error,
-            "after_tool_callback": self._after_tool,
+            "after_tool_callback": self._restore_reject_reason,
         }
         if sub_agents:
             init_kwargs["sub_agents"] = sub_agents
@@ -543,9 +543,10 @@ class AdaptiveAgent(LlmAgent):
             if schema_failure is not None:
                 return schema_failure
 
-            # 3. Switch modes if a switch_mode call already ran (`_after_tool`
-            #    records it; see there). Context-window pressure is handled by
-            #    the context harness (ADK compaction), not here.
+            # 3. Mark the session's first turn (ModeManager.should_switch). The
+            #    switch itself happens when the switch_mode tool runs
+            #    (`apply_switch_request`), after the permission plugin. Context-
+            #    window pressure is handled by the context harness, not here.
             if not self._disable_mode_switching and self._mode_manager.should_switch(callback_context.state):
                 await self._perform_mode_switch(callback_context)
 
@@ -578,21 +579,14 @@ class AdaptiveAgent(LlmAgent):
         failure = {"error": "output_schema_validation_failed", "issues": issues}
         return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=json.dumps(failure))]))
 
-    async def _after_tool(self, tool, args: dict, tool_context, tool_response) -> Optional[dict]:
-        """Restore a rejection reason, and switch modes once switch_mode has
-        actually run. Only here, after the tool: a call the permission plugin
-        denied or holds for confirmation returns a dict instead of the tool's
-        text, so it must not switch (#410)."""
-        restored = self._restore_reject_reason(tool, args, tool_context, tool_response)
-        if restored is not None:
-            return restored
-        if tool.name == "switch_mode" and isinstance(tool_response, str):
-            self._mode_manager.request_switch(
-                tool_context.state, reason=args.get("reason", ""), new_focus=args.get("new_focus", "")
-            )
-            if not self._disable_mode_switching and self._mode_manager.should_switch(tool_context.state):
-                await self._perform_mode_switch(tool_context)
-        return None
+    async def apply_switch_request(self, tool_context, reason: str, new_focus: str) -> None:
+        """Switch modes for a `switch_mode` call. Called by the tool itself
+        while it runs, so only a call the permission plugin let through
+        (allowed, or approved) switches, whatever the after-tool callbacks do
+        with its result (#410)."""
+        self._mode_manager.request_switch(tool_context.state, reason=reason, new_focus=new_focus)
+        if not self._disable_mode_switching and self._mode_manager.should_switch(tool_context.state):
+            await self._perform_mode_switch(tool_context)
 
     def _extract_history_summary(self, context: CallbackContext) -> str:
         """Extract a short summary of the recent conversation history."""

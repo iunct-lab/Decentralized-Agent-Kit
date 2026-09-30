@@ -25,7 +25,8 @@ class ModeManager:
     1. A specific System Instruction (Prompt).
     2. A specific set of Allowed Tools.
 
-    Trigger: the LLM calls the `switch_mode` tool (never on the first turn).
+    Trigger: the `switch_mode` tool runs (after the permission plugin let it
+    through). The first model response of a session marks the first turn.
 
     Context-window pressure is NOT handled here: the context harness
     (harness.py + ADK events compaction) owns that.
@@ -105,7 +106,8 @@ class ModeManager:
         return None
 
     def should_switch(self, state: MutableMapping[str, Any]) -> bool:
-        """Decide whether to switch modes after a model response.
+        """Decide whether to switch modes: after a model response (marks the
+        first turn) and when the switch_mode tool runs.
 
         Only an explicit `switch_mode` call triggers a switch; the first turn
         of a session always keeps the default minimal toolset.
