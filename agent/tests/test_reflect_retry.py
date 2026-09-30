@@ -89,12 +89,15 @@ async def _run(arm, failures, error=ValueError("boom"), ap2=False):
     sessions = InMemorySessionService()
     runner = Runner(app=app, session_service=sessions)
     session = await sessions.create_session(app_name="dak_agent", user_id="u")
-    responses, aborted = [], None
+    responses, final_text, aborted = [], None, None
     try:
         async for event in runner.run_async(user_id="u", session_id=session.id, new_message=types.Content(
                 role="user", parts=[types.Part(text="レポートを取ってきて")])):
-            responses += [p.function_response.response for p in (event.content.parts if event.content else None) or []
-                          if p.function_response]
+            for part in (event.content.parts if event.content else None) or []:
+                if part.function_response:
+                    responses.append(part.function_response.response)
+                elif part.text:
+                    final_text = part.text
     except Exception as e:  # noqa: BLE001 - what the plugin's throw turns into
         aborted = e
     return {
@@ -103,6 +106,7 @@ async def _run(arm, failures, error=ValueError("boom"), ap2=False):
         "tokens": sum(llm.request_tokens),
         "success": {"result": "ok"} in responses,
         "aborted": aborted,
+        "final_text": final_text,
         "responses": responses,
     }
 
@@ -111,7 +115,7 @@ async def _run(arm, failures, error=ValueError("boom"), ap2=False):
 async def test_without_plugin_retries_unbounded_by_design():
     """Only the model's own budget stops it: every one of the MAX_CALLS calls runs the tool."""
     r = await _run("adaptive", failures=MAX_CALLS)
-    assert (r["tool_runs"], r["model_requests"], r["aborted"]) == (MAX_CALLS, MAX_CALLS + 1, None)
+    assert (r["tool_runs"], r["model_requests"], r["aborted"], r["final_text"]) == (MAX_CALLS, MAX_CALLS + 1, None, "done")
     assert all("failed: boom" in resp["error"] for resp in r["responses"])
 
 
@@ -123,10 +127,11 @@ async def test_with_plugin_stops_at_max_retries():
     r = await _run("reflect", failures=MAX_CALLS)
     assert (r["tool_runs"], r["model_requests"]) == (4, 4)
     assert isinstance(r["aborted"], RuntimeError) and "boom" in str(r["aborted"]) and not r["success"]
+    assert r["final_text"] is None  # the user gets no answer
     assert [resp["retry_count"] for resp in r["responses"]] == [1, 2, 3]
 
     r = await _run("reflect_no_throw", failures=MAX_CALLS)
-    assert (r["tool_runs"], r["aborted"]) == (MAX_CALLS, None)
+    assert (r["tool_runs"], r["aborted"], r["final_text"]) == (MAX_CALLS, None, "done")
     assert "failed consecutively 3 times" in r["responses"][-1]["reflection_guidance"]
 
 
@@ -148,6 +153,7 @@ async def test_comparison_table():
         r = await _run(arm, failures=MAX_CALLS if scenario == "always_fails" else TRANSIENT_FAILURES)
         got = (r["tool_runs"], r["model_requests"], r["success"], r["aborted"] is not None)
         assert got == want, (scenario, arm)
+        assert r["final_text"] == (None if got[3] else "done"), (scenario, arm)  # an answer unless aborted
         tokens[scenario, arm] = r["tokens"]
         lines.append(f"| {scenario} | {arm} | {got[0]} | {got[1]} | {r['tokens']} | {got[2]} | {got[3]} |")
     print("\n" + "\n".join(lines))
