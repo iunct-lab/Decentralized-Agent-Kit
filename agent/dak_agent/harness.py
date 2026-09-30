@@ -523,12 +523,18 @@ def _preview(text: str, max_chars: int) -> str:
     return f"{text[:head]}\n\n... [{omitted} chars omitted] ...\n\n{text[-tail:]}"
 
 
-_SAFE_ID = re.compile(r"[A-Za-z0-9_.-]+")  # what `_artifact_name` keeps as is
-
-
 def _artifact_name(tool_name: str, call_id: Optional[str]) -> str:
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{tool_name}_{call_id or 'call'}")
     return f"tool_output_{safe}.txt"
+
+
+def _pruned_artifact_name(tool_name: str, call_id: str) -> str:
+    """Artifact for a pruned result. Keyed by a hash of (tool, call id): pruning
+    re-runs on every request and reuses an existing artifact by name, so two
+    results must never map to the same one (`_artifact_name` maps `a/b` and
+    `a?b`, or tool `t_a` + id `b` and tool `t` + id `a_b`, together)."""
+    digest = hashlib.sha256(json.dumps([tool_name, call_id]).encode()).hexdigest()[:32]
+    return f"tool_output_{re.sub(r'[^A-Za-z0-9_.-]', '_', tool_name)}_{digest}.txt"
 
 
 def make_read_tool_output_tool(max_chars: int) -> FunctionTool:
@@ -771,15 +777,13 @@ async def prune_old_tool_results(llm_request, callback_context, protect_tokens: 
         data = response.response or {}
         artifact = data.get("full_output_artifact")
         if not isinstance(artifact, str):
-            if not response.id or not _SAFE_ID.fullmatch(response.id):
-                # The artifact name would be shared: by every id-less result of the
-                # tool, or by ids that differ only where `_artifact_name` replaces.
-                continue
+            if not response.id:
+                continue  # nothing tells two id-less results of the tool apart
             if set(data) == {"result"} and isinstance(data["result"], str):
                 text = data["result"]
             else:
                 text = json.dumps(data, ensure_ascii=False, default=str)  # every field, not just the text
-            artifact = _artifact_name(response.name or "tool", response.id)
+            artifact = _pruned_artifact_name(response.name or "tool", response.id)
             try:
                 if existing is None:
                     existing = set(await callback_context.list_artifacts())
