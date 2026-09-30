@@ -8,9 +8,10 @@ _PYPROJECT = os.path.join(os.path.dirname(__file__), "..", "pyproject.toml")
 
 class TestDirectDependencies(unittest.TestCase):
     def test_no_direct_openai_anthropic_pin(self):
-        """dak_agent never imports openai/anthropic; LiteLLM requires the SDKs itself.
+        """dak_agent never imports openai/anthropic; models go through LiteLLM.
 
-        A direct pin only adds Dependabot noise and can fight litellm's own range.
+        LiteLLM requires openai itself and reaches anthropic/ models over HTTP
+        without the anthropic SDK, so a direct pin only adds Dependabot noise.
         """
         with open(_PYPROJECT, "rb") as f:
             deps = tomllib.load(f)["project"]["dependencies"]
