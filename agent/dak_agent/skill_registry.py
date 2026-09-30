@@ -1,3 +1,4 @@
+# ADK標準SkillToolsetとの比較・採否は docs/design/skill_toolset_migration.md を参照（PBI #90）
 import os
 import yaml
 import logging
