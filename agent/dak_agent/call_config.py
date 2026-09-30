@@ -6,12 +6,16 @@ state) or as A2A message metadata (ADK's A2A request converter puts that under
 to this module.
 """
 import json
+import logging
 import os
+from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from jsonschema_specifications import REGISTRY as METASCHEMAS
+
+logger = logging.getLogger(__name__)
 
 DAK_PREFIX = "dak:"
 STATE_CALL_INSTRUCTION = "dak:instruction"
@@ -35,6 +39,14 @@ STATE_CALL_MODEL = "dak:model"  # LiteLLM model id, e.g. "bedrock/openai.gpt-5.6
 # means no caller may pick a model: callers cannot exceed the operator's
 # cost limits unless the operator opens that door explicitly.
 ALLOWED_MODELS_ENV = "DAK_ALLOWED_MODELS"
+# Limits on one turn (one invocation). The operator's default (env) caps
+# them; a caller can only narrow it. 0 or unset means no limit.
+STATE_CALL_MAX_LLM_CALLS = "dak:max_llm_calls"
+STATE_CALL_MAX_SECONDS = "dak:max_seconds"
+STATE_CALL_MAX_OUTPUT_TOKENS = "dak:max_output_tokens"
+MAX_LLM_CALLS_ENV = "DAK_MAX_LLM_CALLS"
+MAX_SECONDS_ENV = "DAK_MAX_TURN_SECONDS"
+MAX_OUTPUT_TOKENS_ENV = "DAK_MAX_OUTPUT_TOKENS"
 # Same value as google.adk.a2a.converters.request_converter.A2A_METADATA_KEY.
 A2A_METADATA_KEY = "a2a_metadata"
 
@@ -63,6 +75,46 @@ def resolve_dak_settings(callback_context) -> Dict[str, Any]:
     # with this invocation's pending delta.
     settings.update(_dak_keys(state.to_dict() if hasattr(state, "to_dict") else state))
     return settings
+
+
+@dataclass(frozen=True)
+class CallLimits:
+    """This turn's limits; 0 means no limit."""
+    max_llm_calls: int = 0
+    max_seconds: float = 0.0
+    max_output_tokens: int = 0
+
+
+def _as_limit(raw: Any, cast, source: str) -> float:
+    """A positive number, or 0 (no limit) when absent or invalid."""
+    if raw is None:
+        return 0
+    try:
+        value = cast(raw)
+    except (TypeError, ValueError):
+        value = -1
+    if value < 0:
+        logger.warning("Ignoring invalid %s=%r; no limit from it.", source, raw)
+        return 0
+    return value
+
+
+def _clip_limit(env_name: str, state_key: str, call_settings: Dict[str, Any], cast) -> float:
+    """The caller's value, capped by the operator's default. The caller cannot
+    lift the operator's limit: 0 (or nothing) from the caller keeps it."""
+    operator_default = _as_limit(os.getenv(env_name) or None, cast, env_name)
+    caller_value = _as_limit(call_settings.get(state_key), cast, state_key)
+    if operator_default > 0:
+        return min(operator_default, caller_value) if caller_value > 0 else operator_default
+    return caller_value if caller_value > 0 else 0
+
+
+def resolve_call_limits(call_settings: Dict[str, Any]) -> CallLimits:
+    return CallLimits(
+        max_llm_calls=int(_clip_limit(MAX_LLM_CALLS_ENV, STATE_CALL_MAX_LLM_CALLS, call_settings, int)),
+        max_seconds=float(_clip_limit(MAX_SECONDS_ENV, STATE_CALL_MAX_SECONDS, call_settings, float)),
+        max_output_tokens=int(_clip_limit(MAX_OUTPUT_TOKENS_ENV, STATE_CALL_MAX_OUTPUT_TOKENS, call_settings, int)),
+    )
 
 
 def resolve_allowed_models() -> Optional[FrozenSet[str]]:
