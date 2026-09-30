@@ -1036,16 +1036,21 @@ THOUGHT_FRAGMENTS = ["考える。"] * 850
 PLAN = [{"step": "read repo", "status": "done"}, {"step": "write summary", "status": "pending"}]
 
 
-def _make_fake_llm(tool_calls: int, thoughts: bool = False, plan: bool = False, overflows: int = 0):
+def _make_fake_llm(tool_calls: int | list, thoughts: bool = False, plan: bool = False, overflows: int = 0):
     from google.adk.models.base_llm import BaseLlm
     from google.adk.models.llm_response import LlmResponse
 
     class ScriptedLlm(BaseLlm):
-        """Calls big_tool `tool_calls` times (a new page each time, so the
-        repeated-call guard does not cut the loop short), then answers. Records request sizes.
+        """In each user turn, calls big_tool `tool_calls` times (a list: per turn, the last
+        entry for the turns after it; a new page each time, so the repeated-call guard does
+        not cut the loop short), then answers. Records request sizes
+        and how many requests carried a pruned tool result.
         With `plan`, the first step records a plan with write_todos. The first
         `overflows` requests are rejected as too large whatever their size."""
         steps: int = 0
+        turn: int = 0
+        turn_steps: int = 0
+        pruned_requests: int = 0
         overflows_left: int = overflows
         request_tokens: list = []
         system_instructions: list = []
@@ -1075,10 +1080,18 @@ def _make_fake_llm(tool_calls: int, thoughts: bool = False, plan: bool = False, 
                 self.overflows_left = max(0, self.overflows_left - 1)
                 raise ValueError(f"the request exceeds the available context size ({tokens} > {WINDOW})")
             self.steps += 1
+            last = llm_request.contents[-1]
+            if last.role == "user" and any(p.text for p in last.parts or []):
+                self.turn += 1  # a new user turn
+                self.turn_steps = 0
+            self.turn_steps += 1
+            if any(str((p.function_response.response or {}).get("result", "")).startswith("[cleared;")
+                   for c in llm_request.contents for p in c.parts or [] if p.function_response):
+                self.pruned_requests += 1
             if plan and self.steps == 1:
                 part = types.Part(function_call=types.FunctionCall(
                     id="fc-plan", name="write_todos", args={"items": PLAN}))
-            elif self.steps <= tool_calls + int(plan):
+            elif self.turn_steps <= self.calls_this_turn() + int(plan):
                 part = types.Part(function_call=types.FunctionCall(
                     id=f"fc-{self.steps}", name="big_tool", args={"page": self.steps}))
             else:
@@ -1086,13 +1099,20 @@ def _make_fake_llm(tool_calls: int, thoughts: bool = False, plan: bool = False, 
             parts = [types.Part(text=f, thought=True) for f in THOUGHT_FRAGMENTS] + [part] if thoughts else [part]
             yield LlmResponse(content=types.Content(role="model", parts=parts), usage_metadata=usage)
 
+        def calls_this_turn(self) -> int:
+            if isinstance(tool_calls, int):
+                return tool_calls
+            return tool_calls[min(self.turn, len(tool_calls)) - 1]
+
     return ScriptedLlm(model="scripted")
 
 
-async def _run(use_harness: bool, tool_calls: int = 6, thoughts: bool = False, adk_summarizer: bool = False,
-               plan: bool = False):
+async def _run(use_harness: bool, tool_calls: int | list = 6, thoughts: bool = False, adk_summarizer: bool = False,
+               plan: bool = False, turns: int = 1):
     """`plan`: run DAK's AdaptiveAgent (which injects the session's plan into
-    the instruction) with write_todos, instead of a bare LlmAgent."""
+    the instruction) with write_todos, instead of a bare LlmAgent. `turns`:
+    send that many user messages to the same session (`tool_calls` per turn,
+    see `_make_fake_llm`)."""
     from google.adk.agents import LlmAgent
     from google.adk.apps import App
     from google.adk.artifacts import InMemoryArtifactService
@@ -1132,13 +1152,14 @@ async def _run(use_harness: bool, tool_calls: int = 6, thoughts: bool = False, a
     final_text = None
     error = None
     try:
-        async for event in runner.run_async(
-            user_id="u", session_id=session.id,
-            new_message=types.Content(role="user", parts=[types.Part(text="ログを全部読んで要約して")]),
-        ):
-            for part in (event.content.parts if event.content else None) or []:
-                if part.text and not part.thought:
-                    final_text = part.text
+        for _ in range(turns):
+            async for event in runner.run_async(
+                user_id="u", session_id=session.id,
+                new_message=types.Content(role="user", parts=[types.Part(text="ログを全部読んで要約して")]),
+            ):
+                for part in (event.content.parts if event.content else None) or []:
+                    if part.text and not part.thought:
+                        final_text = part.text
     except ValueError as e:
         error = e
     session = await sessions.get_session(app_name="dak_agent", user_id="u", session_id=session.id)
@@ -1167,6 +1188,39 @@ async def test_harness_keeps_every_request_inside_the_window():
     # Full outputs were offloaded for read_tool_output.
     keys = await artifacts.list_artifact_keys(app_name="dak_agent", user_id="u", session_id=session.id)
     assert any(k.startswith("tool_output_big_tool") for k in keys)
+
+
+@pytest.mark.asyncio
+async def test_prune_alone_completes_the_task_with_zero_compactions():
+    """PBI #102 AC1: four turns of one big tool result each. Without pruning the
+    third turn crosses the compaction threshold; with it, the results of the
+    turns before the last two are cleared and no summary is ever made."""
+    llm, _, final_text, error, _ = await _run(use_harness=True, tool_calls=1, turns=4)
+
+    assert error is None
+    assert final_text == "done"
+    assert llm.pruned_requests >= 1
+    assert llm.summaries == 0
+    assert max(llm.request_tokens) <= WINDOW
+
+    with patch.object(harness, "prune_old_tool_results", AsyncMock(return_value=0)):
+        unpruned, _, final_text, _, _ = await _run(use_harness=True, tool_calls=1, turns=4)
+    assert final_text == "done"
+    assert unpruned.summaries >= 1
+
+
+@pytest.mark.asyncio
+async def test_prune_then_compaction_when_pruning_alone_is_not_enough():
+    """PBI #102 AC1: the third turn calls the tool three times. Pruning clears
+    the first turn's result, but the current and previous turns are protected
+    and still cross the threshold, so compaction runs as well."""
+    llm, _, final_text, error, _ = await _run(use_harness=True, tool_calls=[1, 1, 3], turns=3)
+
+    assert error is None
+    assert final_text == "done"
+    assert llm.pruned_requests >= 1
+    assert llm.summaries >= 1
+    assert max(llm.request_tokens) <= WINDOW
 
 
 @pytest.mark.asyncio
