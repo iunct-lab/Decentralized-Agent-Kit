@@ -210,3 +210,68 @@ def test_no_caller_mcp_servers_is_neither_servers_nor_error():
     assert call_config.resolve_caller_mcp_servers({}) == (None, None)
     assert call_config.resolve_caller_mcp_servers({"dak:tools": ["a"]}) == (None, None)
     assert call_config.resolve_caller_mcp_servers({"dak:tools": {"names": ["a"]}}) == (None, None)
+
+
+def _no_operator_limits(monkeypatch):
+    for name in (call_config.MAX_LLM_CALLS_ENV, call_config.MAX_SECONDS_ENV, call_config.MAX_OUTPUT_TOKENS_ENV):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_resolve_call_limits_defaults_to_unbounded(monkeypatch):
+    _no_operator_limits(monkeypatch)
+
+    assert call_config.resolve_call_limits({}) == call_config.CallLimits(0, 0.0, 0)
+
+
+def test_resolve_call_limits_caller_narrows_operator_default(monkeypatch):
+    _no_operator_limits(monkeypatch)
+    monkeypatch.setenv("DAK_MAX_LLM_CALLS", "10")
+    monkeypatch.setenv("DAK_MAX_TURN_SECONDS", "60")
+    monkeypatch.setenv("DAK_MAX_OUTPUT_TOKENS", "4096")
+
+    limits = call_config.resolve_call_limits(
+        {"dak:max_llm_calls": 3, "dak:max_seconds": 1.5, "dak:max_output_tokens": 256})
+
+    assert limits == call_config.CallLimits(max_llm_calls=3, max_seconds=1.5, max_output_tokens=256)
+
+
+def test_resolve_call_limits_caller_cannot_exceed_operator_default(monkeypatch):
+    _no_operator_limits(monkeypatch)
+    monkeypatch.setenv("DAK_MAX_LLM_CALLS", "5")
+    monkeypatch.setenv("DAK_MAX_TURN_SECONDS", "30")
+    monkeypatch.setenv("DAK_MAX_OUTPUT_TOKENS", "512")
+
+    limits = call_config.resolve_call_limits(
+        {"dak:max_llm_calls": 100, "dak:max_seconds": 900, "dak:max_output_tokens": 100000})
+
+    assert limits == call_config.CallLimits(max_llm_calls=5, max_seconds=30.0, max_output_tokens=512)
+
+
+def test_resolve_call_limits_caller_zero_keeps_operator_default(monkeypatch):
+    """0 means "no limit of my own", not "lift the operator's limit"."""
+    _no_operator_limits(monkeypatch)
+    monkeypatch.setenv("DAK_MAX_LLM_CALLS", "5")
+
+    assert call_config.resolve_call_limits({"dak:max_llm_calls": 0}).max_llm_calls == 5
+
+
+def test_resolve_call_limits_no_operator_default_uses_caller_value(monkeypatch):
+    _no_operator_limits(monkeypatch)
+
+    limits = call_config.resolve_call_limits(
+        {"dak:max_llm_calls": 7, "dak:max_seconds": 2, "dak:max_output_tokens": 128})
+
+    assert limits == call_config.CallLimits(max_llm_calls=7, max_seconds=2.0, max_output_tokens=128)
+
+
+def test_resolve_call_limits_ignores_invalid_values(monkeypatch):
+    _no_operator_limits(monkeypatch)
+    monkeypatch.setenv("DAK_MAX_LLM_CALLS", "many")
+    monkeypatch.setenv("DAK_MAX_TURN_SECONDS", "4")
+
+    limits = call_config.resolve_call_limits(
+        {"dak:max_llm_calls": 3, "dak:max_seconds": "soon", "dak:max_output_tokens": -5})
+
+    # A broken operator value is unset (the caller's 3 applies); a broken
+    # caller value is ignored (the operator's 4 s applies).
+    assert limits == call_config.CallLimits(max_llm_calls=3, max_seconds=4.0, max_output_tokens=0)
