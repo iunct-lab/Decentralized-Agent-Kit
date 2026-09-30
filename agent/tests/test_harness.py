@@ -726,6 +726,21 @@ class TestPruneOldToolResults:
         assert _response(request.contents, 1).response == {"result": "1" * 4000}
 
     @pytest.mark.asyncio
+    async def test_ids_that_the_artifact_name_would_alter_are_not_pruned(self):
+        """`a/b` and `a?b` would both be saved as `tool_output_t_a_b.txt`, so one
+        pointer would lead to the other result."""
+        contents = _turns(4)
+        for n, call_id in ((1, "a/b"), (2, "a?b")):
+            contents[(n - 1) * 4 + 1].parts[0].function_call.id = call_id
+            contents[(n - 1) * 4 + 2].parts[0].function_response.id = call_id
+        ctx = _ArtifactContext()
+
+        request, pruned = await self._prune(contents, ctx=ctx)
+
+        assert pruned == 0
+        assert ctx.saved == {}
+
+    @pytest.mark.asyncio
     async def test_reuses_an_existing_artifact_instead_of_saving_again(self):
         contents = _turns(3)
         contents[2] = types.Content(role="user", parts=[types.Part(function_response=types.FunctionResponse(

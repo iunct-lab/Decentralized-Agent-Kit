@@ -523,6 +523,9 @@ def _preview(text: str, max_chars: int) -> str:
     return f"{text[:head]}\n\n... [{omitted} chars omitted] ...\n\n{text[-tail:]}"
 
 
+_SAFE_ID = re.compile(r"[A-Za-z0-9_.-]+")  # what `_artifact_name` keeps as is
+
+
 def _artifact_name(tool_name: str, call_id: Optional[str]) -> str:
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{tool_name}_{call_id or 'call'}")
     return f"tool_output_{safe}.txt"
@@ -768,8 +771,10 @@ async def prune_old_tool_results(llm_request, callback_context, protect_tokens: 
         data = response.response or {}
         artifact = data.get("full_output_artifact")
         if not isinstance(artifact, str):
-            if not response.id:
-                continue  # the artifact name would be shared by every id-less result of the tool
+            if not response.id or not _SAFE_ID.fullmatch(response.id):
+                # The artifact name would be shared: by every id-less result of the
+                # tool, or by ids that differ only where `_artifact_name` replaces.
+                continue
             if set(data) == {"result"} and isinstance(data["result"], str):
                 text = data["result"]
             else:
