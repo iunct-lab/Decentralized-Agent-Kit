@@ -92,6 +92,16 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
      （`--jinja`）はこれを `No user query found in messages` で拒否する（実機で確認。
      Anthropic も先頭がユーザーであることを要求する）。そこでユーザーの text ターンが
      無いときは、「以下の要約から作業を続けて」という短いユーザーターンを先頭に補う。
+   - 次に、古いツール結果を要約なしで剪定する（`prune_old_tool_results`、#102）。直近
+     `DAK_PRUNE_PROTECT_USER_TURNS`（既定 2）件のユーザーターン（利用者のテキストを持つターン。
+     ツール結果は数えない）以降は触らず、それより前のツール応答を新しい方から数えて
+     `DAK_PRUNE_PROTECT_TOKENS`（既定: 窓の 20%）を超えた古い側を
+     `[cleared; read_tool_output('<artifact>') で再取得可]` に差し替える。全文は 1 の Artifact
+     （無ければここで保存する）にあり、呼び出しと応答の対（id と name）は保つ。剪定できる量が
+     `DAK_PRUNE_MINIMUM_TOKENS`（既定 512）未満なら何もしない。
+   - 剪定は 2 の圧縮の前段として効く。圧縮するかは直前のリクエストの大きさで決まり、そのリクエストは
+     剪定した後のものなので、剪定だけで閾値の下に収まるあいだは要約が 0 回で済む。1 ターンの中の長い
+     ツールループは保護の範囲なので剪定されず、従来どおり圧縮が受け持つ。
    - 組み立て後のリクエストが窓の 85% を超える場合、古いツール応答から順に
      `[elided …]` に差し替える。ADK はセッションの Content をそのまま使うため、
      オブジェクトは書き換えずに差し替える。
@@ -133,6 +143,9 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 | `DAK_REQUEST_BUDGET_RATIO` | `0.85` | 最終ガードの上限 |
 | `DAK_MODEL_ERROR_RETRY_ATTEMPTS` | `2` | 窓超過のエラーを受けたときの呼び直しの回数（予算は毎回半分）。`0` で呼び直さずに説明文を返す |
 | `DAK_TOOL_OUTPUT_MAX_CHARS` | 窓の 15%（2K〜40K 文字） | 1 回のツール結果の上限 |
+| `DAK_PRUNE_PROTECT_USER_TURNS` | `2` | 剪定しない直近のユーザーターン数 |
+| `DAK_PRUNE_PROTECT_TOKENS` | 窓の 20% | 保護したターンより前で、剪定せずに残すツール結果の量（新しい方から） |
+| `DAK_PRUNE_MINIMUM_TOKENS` | `512` | 剪定できる量がこれ未満なら剪定しない |
 | `DAK_MAX_REPEATED_TOOL_CALLS` | `3` | 同じ呼び出し（ツール + 引数）を続けて実行してよい回数。超えると `repeated_call` |
 | `DAK_MAX_TOOL_CALLS` | `40` | 1 invocation で実行してよいツール呼び出しの数。超えると `step_limit_exceeded` |
 | `DAK_MAX_WALL_SECONDS` | `300` | 最初のツール呼び出しからこの秒数を過ぎたら、以後のツールを `wall_time_exceeded` で止める |
@@ -148,6 +161,11 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
   リクエストが最大 6.2K トークン、圧縮 2 回で最後まで完走することを検証している。
   台本モデルは、ユーザーの発話が無いリクエストを Qwen テンプレートと同じように拒否するので、
   上記のガードも同じテストで検証される。
+- 剪定と圧縮の順序は、同じ台本モデルに複数ターンを送る E2E で固定している。
+  `test_prune_alone_completes_the_task_with_zero_compactions`（1 ターン 1 回のツール結果を 4 ターン。
+  剪定ありは要約 0 回、剪定を止めると要約が走る）と
+  `test_prune_then_compaction_when_pruning_alone_is_not_enough`（3 ターン目に 3 回。剪定したうえで
+  なお閾値を超え、要約も走る）。
 - 実機（llama-server + Qwen 27B, 32K）で元の依頼を再実行し、ツール出力の切り詰め
   （例: `read_file` 14,947 → 4,915 文字）と invocation 内での圧縮が働くことを確認した。
 - 1 の不具合を再発させないため、`AdaptiveAgent` のテストは `session.events` を使う形に改めた。
