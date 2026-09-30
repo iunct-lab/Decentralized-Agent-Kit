@@ -64,7 +64,8 @@ class SandboxManager:
                 "--cap-drop", "ALL", "--user", "nobody",
                 SANDBOX_IMAGE, "sleep", "infinity",
             ]
-            self._run(cmd, check=True, capture_output=True, text=True)
+            # Bounded: a hung daemon must not hold the lock forever (300 s leaves room for an image pull).
+            self._run(cmd, check=True, capture_output=True, text=True, timeout=300)
             return {"mode": "docker", "container_name": name, "workdir": DOCKER_WORKDIR}
         workdir = tempfile.mkdtemp(prefix=f"{name}-")
         return {"mode": "inproc", "container_name": None, "workdir": workdir}
@@ -79,23 +80,29 @@ class SandboxManager:
             entry["last_used"] = time.monotonic()
             return entry
 
-    def destroy_session(self, session_key: str) -> None:
-        with self._lock:
-            entry = self._sessions.pop(session_key, None)
+    def _dispose(self, session_key: str) -> None:
+        # Caller holds the lock, so a concurrent ensure_session cannot reuse the
+        # entry or recreate the container name before the removal has finished.
+        entry = self._sessions.pop(session_key, None)
         if entry is None:
             return
         if entry["mode"] == "docker":
-            self._run(["docker", "rm", "-f", entry["container_name"]], check=False, capture_output=True, text=True)
+            self._run(["docker", "rm", "-f", entry["container_name"]],
+                      check=False, capture_output=True, text=True, timeout=60)
         elif entry["mode"] == "inproc":
             shutil.rmtree(entry["workdir"], ignore_errors=True)
+
+    def destroy_session(self, session_key: str) -> None:
+        with self._lock:
+            self._dispose(session_key)
 
     def reap_expired(self, now: float | None = None) -> list[str]:
         """Destroy the sessions idle for longer than the TTL; return their keys."""
         now = time.monotonic() if now is None else now
         with self._lock:
             expired = [key for key, entry in self._sessions.items() if now - entry["last_used"] > self._ttl]
-        for key in expired:
-            self.destroy_session(key)
+            for key in expired:
+                self._dispose(key)
         return expired
 
     def sweep(self) -> None:
@@ -103,14 +110,13 @@ class SandboxManager:
         if self.mode != "docker":
             return
         listed = self._run(["docker", "ps", "-aq", "--filter", f"label={DOCKER_LABEL}"],
-                           check=True, capture_output=True, text=True)
+                           check=True, capture_output=True, text=True, timeout=60)
         ids = listed.stdout.split()
         if ids:
-            self._run(["docker", "rm", "-f", *ids], check=False, capture_output=True, text=True)
+            self._run(["docker", "rm", "-f", *ids], check=False, capture_output=True, text=True, timeout=60)
 
     def destroy_all(self) -> None:
         """Destroy every session (server shutdown): no container outlives the server."""
         with self._lock:
-            keys = list(self._sessions)
-        for key in keys:
-            self.destroy_session(key)
+            for key in list(self._sessions):
+                self._dispose(key)
