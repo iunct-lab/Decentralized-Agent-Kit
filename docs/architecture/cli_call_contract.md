@@ -6,6 +6,7 @@ PBI #17。外部のシステム（シェルスクリプト、CI、別のエー�
 
 - §1 現状（#256）
 - §2 stdin・出力形式・exit code の比較と決定（#256）
+- §3 非対話の承認、既存の `run` / `chat` との関係、呼び出しごとの設定の結果の形との整合（#257）
 
 用語:
 
@@ -163,3 +164,95 @@ PBI #17。外部のシステム（シェルスクリプト、CI、別のエー�
 - `--format json` の CLI 側の失敗の種別（`connection_failed` / `http_error` / `not_logged_in`）で足りるか。今の `run_task` は接続の失敗も HTTP のエラーも `ConnectionError` にまとめている（`client.py:124-125`）ので、分けるには `client.py` の変更が要る
 - 既存の `chat` の対話ループとの共存。`chat` は対話専用のままにし、`--format` も stdin の読み取りも足さない想定だが、`chat` の中で同じ出力の組み立て（`_extract_response_text`）を共有するかは実装の PR で決める
 - 1 回ごとに新しいセッションを作る今の挙動のままでよいか（続きのセッションを指定する口が要るか）。承認に後から答えるには `session_id` を知る必要があり、`--format json` はそれを返すが、`markdown` の表示は返さない
+
+## 3. 非対話の承認と既存コマンドとの関係
+
+### 3-1. 現状: 非対話で確認に当たると、保留を残して exit 0
+
+- 確認の要るツールかどうかは agent 側の `PermissionPlugin`（`agent/dak_agent/permission.py`）の規則で決まる。既定の規則（`DEFAULT_RULES`、`permission.py:156-175`）は、既定の MCP サーバのツールを `ask`（読み取りと読み取り専用の `git` だけ `allow`、`rm -rf` と `git push --force` は `deny`）、agent の中のツールと、呼び出し元が `dak:tools` で渡した MCP サーバのツールを `allow` にする。運用者は `agent_config.yaml` の `permissions:` で上書きできる（`load_rules`、`permission.py:265`）
+  - Task #257 の本文が前提にしていた「`agent/dak_agent/agent.py:45` で MCP は既定 `require_confirmation=True`」は今のコードと違う。`agent.py` は `require_confirmation` を付けず、コメントで「allow / ask / deny は `PermissionPlugin` が決める」と書いている（`agent.py:44-45`）
+- ターンが確認で止まると、`AgentClient._needs_approval`（`cli/src/client.py:18-35`）が ADK のイベントから**最初の 1 件**の確認を `{"status": "needs_approval", "tool_call": {...}}` にする
+- `run` と `chat` は同じ `_answer_approvals`（`cli/src/main.py:59-77`）で `typer.confirm` を出し、答えを `POST /approvals/{id}/reply` で送る。答えた後に次の確認が来れば繰り返す
+- stdin が端末でない（EOF）と `typer.confirm` が `click.Abort` を投げ、`run` はそれを `Error: ` として飲み込み exit 0 で終わる（§1 の表）。**reply は送られず、agent 側に確認が保留のまま残る**。保留は `DAK_APPROVAL_TIMEOUT_SECONDS`（既定 900 秒）を過ぎると一覧で `timed_out` になり、同じセッションの次の発言で捨てられる（`docs/design/approval-queue.md` の 4）。`run` は毎回新しいセッションを作るので、次の発言は来ない
+- 保留は別のクライアントからも答えられる: `dak-cli approvals --session <id>` で一覧を見て、`dak-cli approve <id> --session <id>` で答える（`main.py:339-404`、`GET /approvals` と `POST /approvals/{id}/reply`）。ただし今の `run` は `session_id` を表示しないので、呼び出し元はどのセッションか分からない
+- `ask_question`（モデルから利用者への質問）でターンが終わったときも、保留として `GET /approvals` に出る（`agent/dak_agent/approvals.py:69-102`）。今の `run` はこれを確認として扱わず、質問の文をツールの結果として表示して exit 0 で終わる
+
+### 3-2. 非対話で確認に当たったときの既定
+
+| 案 | 動き | 良い点 | 悪い点 | 権限の規則との整合 |
+|---|---|---|---|---|
+| A1. 答えずに止める。保留を構造化して返し exit 3 | reply を送らない。`--format json` に保留の一覧（id・ツール名・引数・`session_id`）を入れる | 判断を人に残せる。保留はそのまま `dak-cli approve` や BFF から答えられる（承認のキューの設計どおり）。LLM をそれ以上呼ばない | 答えが来なければ期限まで保留が残る（それ以上の害は無い。期限後は `timed_out` と表示されるだけで、エージェントは動かない） | `ask` を `ask` のまま扱う |
+| A2. その場で拒否する（`reject`、理由つき）。exit 3 | reply `reject` を送り、エージェントに `denied_by_user` を返してターンを続けさせる | 保留が残らない | 利用者が拒否していないのに「利用者が拒否した」とモデルに伝える。ターンが続くので LLM をもう一度呼び（お金がかかる）、モデルが別の手段を試しうる。そのあとの応答を `run` の結果とするか、exit 3 とするかが曖昧 | `ask` を `deny` と同じに扱う |
+| B. `--allow-tools <名前,...>` を渡したときだけ、そのツールの確認に CLI が自動で `once` と答える | 一覧にあるツールの確認に reply `once`、ないものは A1 | 無人でも書き込みのツールを使える | 運用者が `ask` にした判断を、CLI の呼び出し元が 1 つのオプションで越えられる。引数を見ない（`run_command` を許せば、どのコマンドも通る）。モデルへのプロンプトで引数を操れる | 運用者の `ask` を呼び出し元が `allow` に変える |
+| C. 常にエラーで止める（exit 1） | A1 と同じく reply を送らず、接続失敗と同じ扱い | 単純 | 接続失敗と区別できない。保留の id を返さなければ、後から答えられない | — |
+
+**決定: A1。** 非対話の `run` は、ターンが確認か質問で止まったら reply を送らずに終わる。
+
+- `--format json` の出力は `{"status": "needs_approval", "session_id": "...", "output": "<止まるまでのモデルのテキスト>", "error": "needs_approval", "approvals": [...]}`、exit 3
+- `approvals` の要素は `GET /approvals` の要素をそのまま（`id`・`kind`（`approval` / `question`）・`tool_name`・`tool_args`・`questions` など）。取得は、ターンが確認か質問で止まったときだけ `AgentClient.list_approvals(session_id)` を呼ぶ。`_needs_approval` の 1 件ではなく一覧を返すのは、1 回のモデルの応答が複数の確認を出すことがあるため
+- `--format markdown` では、保留ごとに `dak-cli approve <id> --session <session_id>` で答えられることを stderr に書く
+- 非対話かどうかは **stdin が端末かどうか**で決める（`typer.confirm` が読む先）。stdin が端末なら、`--format json` でも今までどおり対話で聞く（問いは stderr に出す）
+
+根拠:
+
+- `docs/CHARTER.md` の「System ENABLES, Agent DECIDES」と「暗黙の副作用を足さない」。A2 は人が決めていない拒否を人の拒否としてモデルに伝え、LLM の追加の呼び出し（費用）を黙って起こす。B は運用者が `ask` にしたツールの確認を、呼び出し元が暗黙に飛ばす経路を増やす。A1 は何も実行せず、何も答えない
+- 確認なしで動かしたい呼び出し元には、既に明示的な道が 2 つある: 運用者が `agent_config.yaml` の `permissions:` でそのツールを `allow` にする（引数のパターンで絞れる）、または呼び出し元が自分の MCP サーバを `dak:tools` で渡す（`caller` は `allow`。接続先は運用者の `DAK_ALLOWED_MCP_URLS` で絞る）。どちらも「誰が許したか」が運用者の設定に残る。B はそれを CLI のオプションに分散させる
+- 承認のキュー（`docs/design/approval-queue.md`）は、保留を別のクライアントから答える前提で作られている。A1 は、外部システムが exit 3 と保留の id を受け取り、人に回して `dak-cli approve` で答えてもらう、という使い方にそのまま乗る
+- 質問（`ask_question`）を同じ扱いにするのは、どちらも「人の入力が無いとターンが進まない」で、`GET /approvals` が両方を 1 つの一覧で返すため
+
+### 3-3. `run` と `chat` との関係
+
+| 案 | 良い点 | 悪い点 |
+|---|---|---|
+| A. `run` に §2 の入力（stdin）と `--format` を足す | 既に単発呼び出しとして文書化されている（`README.md`・`cli/README.md`・`docs/quickstart.md`）。呼び出し元は今のコマンドのまま、必要なときだけオプションを足す | `run` の今の exit code（常に 0）が変わる（§2-c の移行の影響） |
+| B. 非対話専用の新しいコマンド（例: `dak-cli call`）を作る | `run` の挙動を変えない | 単発で 1 ターンを実行するコマンドが 2 つになり、応答の組み立て・承認の扱いが 2 か所に分かれる。どちらを使うべきかを文書で説明し続けることになる |
+
+**決定: A。** 単発呼び出しは `run` に一本化し、`chat` は対話専用のまま（`--format`・stdin・exit code の契約を足さない）。
+
+- `run` と `chat` が共有するのは、応答の組み立て（`_extract_response_text`、`main.py:24-57`）と、端末があるときの承認（`_answer_approvals`）だけ。今の `run` は `_extract_response_text` と同じ処理を自前で持っている（`main.py:115-151`）ので、実装の PR でそれを使う形にそろえる
+- `chat` の enforcer の自動再試行（`main.py:248-267`）は `run` に持ち込まない。再試行は呼び出しごとの検査（#140、`dak:inspection`）が agent 側で行う
+
+根拠: 1 つの目的に 1 つのコマンド（B は同じことをする 2 つ目の入口を作る）。§2-a で、引数だけの今の呼び方は変わらないことを確かめた。exit code の変化は、失敗を成功と読んでいた呼び出しを正す変化（§2-c）。
+
+### 3-4. 呼び出しごとの設定の結果の形との整合
+
+呼び出しごとの設定（`docs/architecture/call_config.md`）は、失敗したとき**応答テキストを JSON のオブジェクト 1 つに差し替える**。どれも `error` に種別を持つ:
+
+| 種別 | 出す場所 | ほかのキー | 状態（2026-09-30） |
+|---|---|---|---|
+| `output_schema_validation_failed` | `agent/dak_agent/adaptive_agent.py:579`（#137） | `issues` | main |
+| `model_not_allowed` | `agent/dak_agent/call_config.py:140`（#138） | `requested_model`・`allowed_models` | main |
+| `invalid_tools` | `call_config.py:210`（#136） | `expected` | main |
+| `mcp_server_not_allowed` | `call_config.py:248`（#136） | `requested_urls`・`allowed_urls` | main |
+| `turn_limit_exceeded` | #134（Task #202 の予定） | `limit`・`calls_used`・`elapsed_seconds` | 未実装 |
+| `inspection_failed` | #140（Task #245 の予定） | `attempts`・`issues`・`last_response` | 未実装 |
+
+`dak:tools_error`（#136）は失敗ではない。呼び出し元の MCP サーバに繋がらなくてもターンは続き、理由はセッションの state（`/run` の応答のイベントの `stateDelta`）に残る。
+
+**決定: `--format json` は、構造化された失敗のオブジェクトをトップレベルにそのまま透過させる。**
+
+```json
+{"status": "failed", "session_id": "…", "output": "{\"error\": \"model_not_allowed\", …}",
+ "error": "model_not_allowed", "requested_model": "openai/not-allowed", "allowed_models": ["openai/fake-default"]}
+```
+
+- モデルの最終テキストが JSON のオブジェクトで、`error` が上の表の種別のどれかなら、`status: "failed"`・exit 4。そのオブジェクトのキーをすべてトップレベルに置く（`error` の値は §2-b の `error` と同じになる）。§2-b のキー（`status`・`session_id`・`output`）と名前が重なるときは §2-b のキーを残す（今の種別のキーはどれも重ならない）
+- 表に無い種別の `error` を持つ JSON は、モデルの普通の応答として `succeeded`（`dak:output_schema` で呼び出し元が `error` という項目を定義することがあるため）。種別を足したときは、CLI の一覧にも足す
+- `dak:tools_error` がそのターンのイベントの `stateDelta` にあれば、`tools_error` として同じ値を入れる。`status` は変えない（失敗ではないため）
+- A2A・HTTP の呼び出し元が応答テキストを `json.loads` して `error` を見るのと、CLI の呼び出し元が stdout を `jq .error` で見るのとで、同じ種別名・同じキーで判定できる
+
+根拠:
+
+- 呼び出しごとの設定は HTTP・A2A・CLI のどれから呼んでも同じ agent の同じ処理を通る。CLI だけ別の名前（例: `{"failure": {"kind": ...}}` に包む）にすると、呼び出し元は経路ごとに判定を書き分けることになる。PBI #17 の決定ログ（2026-09-21）の「CLI の単発呼び出し契約は、これらの結果の形と揃える」
+- 入れ子にせずトップレベルに置くのは、`call_config.md` の例（`{"error": ..., "issues": ...}`）をそのまま読めるようにするため。§2-b のキーと重ならないことは上の表で確かめた
+- 種別を知っているものに限るのは、呼び出し元のスキーマの `error` 項目を失敗と読み違えないため
+
+### 未検証事項（§3）
+
+- モデル自身が、表の種別と同じ `{"error": "model_not_allowed", ...}` を応答として書いたとき（プロンプトで誘導されたときなど）、CLI はそれを構造化された失敗と読む（exit 4）。失敗側に倒れるので害は小さいが、agent が失敗であることを応答の外（イベントの `customMetadata` など）で示せば区別できる。agent 側の変更になるので、この PBI では決めない
+- 1 回のモデルの応答が確認と質問を同時に出したときの扱いは、承認のキューでも決まっていない（`docs/design/approval-queue.md` の 3）。A1 は両方を `approvals` に並べて返すだけで、どちらに答えるべきかは示さない
+- 複数の確認のうち 1 件に答えると、同じターンの残りの確認は `reject` になる（#406）。呼び出し元が `approvals` の全部に順に答えようとすると、2 件目以降は `404` になる。`dak-cli approve` の出力でそれが分かるかは確かめていない
+- `dak-cli approve` 自体には `--format json` も exit code の契約も無い（今は失敗で 1、使い方の誤りで 2 だけ）。非対話の呼び出し元が承認の後の応答を機械的に読むには、`approve` にも §2 の契約が要る。範囲を決めるのは実装の PBI
+- 期限（`DAK_APPROVAL_TIMEOUT_SECONDS`）を過ぎた保留は、一覧では `timed_out` と出るが、答えないかぎり消えない。非対話の呼び出しが多いと、答えられない保留を持つセッションがたまる。セッションの後片付けの要否は確かめていない
+- `turn_limit_exceeded`（#134）と `inspection_failed`（#140）のキーは、それぞれの Task の本文にある予定の形で、まだ main に無い。実装で変われば、この表と CLI の一覧を合わせて直す
+- `run` から `dak:` キー（`state_delta`）を渡す口は無い（§1）。CLI から呼び出しごとの設定を使えるようにするか（`--instruction`・`--output-schema` など）は、この PBI の範囲外
