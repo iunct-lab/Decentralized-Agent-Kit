@@ -88,17 +88,25 @@ def _session(ctx: Context | None) -> tuple[str, dict]:
 
 def _session_path(ctx: Context | None, path: str) -> str:
     """Where a file tool's path points for this session; raises ValueError outside it."""
+    if _sandbox.mode == "docker":
+        # The workspace lives only inside the container; never fall back to this server's
+        # files, and do not start a container for a call that is refused anyway.
+        raise ValueError("file tools are not available in SANDBOX_MODE=docker yet (docs/design/session-sandbox.md)")
     _, entry = _session(ctx)
     if entry["workdir"] is None:
         return path
-    if entry["mode"] == "docker":
-        # The workspace lives only inside the container; never fall back to this server's files.
-        raise ValueError("file tools are not available in SANDBOX_MODE=docker yet (docs/design/session-sandbox.md)")
     root = os.path.realpath(entry["workdir"])
     resolved = os.path.realpath(os.path.join(root, path))
     if resolved != root and not resolved.startswith(root + os.sep):
         raise ValueError(f"{path} is outside the session workspace")
     return resolved
+
+
+def _shown(path: str, base: str, found: str) -> str:
+    """A path found under `base` (the resolved `path`), shown as the caller wrote it."""
+    if base == path:  # off: nothing was resolved, keep the output as before
+        return found
+    return path if found == base else os.path.join(path, os.path.relpath(found, base))
 
 
 @mcp.tool()
@@ -178,7 +186,7 @@ async def run_command(command: str, ctx: Context | None = None) -> str:
         if entry["mode"] == "docker":
             result = _sandbox.exec_in_session(key, ["sh", "-c", command])
         else:
-            # off: workdir is None, i.e. the shared /projects as before.
+            # off: cwd=None, the shared /projects as before; inproc: the session directory.
             result = subprocess.run(
                 command,
                 shell=True,
@@ -213,8 +221,7 @@ async def search_files(pattern: str, path: str = ".", ctx: Context | None = None
         for root, _, files in os.walk(base):
             for file in files:
                 if glob.fnmatch.fnmatch(file, pattern):
-                    # Show the caller's path, not the session directory behind it.
-                    matches.append(path + os.path.join(root, file)[len(base):])
+                    matches.append(_shown(path, base, os.path.join(root, file)))
         return _cap_entries(matches, "Use a more specific pattern or path.")
     except Exception as e:
         return f"Error searching files: {e}"
@@ -249,7 +256,7 @@ async def grep(pattern: str, path: str = ".", glob_pattern: str = "*", ignore_ca
                 with open(file, "r", encoding="utf-8", errors="replace") as f:
                     for line_no, line in enumerate(f, start=1):
                         if regex.search(line):
-                            matches.append(f"{path + file[len(base):]}:{line_no}: {line.rstrip()}")
+                            matches.append(f"{_shown(path, base, file)}:{line_no}: {line.rstrip()}")
                             if len(matches) >= MAX_GREP_MATCHES:
                                 break
             except Exception:
