@@ -157,5 +157,23 @@ class TestDefaultModelSingleSource(unittest.TestCase):
         self.assertEqual(offenders, [], "import DEFAULT_MODEL_NAME from dak_agent.config instead")
 
 
+class TestNoDeadLocalLlmEnvVars(unittest.TestCase):
+    """LOCAL_LLM_BASE_URL / LOCAL_LLM_API_KEY were documented but never read.
+
+    The local LLM path is MODEL_NAME=ollama_chat/... plus OLLAMA_API_BASE, so
+    the dead pair must not come back into the files users copy settings from.
+    """
+
+    def test_local_llm_base_url_not_present(self):
+        for relpath in ("docker-compose.yml", ".env.example", "README.md"):
+            path = os.path.join(_REPO_ROOT, relpath)
+            if not os.path.exists(path):
+                self.skipTest(f"{relpath} not available (not a repo checkout)")
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            for name in ("LOCAL_LLM_BASE_URL", "LOCAL_LLM_API_KEY"):
+                self.assertNotIn(name, text, f"{relpath} still mentions the unused {name}")
+
+
 if __name__ == "__main__":
     unittest.main()

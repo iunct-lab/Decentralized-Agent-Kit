@@ -285,9 +285,10 @@ LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 LANGFUSE_HOST=https://cloud.langfuse.com
 
-# Local LLM (Ollama) — start with: docker compose --profile local-llm up
-LOCAL_LLM_BASE_URL=http://ollama:11434/v1
-LOCAL_LLM_API_KEY=ollama
+# Local LLM (Ollama) — start with: docker compose --profile local-llm up,
+# pull a model (docker compose exec ollama ollama pull llama3.2), then:
+MODEL_NAME=ollama_chat/llama3.2
+# OLLAMA_API_BASE needs no setting: docker-compose.yml passes http://ollama:11434
 ```
 
 ## License
