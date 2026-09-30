@@ -815,6 +815,19 @@ class ContextHarnessPlugin(BasePlugin):
             }
         return None
 
+    def note_argument_violation(self, tool_context, invocation_id: str) -> bool:
+        """Count a failed call that is not a repeat (e.g. arguments that break
+        the tool's schema). True once more than ``max_repeated_tool_calls``
+        such failures came in a row: the caller should answer with a blocking
+        observation instead of another correction hint."""
+        guard = _guard_state(tool_context.state, invocation_id)
+        guard["violation_streak"] += 1
+        return guard["violation_streak"] > self.settings.max_repeated_tool_calls
+
+    def note_call_success(self, tool_context, invocation_id: str) -> None:
+        """A tool call ran normally: the run of consecutive violations is over."""
+        _guard_state(tool_context.state, invocation_id)["violation_streak"] = 0
+
     async def after_tool_callback(self, *, tool, tool_args, tool_context, result) -> Optional[dict]:
         tool_name = getattr(tool, "name", "tool")
         # A call answered by an earlier plugin (the PermissionPlugin denying it or

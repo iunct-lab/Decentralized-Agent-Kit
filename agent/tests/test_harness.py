@@ -447,6 +447,20 @@ class TestToolCallGuard:
         await self._call(plugin, ctx)
         assert list(ctx.state) == ["temp:dak_tool_guard"]  # `temp:` is never persisted by ADK
 
+    def test_note_argument_violation_stops_after_the_limit(self):
+        plugin, ctx = self._plugin(), self._ctx()
+        limit = plugin.settings.max_repeated_tool_calls
+        results = [plugin.note_argument_violation(ctx, "inv-1") for _ in range(limit + 1)]
+        assert results == [False] * limit + [True]
+
+    def test_note_call_success_resets_the_streak(self):
+        plugin, ctx = self._plugin(), self._ctx()
+        limit = plugin.settings.max_repeated_tool_calls
+        for _ in range(limit):
+            assert plugin.note_argument_violation(ctx, "inv-1") is False
+        plugin.note_call_success(ctx, "inv-1")
+        assert [plugin.note_argument_violation(ctx, "inv-1") for _ in range(limit)] == [False] * limit
+
     @patch.dict(os.environ, {"MODEL_CONTEXT_WINDOW": "8192", "DAK_MAX_REPEATED_TOOL_CALLS": "5",
                              "DAK_MAX_TOOL_CALLS": "12", "DAK_MAX_WALL_SECONDS": "90"})
     def test_limits_from_env(self):
@@ -766,7 +780,7 @@ WINDOW = 8192
 BIG_OUTPUT = "日本語のログ行です\n" * 4000  # ~40K chars, CJK-heavy like a real Japanese session
 
 
-def big_tool() -> str:
+def big_tool(page: int = 0) -> str:
     """Return a huge log."""
     return BIG_OUTPUT
 
@@ -790,7 +804,8 @@ def _make_fake_llm(tool_calls: int, thoughts: bool = False, plan: bool = False, 
     from google.adk.models.llm_response import LlmResponse
 
     class ScriptedLlm(BaseLlm):
-        """Calls big_tool `tool_calls` times, then answers. Records request sizes.
+        """Calls big_tool `tool_calls` times (a new page each time, so the
+        repeated-call guard does not cut the loop short), then answers. Records request sizes.
         With `plan`, the first step records a plan with write_todos. The first
         `overflows` requests are rejected as too large whatever their size."""
         steps: int = 0
@@ -828,7 +843,7 @@ def _make_fake_llm(tool_calls: int, thoughts: bool = False, plan: bool = False, 
                     id="fc-plan", name="write_todos", args={"items": PLAN}))
             elif self.steps <= tool_calls + int(plan):
                 part = types.Part(function_call=types.FunctionCall(
-                    id=f"fc-{self.steps}", name="big_tool", args={}))
+                    id=f"fc-{self.steps}", name="big_tool", args={"page": self.steps}))
             else:
                 part = types.Part(text="done")
             parts = [types.Part(text=f, thought=True) for f in THOUGHT_FRAGMENTS] + [part] if thoughts else [part]
@@ -973,6 +988,22 @@ async def test_plan_state_is_not_lost_by_compaction_summary():
     assert compaction_events
     assert all("dak_todos" not in (e.actions.state_delta or {}) for e in compaction_events)
     assert session.state["dak_todos"] == PLAN
+
+
+@pytest.mark.asyncio
+async def test_tool_loop_stops_at_step_limit_without_raising():
+    """PBI #99: a model that never stops calling a tool is stopped by the step
+    limit with an observation, across repeated compactions, without an exception."""
+    limit = HarnessSettings(context_window=WINDOW).max_invocation_tool_calls
+    llm, session, final_text, error, _ = await _run(use_harness=True, tool_calls=limit + 3)
+
+    assert error is None
+    assert final_text == "done"
+    assert llm.summaries >= 2
+    responses = [p.function_response for e in session.events if e.content
+                 for p in e.content.parts or [] if p.function_response]
+    assert len(responses) == limit + 3
+    assert "step_limit_exceeded" in str(responses[-1].response)
 
 
 async def _run_turns(overflows: int, messages: list[str]):
