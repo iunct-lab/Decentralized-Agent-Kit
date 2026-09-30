@@ -500,6 +500,26 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         self.assertIn("# Original Request\nrename {old} to {new} in the repo", system)
         self.assertNotIn("continue", system)
 
+    async def test_original_request_survives_compaction(self):
+        """PBI #103 criterion 2: after the history holding the first user
+        message was summarised, the next model request still carries it.
+        Reuses test_harness's scripted run (AdaptiveAgent + harness, 8K window)."""
+        from test_harness import _run
+
+        with patch("dak_agent.remote_tools.discover_remote_tools", return_value={}):
+            llm, session, final_text, error, _ = await _run(use_harness=True, plan=True)
+
+        self.assertIsNone(error)
+        self.assertEqual(final_text, "done")
+        request = "ログを全部読んで要約して"
+        first = next(e for e in session.events if e.author == "user")
+        self.assertTrue(any(
+            e.actions.compaction.start_timestamp <= first.timestamp <= e.actions.compaction.end_timestamp
+            for e in session.events if e.actions.compaction))
+        self.assertGreaterEqual(llm.summaries_before_request[-1], 1)
+        self.assertIn(f"# Original Request\n{request}", llm.system_instructions[-1])
+        self.assertEqual(session.state["dak_original_request"], request)
+
     def _tools_agent(self):
         from dak_agent.builtin_tools import switch_mode
 
