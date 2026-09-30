@@ -7,7 +7,9 @@ Unset or empty means no hooks. A malformed entry is skipped with a warning.
 A hook gets the Claude Code input on stdin (command) or as the POST body (http).
 A command hook answers with its exit code: 2 blocks (stderr is the reason), 0
 reads an optional `hookSpecificOutput` JSON from stdout, anything else is an
-error. An http hook answers with the same JSON in a 2xx body.
+error. An http hook answers with the same JSON in a 2xx body. A top-level
+`{"decision": "block"}` also blocks; `permissionDecision: "ask"` blocks too,
+since a hook call has nobody to ask.
 
 Every hook's answer becomes one outcome:
 `{"decision": "allow"|"deny"|"error", "reason": str, "updated_input": dict|None, "updated_output": Any|None}`.
@@ -16,6 +18,8 @@ import fnmatch
 import json
 import logging
 import os
+import signal
+import socket
 import subprocess
 import urllib.error
 import urllib.request
@@ -51,21 +55,35 @@ def load_hooks() -> List[HookSpec]:
         return []
     specs: List[HookSpec] = []
     for entry in entries:
-        if not isinstance(entry, dict) or "event" not in entry or "type" not in entry:
-            logger.warning("Ignoring hook in %s: %r (needs event and type).", HOOKS_ENV, entry)
+        problem = _entry_problem(entry)
+        if problem:
+            logger.warning("Ignoring hook in %s: %r (%s).", HOOKS_ENV, entry, problem)
             continue
-        try:
-            specs.append(HookSpec(
-                event=str(entry["event"]),
-                type=str(entry["type"]),
-                command=entry.get("command"),
-                url=entry.get("url"),
-                timeout=float(entry.get("timeout", 30.0)),
-                tool_pattern=entry.get("if"),
-            ))
-        except (TypeError, ValueError):
-            logger.warning("Ignoring hook in %s: %r (timeout must be a number).", HOOKS_ENV, entry)
+        specs.append(HookSpec(
+            event=entry["event"],
+            type=entry["type"],
+            command=entry.get("command"),
+            url=entry.get("url"),
+            timeout=float(entry.get("timeout", 30.0)),
+            tool_pattern=entry.get("if"),
+        ))
     return specs
+
+
+def _entry_problem(entry: Any) -> str:
+    if not isinstance(entry, dict) or not isinstance(entry.get("event"), str) or not isinstance(entry.get("type"), str):
+        return "needs event and type"
+    for key in ("command", "url", "if"):
+        if key in entry and not isinstance(entry[key], str):
+            return f"{key} must be a string"
+    if entry["type"] == "command" and not entry.get("command"):
+        return "a command hook needs command"
+    if entry["type"] == "http" and not entry.get("url"):
+        return "an http hook needs url"
+    timeout = entry.get("timeout", 30.0)
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        return "timeout must be a number"
+    return ""
 
 
 def hooks_for(hooks: List[HookSpec], event: str, tool_name: str) -> List[HookSpec]:
@@ -95,6 +113,8 @@ def _outcome(decision: str, reason: str = "", updated_input: Optional[dict] = No
 
 
 def _decision_from_stdout(text: str) -> Dict[str, Any]:
+    """`hookSpecificOutput`, with Claude Code's top-level `{"decision": "block", "reason": ...}`
+    (how its PostToolUse / Stop hooks block) folded in as a deny."""
     try:
         parsed = json.loads(text) if text.strip() else {}
     except json.JSONDecodeError:
@@ -102,30 +122,43 @@ def _decision_from_stdout(text: str) -> Dict[str, Any]:
     if not isinstance(parsed, dict):
         return {}
     output = parsed.get("hookSpecificOutput", {})
-    return output if isinstance(output, dict) else {}
+    output = dict(output) if isinstance(output, dict) else {}
+    if parsed.get("decision") == "block" and "permissionDecision" not in output:
+        output["permissionDecision"] = "deny"
+        output["permissionDecisionReason"] = parsed.get("reason", "")
+    return output
 
 
 def _from_output(output: Dict[str, Any]) -> Dict[str, Any]:
+    decision = output.get("permissionDecision")
+    reason = str(output.get("permissionDecisionReason") or "")
+    if decision == "ask":
+        # Nobody can be asked from inside a hook call here; not running the tool is the safe answer.
+        decision, reason = "deny", f"hook asked for confirmation, which DAK hooks do not support: {reason}"
     updated_input = output.get("updatedInput")
     return _outcome(
-        "deny" if output.get("permissionDecision") == "deny" else "allow",
-        str(output.get("permissionDecisionReason") or ""),
+        "deny" if decision == "deny" else "allow",
+        reason,
         updated_input if isinstance(updated_input, dict) else None,
         output.get("updatedToolOutput"),
     )
 
 
 def run_command_hook(hook: HookSpec, payload: Dict[str, Any]) -> Dict[str, Any]:
+    # Its own process group, so a timeout also stops whatever the hook started.
+    proc = subprocess.Popen(hook.command or "", shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, start_new_session=True)
     try:
-        proc = subprocess.run(hook.command or "", shell=True, input=json.dumps(payload, default=str),
-                              capture_output=True, text=True, timeout=hook.timeout)
+        stdout, stderr = proc.communicate(json.dumps(payload, default=str), timeout=hook.timeout)
     except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
         return _outcome("error", f"hook timed out after {hook.timeout}s: {hook.command}")
     if proc.returncode == 2:
-        return _outcome("deny", proc.stderr.strip())
+        return _outcome("deny", stderr.strip())
     if proc.returncode != 0:
-        return _outcome("error", f"hook exited {proc.returncode}: {proc.stderr.strip()}")
-    return _from_output(_decision_from_stdout(proc.stdout))
+        return _outcome("error", f"hook exited {proc.returncode}: {stderr.strip()}")
+    return _from_output(_decision_from_stdout(stdout))
 
 
 def run_http_hook(hook: HookSpec, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -134,9 +167,13 @@ def run_http_hook(hook: HookSpec, payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         with urllib.request.urlopen(req, timeout=hook.timeout) as resp:
             body = resp.read().decode("utf-8", errors="replace")
-    except TimeoutError:
+    except (TimeoutError, socket.timeout):
         return _outcome("error", f"hook timed out after {hook.timeout}s: {hook.url}")
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            return _outcome("error", f"hook timed out after {hook.timeout}s: {hook.url}")
+        return _outcome("error", f"hook request to {hook.url} failed: {exc}")
+    except (OSError, ValueError) as exc:
         return _outcome("error", f"hook request to {hook.url} failed: {exc}")
     return _from_output(_decision_from_stdout(body))
 

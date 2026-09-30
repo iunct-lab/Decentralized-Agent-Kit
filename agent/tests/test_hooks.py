@@ -1,7 +1,11 @@
 """Tests for the external hooks declared in DAK_HOOKS (dak_agent.hooks)."""
 import json
 import logging
+import socket
 import threading
+import time
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -185,3 +189,68 @@ def test_run_http_hook_connection_failure_is_error():
     server.server_close()
     outcome = hooks.run_hook(HookSpec(event="PreToolUse", type="http", url=f"http://127.0.0.1:{port}/"), _payload())
     assert outcome["decision"] == "error"
+
+
+def test_load_hooks_skips_entries_with_wrong_field_types(monkeypatch, caplog):
+    # One bad entry must not break lookups for every tool call later (fnmatch on a list raises).
+    monkeypatch.setenv("DAK_HOOKS", json.dumps([
+        {"event": "PreToolUse", "type": "command", "command": "exit 0", "if": ["run_*"]},
+        {"event": "PreToolUse", "type": "command", "command": ["exit", "0"]},
+        {"event": "PreToolUse", "type": "http", "url": 1},
+        {"event": "PreToolUse", "type": "command", "command": "exit 0", "timeout": "soon"},
+        {"event": "PreToolUse", "type": "command"},
+        {"event": "PreToolUse", "type": "http"},
+        {"event": "PreToolUse", "type": "command", "command": "exit 0"},
+    ]))
+    with caplog.at_level(logging.WARNING, logger="dak_agent.hooks"):
+        loaded = hooks.load_hooks()
+    assert loaded == [HookSpec(event="PreToolUse", type="command", command="exit 0")]
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 6
+    assert hooks.hooks_for(loaded, "PreToolUse", "run_command") == loaded
+
+
+def test_load_hooks_ignores_non_array(monkeypatch):
+    monkeypatch.setenv("DAK_HOOKS", json.dumps({"event": "PreToolUse", "type": "command", "command": "exit 0"}))
+    assert hooks.load_hooks() == []
+
+
+def test_run_command_hook_ask_is_deny():
+    # DAK has no way to ask the user from a hook; an "ask" must not let the tool run unapproved.
+    out = json.dumps({"hookSpecificOutput": {"permissionDecision": "ask", "permissionDecisionReason": "confirm?"}})
+    outcome = hooks.run_hook(_command(f"echo '{out}'"), _payload())
+    assert outcome["decision"] == "deny"
+    assert "ask" in outcome["reason"]
+    assert "confirm?" in outcome["reason"]
+
+
+def test_run_command_hook_top_level_block_is_deny():
+    # Claude Code's PostToolUse / Stop hooks block with a top-level decision.
+    out = json.dumps({"decision": "block", "reason": "output leaks a secret"})
+    outcome = hooks.run_hook(_command(f"echo '{out}'"), _payload())
+    assert outcome["decision"] == "deny"
+    assert outcome["reason"] == "output leaks a secret"
+
+
+def test_run_command_hook_timeout_kills_child_processes(tmp_path):
+    marker = tmp_path / "late"
+    outcome = hooks.run_hook(_command(f"sh -c 'sleep 1; touch {marker}'; true", timeout=0.2), _payload())
+    assert outcome["decision"] == "error"
+    time.sleep(1.5)
+    assert not marker.exists()
+
+
+def test_run_http_hook_reads_updated_input(hook_server):
+    _HookHandler.reply = json.dumps({"hookSpecificOutput": {"updatedInput": {"command": "ls -la"}}}).encode()
+    url = f"http://127.0.0.1:{hook_server.server_address[1]}/hook"
+    outcome = hooks.run_hook(HookSpec(event="PreToolUse", type="http", url=url), _payload())
+    assert outcome["decision"] == "allow"
+    assert outcome["updated_input"] == {"command": "ls -la"}
+
+
+def test_run_http_hook_connect_timeout_says_timed_out(monkeypatch):
+    def slow(*args, **kwargs):
+        raise urllib.error.URLError(socket.timeout("timed out"))
+    monkeypatch.setattr(urllib.request, "urlopen", slow)
+    outcome = hooks.run_hook(HookSpec(event="PreToolUse", type="http", url="http://hooks.example/", timeout=1), _payload())
+    assert outcome["decision"] == "error"
+    assert outcome["reason"].startswith("hook timed out after 1s")
