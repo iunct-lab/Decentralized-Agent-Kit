@@ -121,6 +121,14 @@ class TestSandboxManager(unittest.TestCase):
         self.assertEqual(manager.reap_expired(now=now), ["old"])
         self.assertEqual(sorted(manager._sessions), ["new"])
 
+    def test_docker_calls_have_a_timeout(self):
+        run = MagicMock()
+        manager = SandboxManager(mode="docker", run=run)
+        manager.ensure_session("s1")
+        manager.destroy_session("s1")
+        for call in run.call_args_list:
+            self.assertIn("timeout", call.kwargs)
+
     def test_destroy_all_removes_every_session(self):
         run = MagicMock()
         manager = SandboxManager(mode="docker", run=run)
