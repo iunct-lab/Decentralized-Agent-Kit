@@ -136,7 +136,7 @@ MRTR の形: サーバはクライアントの要求（`tools/call` など）に
 
 ## 未検証事項
 
-- 1 回のモデルの応答が複数の確認を出したとき、reply が 1 件だけに答えると、残りの確認は捨てられる（答えが最後の user イベントになり、残りはその前に並ぶので一覧から消え、reply は `404`。ADK は最後の user イベントの答えしか読まないので、そのツールは動かず、モデルにも何も届かない）。今は `PermissionPlugin` が MCP のツールにも確認を求め（上の追記）、1 回の応答で確認の要るツールを複数呼ぶことは止めていない（`AdaptiveAgent` にも enforcer にもその制限は無い）ので、今でも起きうる。#100 ではこの制限を残し（どちらのクライアントから答えても同じ結果になる、という受け入れ条件 1 は変わらない）、兄弟の確認をどう扱うか（まとめて答える・残りを一覧に残す）は要件の解釈なので、Task #406（#101 の子）で利用者に確かめて扱う
+- （#406 で解消）1 回のモデルの応答が複数の確認を出したとき、reply が 1 件だけに答えると、残りの確認は捨てられていた（ADK は最後の user イベントの答えしか読まない）。2026-09-30 に利用者の判断（#406 の `## 回答` A）で、reply のメッセージに、答えていない同じターンの確認への `reject`（理由 `approvals.UNANSWERED_REASON`。期限切れのものは `timed_out`）を入れるようにした（`approvals.build_reply_function_response` の `unanswered`）。モデルには `denied_by_user` の Observation として届き、必要ならモデルがもう一度呼ぶ（そのとき改めて確認が出る）。fake-LLM 構成の `tests/integration/test_approvals.py` の並列の 2 件で確かめた
 
 - この文書の ADK の流れはコードを読んで確かめたもので、動かしてはいない（#175 の統合テストで確かめる）
 - 別のエージェント（sub_agent）が出した確認は、そのエージェントの processor が処理する（`request_confirmation.py` の「authored by another agent」）。DAK の sub_agent は A2A の `RemoteA2aAgent` だけ（`agent/dak_agent/agent.py:91-92`）で、ツールの確認はその先のエージェントの中で起きる。こちらのセッションに `adk_request_confirmation` を出すのは `AdaptiveAgent` だけなので、一覧は author を見ない（動かしてはいない）
