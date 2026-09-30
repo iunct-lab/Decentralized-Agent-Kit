@@ -14,7 +14,7 @@ on:
         required: true
       model:
         description: "Ollama model"
-        default: "llama3.2:3b"
+        default: "llama3.1:8b"
 
 permissions:
   contents: write
@@ -33,11 +33,32 @@ jobs:
           key: ollama-${{ github.event.inputs.model }}
 
       - name: Install and start Ollama
+        timeout-minutes: 15
+        env:
+          MODEL: ${{ github.event.inputs.model }}
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
-          nohup ollama serve > ollama.log 2>&1 &
+          # インストーラが systemd サービスとして 127.0.0.1 バインドの ollama を
+          # 自動起動しうる。それが残っていると手動起動が port 競合で死んでも
+          # localhost への health check は通ってしまうため、先に確実に止める。
+          sudo systemctl stop ollama 2>/dev/null || true
+          # 既定の 127.0.0.1 バインドではコンテナから host-gateway 経由で届かない。
+          # agent コンテナ（host.docker.internal → ホストのゲートウェイ IP）から
+          # 到達できるよう全インターフェースで listen する。
+          OLLAMA_HOST=0.0.0.0:11434 nohup ollama serve > ollama.log 2>&1 &
           for i in $(seq 1 30); do curl -sf http://localhost:11434/api/version && break || sleep 1; done
-          ollama pull "${{ github.event.inputs.model }}"
+          # コンテナ視点での到達性を起動前に検証し、届かないなら silent 500 の
+          # 連鎖ではなくここで大きく失敗させる。
+          docker run --rm --add-host host.docker.internal:host-gateway \
+            curlimages/curl -sf http://host.docker.internal:11434/api/version
+          # ~4.9GB の pull は一過性のネットワーク断で落ちやすい。リトライで
+          # 夜間シグナルが丸ごと欠ける事態を減らす（timeout-minutes が上限）。
+          for attempt in 1 2 3; do
+            ollama pull "$MODEL" && break
+            [ "$attempt" = 3 ] && exit 1
+            echo "pull failed (attempt $attempt), retrying in 15s..."
+            sleep 15
+          done
 
       - uses: astral-sh/setup-uv@v7
 
