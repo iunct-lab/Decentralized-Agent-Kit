@@ -11,9 +11,9 @@ services:
       - SESSION_SERVICE_URI=postgresql+asyncpg://username:password@postgres:5432/postgres
       - MCP_SERVER_URL=http://mcp-server:8000/mcp
       # Bare pass-through: host shell value, else .env (env_file), else unset.
-      # Unset resolves in agent/dak_agent/config.py: legacy GEMINI_MODEL_NAME
-      # (if .env still carries it), then DEFAULT_MODEL_NAME. No default is
-      # repeated here on purpose (guarded by agent/tests/test_config.py).
+      # Unset resolves to DEFAULT_MODEL_NAME in agent/dak_agent/config.py.
+      # No default is repeated here on purpose (guarded by
+      # agent/tests/test_config.py).
       - MODEL_NAME
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}

@@ -69,29 +69,15 @@ def load_agent_config(path: Optional[str] = None) -> AgentConfig:
 
 
 def resolve_model_name(env: Optional[Mapping[str, str]] = None) -> str:
-    """Pick the model: MODEL_NAME, then legacy GEMINI_MODEL_NAME, then DEFAULT_MODEL_NAME.
+    """Pick the model: MODEL_NAME, else DEFAULT_MODEL_NAME.
 
-    Blank values count as unset. An empty MODEL_NAME reaches the agent when
-    .env carries a bare `MODEL_NAME=` line or the shell exports it empty (which
-    also beats a non-empty .env value under compose); passing it on would hand
-    LiteLLM an empty model name that only fails at the first request.
-
-    GEMINI_MODEL_NAME is an undocumented legacy alias (its fate is tracked in
-    PBI #72). Since compose stopped injecting a MODEL_NAME default it is
-    reachable there too, so its use is logged rather than silent.
+    A blank MODEL_NAME counts as unset. It reaches the agent when .env carries
+    a bare `MODEL_NAME=` line or the shell exports it empty (which also beats a
+    non-empty .env value under compose); passing it on would hand LiteLLM an
+    empty model name that only fails at the first request.
     """
     env = os.environ if env is None else env
-    value = (env.get("MODEL_NAME") or "").strip()
-    if value:
-        return value
-    legacy = (env.get("GEMINI_MODEL_NAME") or "").strip()
-    if legacy:
-        logger.warning(
-            f"Model '{legacy}' comes from the legacy GEMINI_MODEL_NAME variable; "
-            "set MODEL_NAME instead (it takes precedence)."
-        )
-        return legacy
-    return DEFAULT_MODEL_NAME
+    return (env.get("MODEL_NAME") or "").strip() or DEFAULT_MODEL_NAME
 
 
 def get_litellm_model_name(model_name: str) -> str:
