@@ -189,7 +189,7 @@ PBI #17。外部のシステム（シェルスクリプト、CI、別のエー�
 **決定: A1。** 非対話の `run` は、ターンが確認か質問で止まったら reply を送らずに終わる。
 
 - `--format json` の出力は `{"status": "needs_approval", "session_id": "...", "output": "<止まるまでのモデルのテキスト>", "error": "needs_approval", "approvals": [...]}`、exit 3
-- `approvals` の要素は `GET /approvals` の要素をそのまま（`id`・`kind`（`approval` / `question`）・`tool_name`・`tool_args`・`questions` など）。取得は、ターンが確認か質問で止まったときだけ `AgentClient.list_approvals(session_id)` を呼ぶ。`_needs_approval` の 1 件ではなく一覧を返すのは、1 回のモデルの応答が複数の確認を出すことがあるため
+- `approvals` の要素は `GET /approvals` の要素をそのまま（`id`・`kind`（`approval` / `question`）・`tool_name`・`tool_args`・`questions` など）。取得は、ターンが確認か質問で止まったときだけ `AgentClient.list_approvals(session_id)` を呼ぶ。止まったことは応答のイベントから判定する: 確認は今の `_needs_approval` と同じく `adk_request_confirmation` の functionCall、質問は最後のイベントが `ask_question` の functionResponse で `error` を持たないこと（agent 側の `list_pending_questions` と同じ条件、`approvals.py:77-79`）。`_needs_approval` の 1 件ではなく一覧を返すのは、1 回のモデルの応答が複数の確認を出すことがあるため
 - `--format markdown` では、保留ごとに `dak-cli approve <id> --session <session_id>` で答えられることを stderr に書く
 - 非対話かどうかは **stdin が端末かどうか**で決める（`typer.confirm` が読む先）。stdin が端末なら、`--format json` でも今までどおり対話で聞く（問いは stderr に出す）
 
@@ -209,7 +209,7 @@ PBI #17。外部のシステム（シェルスクリプト、CI、別のエー�
 
 **決定: A。** 単発呼び出しは `run` に一本化し、`chat` は対話専用のまま（`--format`・stdin・exit code の契約を足さない）。
 
-- `run` と `chat` が共有するのは、応答の組み立て（`_extract_response_text`、`main.py:24-57`）と、端末があるときの承認（`_answer_approvals`）だけ。今の `run` は `_extract_response_text` と同じ処理を自前で持っている（`main.py:115-151`）ので、実装の PR でそれを使う形にそろえる
+- `run` と `chat` が共有するのは、応答の組み立て（`_extract_response_text`、`main.py:24-57`）と、端末があるときの承認（`_answer_approvals`）だけ。今の `run` は `_extract_response_text` と同じ処理を自前で持っている（`main.py:115-151`）ので、`--format markdown` の表示は実装の PR でそれを使う形にそろえる。`_extract_response_text` はターンの全部のモデルのテキストをつなぐので、`--format json` の `output` と失敗の判定には使わない（§3-4）
 - `chat` の enforcer の自動再試行（`main.py:248-267`）は `run` に持ち込まない。再試行は呼び出しごとの検査（#140、`dak:inspection`）が agent 側で行う
 
 根拠: 1 つの目的に 1 つのコマンド（B は同じことをする 2 つ目の入口を作る）。§2-a で、引数だけの今の呼び方は変わらないことを確かめた。exit code の変化は、失敗を成功と読んでいた呼び出しを正す変化（§2-c）。
@@ -223,6 +223,7 @@ PBI #17。外部のシステム（シェルスクリプト、CI、別のエー�
 | `output_schema_validation_failed` | `agent/dak_agent/adaptive_agent.py:579`（#137） | `issues` | main |
 | `model_not_allowed` | `agent/dak_agent/call_config.py:140`（#138） | `requested_model`・`allowed_models` | main |
 | `invalid_tools` | `call_config.py:210`（#136） | `expected` | main |
+| `invalid_mcp_servers` | `call_config.py:241`（#136） | `expected` | main |
 | `mcp_server_not_allowed` | `call_config.py:248`（#136） | `requested_urls`・`allowed_urls` | main |
 | `turn_limit_exceeded` | #134（Task #202 の予定） | `limit`・`calls_used`・`elapsed_seconds` | 未実装 |
 | `inspection_failed` | #140（Task #245 の予定） | `attempts`・`issues`・`last_response` | 未実装 |
@@ -236,7 +237,8 @@ PBI #17。外部のシステム（シェルスクリプト、CI、別のエー�
  "error": "model_not_allowed", "requested_model": "openai/not-allowed", "allowed_models": ["openai/fake-default"]}
 ```
 
-- モデルの最終テキストが JSON のオブジェクトで、`error` が上の表の種別のどれかなら、`status: "failed"`・exit 4。そのオブジェクトのキーをすべてトップレベルに置く（`error` の値は §2-b の `error` と同じになる）。§2-b のキー（`status`・`session_id`・`output`）と名前が重なるときは §2-b のキーを残す（今の種別のキーはどれも重ならない）
+- 「モデルの最終テキスト」は、そのターンの**最後のモデルのイベントのテキストだけ**（途中でツール呼び出しと一緒に書いたテキストはつながない。`output_schema` の検査もツール呼び出しを含む応答を飛ばす、`adaptive_agent.py:568`）。`output` も同じ文字列にする
+- それが JSON のオブジェクトで、`error` が上の表の種別のどれかなら、`status: "failed"`・exit 4。そのオブジェクトのキーをすべてトップレベルに置く（`error` の値は §2-b の `error` と同じになる）。§2-b のキー（`status`・`session_id`・`output`）と名前が重なるときは §2-b のキーを残す（今の種別のキーはどれも重ならない）
 - 表に無い種別の `error` を持つ JSON は、モデルの普通の応答として `succeeded`（`dak:output_schema` で呼び出し元が `error` という項目を定義することがあるため）。種別を足したときは、CLI の一覧にも足す
 - `dak:tools_error` がそのターンのイベントの `stateDelta` にあれば、`tools_error` として同じ値を入れる。`status` は変えない（失敗ではないため）
 - A2A・HTTP の呼び出し元が応答テキストを `json.loads` して `error` を見るのと、CLI の呼び出し元が stdout を `jq .error` で見るのとで、同じ種別名・同じキーで判定できる
