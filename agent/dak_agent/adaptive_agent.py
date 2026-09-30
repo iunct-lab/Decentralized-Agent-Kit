@@ -95,7 +95,7 @@ class AdaptiveAgent(LlmAgent):
             "before_agent_callback": self._restore_session_config,
             "after_model_callback": self._wrapped_callback,
             "on_tool_error_callback": self._on_tool_error,
-            "after_tool_callback": self._restore_reject_reason,
+            "after_tool_callback": self._after_tool,
         }
         if sub_agents:
             init_kwargs["sub_agents"] = sub_agents
@@ -543,11 +543,9 @@ class AdaptiveAgent(LlmAgent):
             if schema_failure is not None:
                 return schema_failure
 
-            # 3. Record any switch_mode tool call
-            self._check_for_switch_request(llm_response, callback_context)
-
-            # 4. Switch modes if the LLM asked for it. Context-window pressure is
-            #    handled by the context harness (ADK compaction), not here.
+            # 3. Switch modes if a switch_mode call already ran (`_after_tool`
+            #    records it; see there). Context-window pressure is handled by
+            #    the context harness (ADK compaction), not here.
             if not self._disable_mode_switching and self._mode_manager.should_switch(callback_context.state):
                 await self._perform_mode_switch(callback_context)
 
@@ -580,18 +578,21 @@ class AdaptiveAgent(LlmAgent):
         failure = {"error": "output_schema_validation_failed", "issues": issues}
         return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=json.dumps(failure))]))
 
-    def _check_for_switch_request(self, llm_response: LlmResponse, callback_context: CallbackContext):
-        """Check if the LLM called the switch_mode tool."""
-        if llm_response.content and llm_response.content.parts:
-            for part in llm_response.content.parts:
-                if hasattr(part, "function_call") and part.function_call:
-                    if part.function_call.name == "switch_mode":
-                        args = part.function_call.args or {}
-                        self._mode_manager.request_switch(
-                            callback_context.state,
-                            reason=args.get("reason", ""),
-                            new_focus=args.get("new_focus", ""),
-                        )
+    async def _after_tool(self, tool, args: dict, tool_context, tool_response) -> Optional[dict]:
+        """Restore a rejection reason, and switch modes once switch_mode has
+        actually run. Only here, after the tool: a call the permission plugin
+        denied or holds for confirmation returns a dict instead of the tool's
+        text, so it must not switch (#410)."""
+        restored = self._restore_reject_reason(tool, args, tool_context, tool_response)
+        if restored is not None:
+            return restored
+        if tool.name == "switch_mode" and isinstance(tool_response, str):
+            self._mode_manager.request_switch(
+                tool_context.state, reason=args.get("reason", ""), new_focus=args.get("new_focus", "")
+            )
+            if not self._disable_mode_switching and self._mode_manager.should_switch(tool_context.state):
+                await self._perform_mode_switch(tool_context)
+        return None
 
     def _extract_history_summary(self, context: CallbackContext) -> str:
         """Extract a short summary of the recent conversation history."""

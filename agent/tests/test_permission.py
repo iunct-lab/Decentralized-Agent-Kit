@@ -35,7 +35,7 @@ from dak_agent.permission import (
     strictest,
     tool_source,
 )
-from dak_agent.skill_tools import STATE_ACTIVE_SKILLS, STATE_MODE_TOOL_NAMES, make_mcp_toolset
+from dak_agent.skill_tools import STATE_ACTIVE_SKILLS, STATE_MODE_INSTRUCTION, STATE_MODE_TOOL_NAMES, make_mcp_toolset
 
 
 def run(command, rules=DEFAULT_RULES, source="default"):
@@ -390,3 +390,51 @@ def test_always_rule_does_not_bypass_active_plan():
     denied = responses(events, "run_command")[0]
     assert denied["observation"] == "denied_by_policy"
     assert "plan" in denied["reason"]
+
+
+# --- switch_mode goes through the same judgement (#410) ---
+
+def _switch_mode_run(rules, confirm=None):
+    """The model calls switch_mode once; returns (harness, events, final state)."""
+    from dak_agent.builtin_tools import switch_mode
+
+    llm = ScriptedLlm(model="scripted", call={"name": "switch_mode", "args": {"reason": "r", "new_focus": "files"}},
+                      requests=[])
+    agent = AdaptiveAgent(model=llm, name="dak_agent", instruction="Base.", tools=[FunctionTool(switch_mode)])
+    h = Harness(None, {}, rules=rules, agent=agent)
+    with patch("dak_agent.remote_tools.discover_remote_tools", return_value={}), \
+            patch("dak_agent.mode_manager.ModeManager.generate_mode_config",
+                  return_value=("Switched instruction.", [], [])) as generate:
+        events = h.say("switch")
+        if confirm is not None:
+            events = h.answer(events, confirm)
+    state = asyncio.run(h.sessions.get_session(app_name="dak_agent", user_id="u", session_id=h.session.id)).state
+    return events, state, generate
+
+
+def test_switch_mode_is_applied_when_allowed():
+    events, state, generate = _switch_mode_run(DEFAULT_RULES)
+    generate.assert_called_once()
+    assert state.get(STATE_MODE_INSTRUCTION) == "Switched instruction."
+
+
+def test_denied_switch_mode_does_not_switch():
+    events, state, generate = _switch_mode_run(DEFAULT_RULES + [Rule("local", "switch_mode", "*", "deny")])
+    generate.assert_not_called()
+    assert STATE_MODE_INSTRUCTION not in state
+    assert responses(events, "switch_mode")[0]["observation"] == "denied_by_policy"
+
+
+def test_switch_mode_waits_for_confirmation():
+    ask = DEFAULT_RULES + [Rule("local", "switch_mode", "*", "ask")]
+    _, held, generate = _switch_mode_run(ask)
+    generate.assert_not_called()  # held: nothing switched yet
+    assert STATE_MODE_INSTRUCTION not in held
+
+    _, approved, generate = _switch_mode_run(ask, confirm=True)
+    generate.assert_called_once()
+    assert approved.get(STATE_MODE_INSTRUCTION) == "Switched instruction."
+
+    _, rejected, generate = _switch_mode_run(ask, confirm=False)
+    generate.assert_not_called()
+    assert STATE_MODE_INSTRUCTION not in rejected
