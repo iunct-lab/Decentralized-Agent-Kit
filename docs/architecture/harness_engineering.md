@@ -50,6 +50,18 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
 
 `agent.py` は `root_agent` に加えて ADK の `App` を公開し、ADK の FastAPI アプリ（A2A を含む。
 `agent/dak_agent/server.py` が `get_fast_api_app` で作る）は `app` のほうを優先して読み込む。安いものから順に 3 段で防ぎ、それでも超えたときの回復を 4 段目に置く。
+その手前で、止まらないツールの呼び出しそのものを 0 段目で止める。
+
+0. **ツール呼び出しのガード**（`ContextHarnessPlugin.before_tool_callback`、#170）
+   - 小型モデルは同じツールを同じ引数で呼び続けやすい。次のどれかに当たったら、ツールを
+     実行せずに理由付きの Observation（辞書）をツールの結果として返す。例外は投げない。
+     - 同じ呼び出し（ツール名 + 引数の SHA-256）が `DAK_MAX_REPEATED_TOOL_CALLS`（既定 3）回を
+       超えて続いた → `{"observation": "repeated_call", "tool", "count", "hint"}`
+     - 1 invocation のツール呼び出しが `DAK_MAX_TOOL_CALLS`（既定 40）回を超えた → `step_limit_exceeded`
+     - invocation の最初のツール呼び出しから `DAK_MAX_WALL_SECONDS`（既定 300）秒を超えた → `wall_time_exceeded`
+   - カウンタは invocation ごとに `temp:dak_tool_guard` に持つ（ADK の `temp:` state は保存されないので、
+     セッションに溜まらず、次の invocation は 0 から数える）。
+   - ツール定義を次のモデル呼び出しから外すことはしない（PBI #99 の決定ログ）。
 
 1. **ツール出力の上限**（`ContextHarnessPlugin.after_tool_callback`）
    - 上限を超えた結果は先頭 70% と末尾 30% のプレビューに置き換え、全文は Artifact
@@ -112,6 +124,9 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 | `DAK_REQUEST_BUDGET_RATIO` | `0.85` | 最終ガードの上限 |
 | `DAK_MODEL_ERROR_RETRY_ATTEMPTS` | `2` | 窓超過のエラーを受けたときの呼び直しの回数（予算は毎回半分）。`0` で呼び直さずに説明文を返す |
 | `DAK_TOOL_OUTPUT_MAX_CHARS` | 窓の 15%（2K〜40K 文字） | 1 回のツール結果の上限 |
+| `DAK_MAX_REPEATED_TOOL_CALLS` | `3` | 同じ呼び出し（ツール + 引数）を続けて実行してよい回数。超えると `repeated_call` |
+| `DAK_MAX_TOOL_CALLS` | `40` | 1 invocation で実行してよいツール呼び出しの数。超えると `step_limit_exceeded` |
+| `DAK_MAX_WALL_SECONDS` | `300` | 最初のツール呼び出しからこの秒数を過ぎたら、以後のツールを `wall_time_exceeded` で止める |
 
 目安: 8K 窓 → 圧縮 4,915 tok / ツール出力 2,000 文字。32K 窓 → 19,660 tok / 4,915 文字。
 1M 窓 → ツール出力 40,000 文字。
