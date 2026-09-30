@@ -1,5 +1,6 @@
 """Tests for the context-engineering harness (dak_agent/harness.py)."""
 import os
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -565,6 +566,189 @@ class TestRequestBudgetGuard:
 
         assert request.contents[0] is summary
         assert len(summary.parts[0].text) == len("User request: ") + 3000
+
+
+class _ArtifactContext:
+    """The artifact half of a CallbackContext / ToolContext, kept in a dict."""
+
+    def __init__(self, saved=None):
+        self.saved = dict(saved or {})
+        self.save_calls = 0
+
+    async def save_artifact(self, name, part):
+        self.save_calls += 1
+        self.saved[name] = part
+        return 0
+
+    async def load_artifact(self, name):
+        return self.saved.get(name)
+
+    async def list_artifacts(self):
+        return list(self.saved)
+
+
+def _turns(count, size=4000):
+    """`count` finished user turns, each: question, tool call, ~`size`//4-token tool result, answer."""
+    contents = []
+    for n in range(1, count + 1):
+        contents += [
+            types.Content(role="user", parts=[types.Part(text=f"q{n}")]),
+            types.Content(role="model", parts=[types.Part(function_call=types.FunctionCall(
+                id=f"c{n}", name="t", args={}))]),
+            types.Content(role="user", parts=[types.Part(function_response=types.FunctionResponse(
+                id=f"c{n}", name="t", response={"result": str(n) * size}))]),
+            types.Content(role="model", parts=[types.Part(text=f"a{n}")]),
+        ]
+    return contents
+
+
+def _response(contents, n):
+    """The function_response of turn `n` (1-based) in `_turns` contents."""
+    return contents[(n - 1) * 4 + 2].parts[0].function_response
+
+
+def _cleared(response):
+    return str(response.response.get("result", "")).startswith("[cleared;")
+
+
+class TestPruneOldToolResults:
+    """PBI #102 AC2: old tool results are cleared without a summary, the recent
+    user turns and call/response pairing are kept, and the output stays
+    readable through read_tool_output."""
+
+    async def _prune(self, contents, ctx=None, protect_tokens=0, protect_user_turns=2, minimum_tokens=0):
+        request = LlmRequest(contents=contents)
+        pruned = await harness.prune_old_tool_results(
+            request, ctx or _ArtifactContext(), protect_tokens, protect_user_turns, minimum_tokens)
+        return request, pruned
+
+    def test_settings_default_to_a_fifth_of_the_window(self):
+        s = HarnessSettings(context_window=8192)
+        assert s.prune_protect_token_budget == 1638
+        assert s.prune_protect_user_turns == 2
+        assert s.prune_minimum_tokens == 512
+
+    @patch.dict(os.environ, {"MODEL_CONTEXT_WINDOW": "8192", "DAK_PRUNE_PROTECT_TOKENS": "3000",
+                             "DAK_PRUNE_PROTECT_USER_TURNS": "1", "DAK_PRUNE_MINIMUM_TOKENS": "100"})
+    def test_settings_from_env(self):
+        s = HarnessSettings.from_env("openai/llamacpp")
+        assert s.prune_protect_token_budget == 3000
+        assert s.prune_protect_user_turns == 1
+        assert s.prune_minimum_tokens == 100
+
+    @pytest.mark.asyncio
+    async def test_prunes_only_beyond_the_protect_budget(self):
+        original = _turns(5)
+        contents = list(original)
+
+        request, pruned = await self._prune(contents, protect_tokens=1500)
+
+        # Turns 4-5 are protected; of the older results the newest (turn 3,
+        # ~1000 tokens) fits the 1500-token budget, turns 2 and 1 do not.
+        assert pruned == 2
+        assert [_cleared(_response(request.contents, n)) for n in range(1, 6)] == [True, True, False, False, False]
+        # The session's own Content objects are not mutated.
+        assert _response(original, 1).response == {"result": "1" * 4000}
+
+    @pytest.mark.asyncio
+    async def test_never_touches_the_protected_recent_user_turns(self):
+        contents = _turns(4)
+        protected = contents[8:]
+
+        request, pruned = await self._prune(contents, protect_tokens=0, protect_user_turns=2)
+
+        assert pruned == 2
+        assert all(a is b for a, b in zip(request.contents[8:], protected))
+
+    @pytest.mark.asyncio
+    async def test_a_single_turn_is_never_pruned(self):
+        """Within one user turn (a long tool loop) nothing is older than the
+        protected turns; compaction is what handles that case."""
+        contents = _turns(1) + [
+            types.Content(role="model", parts=[types.Part(function_call=types.FunctionCall(
+                id="c9", name="t", args={}))]),
+            types.Content(role="user", parts=[types.Part(function_response=types.FunctionResponse(
+                id="c9", name="t", response={"result": "9" * 4000}))]),
+        ]
+        _, pruned = await self._prune(contents, protect_tokens=0, protect_user_turns=1)
+        assert pruned == 0
+
+    @pytest.mark.asyncio
+    async def test_below_minimum_does_nothing(self):
+        contents = _turns(4)
+        before = list(contents)
+
+        request, pruned = await self._prune(contents, protect_tokens=0, minimum_tokens=10_000)
+
+        assert pruned == 0
+        assert all(a is b for a, b in zip(request.contents, before))
+
+    @pytest.mark.asyncio
+    async def test_pruned_result_can_be_reread_via_read_tool_output(self):
+        ctx = _ArtifactContext()
+        request, _ = await self._prune(_turns(3), ctx=ctx)
+
+        placeholder = _response(request.contents, 1).response["result"]
+        artifact = re.search(r"read_tool_output\('([^']+)'\)", placeholder).group(1)
+        page = await make_read_tool_output_tool(max_chars=10_000).func(artifact_name=artifact, tool_context=ctx)
+        assert page["content"] == "1" * 4000
+        assert page["done"]
+
+    @pytest.mark.asyncio
+    async def test_reuses_an_existing_artifact_instead_of_saving_again(self):
+        contents = _turns(3)
+        contents[2] = types.Content(role="user", parts=[types.Part(function_response=types.FunctionResponse(
+            id="c1", name="t", response={"result": "preview " * 500, "truncated": True,
+                                         "full_output_artifact": "tool_output_t_c1.txt"}))])
+        ctx = _ArtifactContext(saved={"tool_output_t_c1.txt": types.Part.from_text(text="full")})
+
+        request, pruned = await self._prune(contents, ctx=ctx)
+
+        assert pruned == 1
+        assert "tool_output_t_c1.txt" in _response(request.contents, 1).response["result"]
+        assert ctx.save_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_the_same_history_is_saved_once_across_requests(self):
+        """Every model call re-prunes the session's history; the artifact
+        written for a result on the first call is not written again."""
+        ctx = _ArtifactContext()
+        for _ in range(3):
+            request, pruned = await self._prune(_turns(3), ctx=ctx)
+            assert pruned == 1
+        assert ctx.save_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_without_artifact_service_the_result_is_kept(self):
+        ctx = MagicMock()
+        ctx.list_artifacts = AsyncMock(side_effect=ValueError("Artifact service is not initialized."))
+        ctx.save_artifact = AsyncMock(side_effect=ValueError("Artifact service is not initialized."))
+
+        request, pruned = await self._prune(_turns(3), ctx=ctx)
+
+        assert pruned == 0
+        assert _response(request.contents, 1).response == {"result": "1" * 4000}
+
+    @pytest.mark.asyncio
+    async def test_keeps_function_call_response_pairing(self):
+        request, pruned = await self._prune(_turns(5))
+
+        assert pruned == 3
+        calls = [p.function_call for c in request.contents for p in c.parts if p.function_call]
+        responses = [p.function_response for c in request.contents for p in c.parts if p.function_response]
+        assert [(c.id, c.name) for c in calls] == [(r.id, r.name) for r in responses]
+        assert [len(c.parts) for c in request.contents] == [1] * len(request.contents)
+
+    @pytest.mark.asyncio
+    async def test_before_model_callback_prunes_before_the_budget_guard(self):
+        plugin = ContextHarnessPlugin(HarnessSettings(context_window=8192, prune_minimum_tokens=0), "test-model")
+        request = LlmRequest(contents=_turns(4))
+        with patch("dak_agent.call_config.resolve_dak_settings", return_value={}), \
+                patch.object(harness, "fit_request_to_budget") as fit:
+            await plugin.before_model_callback(callback_context=_ArtifactContext(), llm_request=request)
+
+        assert _cleared(_response(request.contents, 1))
+        assert fit.call_args.args[0] is request
 
 
 class TestPerCallHarnessSettings:

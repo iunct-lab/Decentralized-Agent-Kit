@@ -19,8 +19,10 @@ Three layers, cheapest first:
    and never raises: a failed compaction is skipped or replaced by an excerpt,
    so it can no longer wedge a session.
 3. Request guard (``ContextHarnessPlugin.before_model_callback``): keeps a
-   user turn in the request after compaction (chat templates require one) and,
-   as a last resort, elides the oldest tool payloads when the assembled request
+   user turn in the request after compaction (chat templates require one),
+   clears old tool results without a summary (``prune_old_tool_results``: the
+   results before the last few user turns, beyond a token budget, become a
+   pointer to an artifact ``read_tool_output`` can read) and, as a last resort, elides the oldest tool payloads when the assembled request
    would still overflow (e.g. the summarizer failed).
 4. Overflow recovery (``ContextHarnessPlugin.on_model_error_callback``): when
    the model still rejects a request for size (the estimate was off, or the
@@ -69,6 +71,11 @@ _MAX_TOOL_OUTPUT_CHARS = 40_000
 _PLAN_WINDOW_FRACTION = 0.05
 _MIN_PLAN_CHARS = 1_000
 _MAX_PLAN_CHARS = 8_000
+# Fraction of the window the newest tool results before the protected user
+# turns may keep occupying before older ones are pruned.
+_PRUNE_PROTECT_WINDOW_FRACTION = 0.2
+
+_PRUNED_TEMPLATE = "[cleared; read_tool_output('{artifact}') で再取得可]"
 
 _ELIDED_TEMPLATE = (
     "[elided {chars} chars to fit the context window; call the tool again "
@@ -168,6 +175,9 @@ class HarnessSettings:
     max_repeated_tool_calls: int = 3
     max_invocation_tool_calls: int = 40
     max_wall_seconds: float = 300.0
+    prune_protect_tokens: Optional[int] = None
+    prune_protect_user_turns: int = 2
+    prune_minimum_tokens: int = 512
 
     @classmethod
     def from_env(cls, model_name: str) -> "HarnessSettings":
@@ -183,6 +193,9 @@ class HarnessSettings:
             max_repeated_tool_calls=_env_int("DAK_MAX_REPEATED_TOOL_CALLS", 3, 1),
             max_invocation_tool_calls=_env_int("DAK_MAX_TOOL_CALLS", 40, 1),
             max_wall_seconds=_env_float("DAK_MAX_WALL_SECONDS", 300.0, 0.0, float("inf")),
+            prune_protect_tokens=_env_int("DAK_PRUNE_PROTECT_TOKENS", 0, 0) or None,
+            prune_protect_user_turns=_env_int("DAK_PRUNE_PROTECT_USER_TURNS", 2, 0),
+            prune_minimum_tokens=_env_int("DAK_PRUNE_MINIMUM_TOKENS", 512, 0),
         )
 
     @property
@@ -212,6 +225,12 @@ class HarnessSettings:
         # CJK output also fits.
         budget = int(self.context_window * _TOOL_OUTPUT_WINDOW_FRACTION)
         return max(_MIN_TOOL_OUTPUT_CHARS, min(_MAX_TOOL_OUTPUT_CHARS, budget))
+
+    @property
+    def prune_protect_token_budget(self) -> int:
+        if self.prune_protect_tokens:
+            return self.prune_protect_tokens
+        return max(1, int(self.context_window * _PRUNE_PROTECT_WINDOW_FRACTION))
 
     @property
     def plan_chars(self) -> int:
@@ -689,6 +708,90 @@ def fit_request_to_budget(llm_request, budget_tokens: int, keep_last: int = 2) -
     return elided
 
 
+# --- Pruning old tool results ---
+
+
+def _is_user_turn(content: types.Content) -> bool:
+    return content.role == "user" and any(p.text for p in content.parts or [])
+
+
+def _protected_start(contents: list, protect_user_turns: int) -> int:
+    """Index of the oldest of the last `protect_user_turns` user turns (a user
+    text, not a tool result); it and everything after it are protected. 0 if
+    the request has no more user turns than that."""
+    if protect_user_turns <= 0:
+        return len(contents)
+    seen = 0
+    for index in range(len(contents) - 1, -1, -1):
+        if _is_user_turn(contents[index]):
+            seen += 1
+            if seen == protect_user_turns:
+                return index
+    return 0
+
+
+async def prune_old_tool_results(llm_request, callback_context, protect_tokens: int, protect_user_turns: int,
+                                 minimum_tokens: int) -> int:
+    """Clear old tool results without summarizing them.
+
+    Before the last `protect_user_turns` user turns, the newest tool results up
+    to `protect_tokens` stay; every older one is replaced by a pointer to an
+    artifact holding its text (the one the tool-output budget already saved,
+    else a new one), which ``read_tool_output`` reads back. Nothing happens
+    unless the cleared results add up to `minimum_tokens`. Like
+    `fit_request_to_budget`, contents are replaced, never mutated, and only
+    function_response parts change (their id and name stay, so every call
+    keeps its response). Returns the number of results cleared.
+    """
+    contents = llm_request.contents or []
+    seen = 0
+    candidates = []  # (content index, part index), newest first
+    candidate_tokens = 0
+    for index in range(_protected_start(contents, protect_user_turns) - 1, -1, -1):
+        for part_index in range(len(contents[index].parts or []) - 1, -1, -1):
+            part = contents[index].parts[part_index]
+            if not part.function_response:
+                continue
+            tokens = _part_tokens(part)
+            seen += tokens
+            # A result no bigger than its pointer (template + artifact name) is not worth clearing.
+            if seen > protect_tokens and tokens > estimate_tokens(_PRUNED_TEMPLATE) * 2:
+                candidates.append((index, part_index))
+                candidate_tokens += tokens
+    if not candidates or candidate_tokens < minimum_tokens:
+        return 0
+
+    existing: Optional[set] = None
+    pruned = 0
+    for index, part_index in candidates:
+        response = contents[index].parts[part_index].function_response
+        data = response.response or {}
+        artifact = data.get("full_output_artifact")
+        if not isinstance(artifact, str):
+            text = _result_text(data)
+            if text is None:
+                continue  # e.g. MCP media: not readable back as text
+            artifact = _artifact_name(response.name or "tool", response.id)
+            try:
+                if existing is None:
+                    existing = set(await callback_context.list_artifacts())
+                if artifact not in existing:
+                    await callback_context.save_artifact(artifact, types.Part.from_text(text=text))
+                    existing.add(artifact)
+            except Exception as e:  # no artifact service configured
+                logger.info("Context harness: could not offload %s output for pruning: %s", response.name, e)
+                continue
+        content = contents[index]
+        parts = list(content.parts)
+        parts[part_index] = types.Part(function_response=types.FunctionResponse(
+            id=response.id, name=response.name, response={"result": _PRUNED_TEMPLATE.format(artifact=artifact)}))
+        contents[index] = types.Content(role=content.role, parts=parts)
+        pruned += 1
+    if pruned:
+        logger.info("Context harness: pruned %d old tool result(s)", pruned)
+    return pruned
+
+
 # --- Tool-call guard ---
 
 # `temp:` state lives only for the current invocation and is never persisted,
@@ -875,8 +978,11 @@ class ContextHarnessPlugin(BasePlugin):
         return replacement
 
     async def before_model_callback(self, *, callback_context, llm_request) -> None:
+        settings = self._settings_for(callback_context)
         ensure_user_query(llm_request)
-        fit_request_to_budget(llm_request, self._settings_for(callback_context).request_token_budget)
+        await prune_old_tool_results(llm_request, callback_context, settings.prune_protect_token_budget,
+                                     settings.prune_protect_user_turns, settings.prune_minimum_tokens)
+        fit_request_to_budget(llm_request, settings.request_token_budget)
         return None
 
     async def on_model_error_callback(self, *, callback_context, llm_request, error) -> Optional[LlmResponse]:
