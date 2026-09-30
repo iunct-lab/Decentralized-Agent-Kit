@@ -1,5 +1,6 @@
 import importlib
 import os
+import subprocess
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
@@ -34,7 +35,7 @@ class TestSandboxManager(unittest.TestCase):
         manager = SandboxManager(mode="docker", run=run)
         first = manager.ensure_session("s1")
         second = manager.ensure_session("s1")
-        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_count, 2)  # rm of a leftover + run, once
         self.assertEqual(first["container_name"], second["container_name"])
 
         with patch("sandbox.tempfile.mkdtemp", return_value="/tmp/dak-sandbox-x") as mkdtemp:
@@ -47,6 +48,8 @@ class TestSandboxManager(unittest.TestCase):
         run = MagicMock()
         entry = SandboxManager(mode="docker", run=run).ensure_session("s1")
         cmd = run.call_args.args[0]
+        # A same-named leftover (a create that finished after our CLI timed out) is removed first.
+        self.assertEqual(run.call_args_list[0].args[0], ["docker", "rm", "-f", entry["container_name"]])
         self.assertEqual(cmd[:3], ["docker", "run", "-d"])
         for flag in ("--network", "none", "--read-only", "--cap-drop", "ALL", "--user", "nobody",
                      f"--cpus={sandbox.SANDBOX_CPUS}", f"--memory={sandbox.SANDBOX_MEMORY}",
@@ -79,7 +82,7 @@ class TestSandboxManager(unittest.TestCase):
         manager.destroy_session("s1")
         self.assertEqual(run.call_args.args[0], ["docker", "rm", "-f", name])
         manager.ensure_session("s1")
-        self.assertEqual(run.call_count, 3)  # run, rm, run again
+        self.assertEqual(run.call_count, 5)  # (rm, run), rm, (rm, run) again
 
         with patch("sandbox.tempfile.mkdtemp", return_value="/tmp/dak-sandbox-x") as mkdtemp, \
                 patch("sandbox.shutil.rmtree") as rmtree:
@@ -123,11 +126,24 @@ class TestSandboxManager(unittest.TestCase):
 
     def test_docker_calls_have_a_timeout(self):
         run = MagicMock()
+        run.return_value.stdout = "abc123\n"
         manager = SandboxManager(mode="docker", run=run)
         manager.ensure_session("s1")
         manager.destroy_session("s1")
+        manager.sweep()
         for call in run.call_args_list:
             self.assertIn("timeout", call.kwargs)
+
+    def test_a_timed_out_removal_does_not_stop_the_other_removals(self):
+        run = MagicMock()
+        manager = SandboxManager(mode="docker", run=run)
+        manager.ensure_session("a")
+        manager.ensure_session("b")
+        run.reset_mock()
+        run.side_effect = subprocess.TimeoutExpired("docker rm", 60)
+        manager.destroy_all()  # sweep() at the next start removes what timed out
+        self.assertEqual(manager._sessions, {})
+        self.assertEqual(run.call_count, 2)
 
     def test_destroy_all_removes_every_session(self):
         run = MagicMock()
@@ -136,8 +152,8 @@ class TestSandboxManager(unittest.TestCase):
         manager.ensure_session("b")
         manager.destroy_all()
         self.assertEqual(manager._sessions, {})
-        removed = [c.args[0] for c in run.call_args_list if c.args[0][:2] == ["docker", "rm"]]
-        self.assertEqual(len(removed), 2)
+        self.assertEqual(run.call_args_list[-2].args[0][:3], ["docker", "rm", "-f"])
+        self.assertEqual(run.call_args_list[-1].args[0][:3], ["docker", "rm", "-f"])
 
 
 if __name__ == "__main__":
