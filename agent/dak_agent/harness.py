@@ -672,23 +672,30 @@ def _elide_part(part: types.Part, kind: str) -> Optional[types.Part]:
     return None
 
 
-def _tail_keep_count(contents: list, budget_tokens: int) -> int:
-    """How many of the newest contents the budget guard leaves verbatim: the
-    newest user turns (a user text and everything after it) that fit in
-    `budget_tokens`, so a turn is not cut in the middle. When even the newest
-    turn does not fit (a long tool loop), as many of its newest contents as
-    fit, so the guard can still shrink the rest. At least 1 unless empty."""
-    used = 0
-    fitting = 0  # newest contents inside the budget
-    boundary = 0  # of those, up to the oldest user turn start
-    for index in range(len(contents) - 1, -1, -1):
-        used += _content_tokens(contents[index])
-        if used > budget_tokens:
+def _tail_keep_count(contents: list, budget_tokens: int, limit_tokens: int) -> int:
+    """How many of the newest contents the budget guard leaves verbatim: those
+    within `budget_tokens`, widened back to the start of the user turn the cut
+    falls in, so a turn is not cut in the middle. The widening stops at
+    `limit_tokens` (what the request holds besides its fixed part): a turn
+    bigger than that (a long tool loop) is cut where the budget ends, so the
+    guard can still shrink its older part. At least 1 unless empty."""
+    total = len(contents)
+    if not total:
+        return 0
+    start, used = total, 0
+    while start > 0:
+        tokens = _content_tokens(contents[start - 1])
+        if start < total and used + tokens > budget_tokens:
             break
-        fitting += 1
-        if _is_user_turn(contents[index]):
-            boundary = fitting
-    return boundary or max(fitting, min(1, len(contents)))
+        used += tokens
+        start -= 1
+    boundary = start
+    while boundary > 0 and not _is_user_turn(contents[boundary]):
+        boundary -= 1
+        used += _content_tokens(contents[boundary])
+        if used > limit_tokens:
+            return total - start
+    return total - boundary if _is_user_turn(contents[boundary]) else total - start
 
 
 def fit_request_to_budget(llm_request, budget_tokens: int, keep_last: int = 2) -> int:
@@ -1020,8 +1027,10 @@ class ContextHarnessPlugin(BasePlugin):
         ensure_user_query(llm_request)
         await prune_old_tool_results(llm_request, callback_context, settings.prune_protect_token_budget,
                                      settings.prune_protect_user_turns, settings.prune_minimum_tokens)
-        fit_request_to_budget(llm_request, settings.request_token_budget,
-                              keep_last=_tail_keep_count(llm_request.contents or [], settings.tail_reserve_tokens))
+        budget = settings.request_token_budget
+        keep_last = _tail_keep_count(llm_request.contents or [], settings.tail_reserve_tokens,
+                                     budget - _fixed_request_tokens(llm_request))
+        fit_request_to_budget(llm_request, budget, keep_last=keep_last)
         return None
 
     async def on_model_error_callback(self, *, callback_context, llm_request, error) -> Optional[LlmResponse]:

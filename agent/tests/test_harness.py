@@ -574,29 +574,31 @@ class TestRequestBudgetGuard:
         with patch.dict(os.environ, {"MODEL_CONTEXT_WINDOW": "8192", "DAK_TAIL_RESERVE_RATIO": "0.5"}):
             assert HarnessSettings.from_env("openai/llamacpp").tail_reserve_tokens == 4096
 
-    def test_tail_keep_count_keeps_whole_user_turns_within_the_budget(self):
-        """PBI #103 AC1: the tail starts at a user turn, so a turn is never cut
-        in the middle when it fits."""
+    def test_tail_keep_count_extends_to_the_nearest_user_boundary(self):
+        """PBI #103 AC1: the budget ends inside turn 2 (at its answer), so the
+        tail is widened back to turn 2's question; a turn is not cut in the middle."""
         contents = _turns(3, size=400)  # 12 contents, ~100 tokens per tool result
-        assert harness._tail_keep_count(contents, budget_tokens=250) == 8  # turns 2-3 (~210 tokens)
-        assert harness._tail_keep_count(contents, budget_tokens=150) == 4  # turn 3 only
+        assert harness._tail_keep_count(contents, budget_tokens=150, limit_tokens=10_000) == 8
+        # Turns 2-3 fit in 250 with room for turn 1's (empty-ish) answer, so turn 1 is kept whole too.
+        assert harness._tail_keep_count(contents, budget_tokens=250, limit_tokens=10_000) == 12
 
-    def test_tail_keep_count_cuts_inside_a_turn_larger_than_the_budget(self):
-        """A long tool loop in one turn: keep as many of its newest contents as
-        fit, rather than protecting the whole turn (the guard must still be
-        able to shrink the request)."""
+    def test_tail_keep_count_does_not_extend_past_what_the_request_can_hold(self):
+        """A turn bigger than the whole request (a long tool loop) is cut after
+        all, so the guard can still shrink its older part."""
         contents = [types.Content(role="user", parts=[types.Part(text="q")]),
                     _fr("a", 400), _fr("b", 400), _fr("c", 400)]  # ~100 tokens each
-        assert harness._tail_keep_count(contents, budget_tokens=250) == 2
+        assert harness._tail_keep_count(contents, budget_tokens=250, limit_tokens=10_000) == 4
+        assert harness._tail_keep_count(contents, budget_tokens=250, limit_tokens=300) == 2
 
     def test_tail_keep_count_minimum_is_one(self):
-        assert harness._tail_keep_count([_fr("a", 4000)], budget_tokens=10) == 1
-        assert harness._tail_keep_count([], budget_tokens=10) == 0
+        assert harness._tail_keep_count([_fr("a", 4000)], budget_tokens=10, limit_tokens=10) == 1
+        assert harness._tail_keep_count([], budget_tokens=10, limit_tokens=10) == 0
 
     @pytest.mark.asyncio
     async def test_before_model_callback_keeps_the_latest_user_turn_verbatim(self):
         """The guard shrinks the older turn and leaves the current one whole,
-        its reasoning included (a fixed `keep_last=2` dropped that first)."""
+        its reasoning included (a fixed `keep_last=2` dropped that first), even
+        when the turn is bigger than the tail reserve."""
         thought = types.Part(text="x" * 400, thought=True)
         current = [
             types.Content(role="user", parts=[types.Part(text="q2")]),
@@ -607,7 +609,7 @@ class TestRequestBudgetGuard:
             _fr("c3", 1200),
         ]
         contents = [types.Content(role="user", parts=[types.Part(text="q1")]), _fr("c1", 12000), *current]
-        plugin = ContextHarnessPlugin(HarnessSettings(context_window=4000), "test-model")
+        plugin = ContextHarnessPlugin(HarnessSettings(context_window=4000, tail_reserve_ratio=0.1), "test-model")
         request = LlmRequest(contents=contents)
         with patch("dak_agent.call_config.resolve_dak_settings", return_value={}):
             await plugin.before_model_callback(callback_context=_ArtifactContext(), llm_request=request)
