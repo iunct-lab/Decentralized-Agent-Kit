@@ -63,6 +63,13 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
      `after_tool_callback`（ADK はすべてのプラグインで実行する）で数える。拒否された呼び出しも連続を切り、上限に数える。
    - カウンタは invocation ごとに `temp:dak_tool_guard` に持つ（ADK の `temp:` state は保存されないので、
      セッションに溜まらず、次の invocation は 0 から数える）。
+   - 反復ではない連続した失敗（引数のスキーマ違反など）は、検査する側が
+     `note_argument_violation(tool_context, invocation_id)` で数える。同じ上限
+     （`DAK_MAX_REPEATED_TOOL_CALLS`）を超えて続くと `True` を返すので、呼び出し側は訂正のヒントの代わりに
+     止める Observation を返す。正常に実行できたら `note_call_success` で数え直す（#171）。
+   - 圧縮を何度も挟む長い invocation でも、カウンタは state にあって圧縮では消えないので、呼び出し数の上限で
+     有限回に止まる。`test_tool_loop_stops_at_step_limit_without_raising` が上限より 3 回多く呼び続ける台本モデルで、
+     圧縮 2 回以上のあとに `step_limit_exceeded` が返り、例外が出ないことを確かめている。
    - ツール定義を次のモデル呼び出しから外すことはしない（PBI #99 の決定ログ）。
 
 1. **ツール出力の上限**（`ContextHarnessPlugin.after_tool_callback`）
