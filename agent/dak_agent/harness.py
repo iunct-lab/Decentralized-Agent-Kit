@@ -736,8 +736,8 @@ async def prune_old_tool_results(llm_request, callback_context, protect_tokens: 
 
     Before the last `protect_user_turns` user turns, the newest tool results up
     to `protect_tokens` stay; every older one is replaced by a pointer to an
-    artifact holding its text (the one the tool-output budget already saved,
-    else a new one), which ``read_tool_output`` reads back. Nothing happens
+    artifact holding it (the one the tool-output budget already saved, else a
+    new one with the whole response), which ``read_tool_output`` reads back. Nothing happens
     unless the cleared results add up to `minimum_tokens`. Like
     `fit_request_to_budget`, contents are replaced, never mutated, and only
     function_response parts change (their id and name stay, so every call
@@ -768,9 +768,12 @@ async def prune_old_tool_results(llm_request, callback_context, protect_tokens: 
         data = response.response or {}
         artifact = data.get("full_output_artifact")
         if not isinstance(artifact, str):
-            text = _result_text(data)
-            if text is None:
-                continue  # e.g. MCP media: not readable back as text
+            if not response.id:
+                continue  # the artifact name would be shared by every id-less result of the tool
+            if set(data) == {"result"} and isinstance(data["result"], str):
+                text = data["result"]
+            else:
+                text = json.dumps(data, ensure_ascii=False, default=str)  # every field, not just the text
             artifact = _artifact_name(response.name or "tool", response.id)
             try:
                 if existing is None:

@@ -1,4 +1,5 @@
 """Tests for the context-engineering harness (dak_agent/harness.py)."""
+import json
 import os
 import re
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -693,6 +694,36 @@ class TestPruneOldToolResults:
         page = await make_read_tool_output_tool(max_chars=10_000).func(artifact_name=artifact, tool_context=ctx)
         assert page["content"] == "1" * 4000
         assert page["done"]
+
+    @pytest.mark.asyncio
+    async def test_the_saved_artifact_keeps_every_field_of_the_response(self):
+        """An MCP result carries more than its text (structuredContent, isError);
+        the artifact keeps the whole response, not only the flattened text."""
+        response = {"content": [{"type": "text", "text": "x" * 4000}], "structuredContent": {"rows": 3},
+                    "isError": True}
+        contents = _turns(3)
+        contents[2] = types.Content(role="user", parts=[types.Part(function_response=types.FunctionResponse(
+            id="c1", name="t", response=response))])
+        ctx = _ArtifactContext()
+
+        _, pruned = await self._prune(contents, ctx=ctx)
+
+        assert pruned == 1
+        assert json.loads(ctx.saved["tool_output_t_c1.txt"].text) == response
+
+    @pytest.mark.asyncio
+    async def test_a_result_without_a_call_id_is_not_pruned(self):
+        """Without an id the artifact name would be shared by every such result
+        of the tool (`tool_output_<tool>_call.txt`), so a pointer could lead to
+        another result."""
+        contents = _turns(3)
+        contents[1].parts[0].function_call.id = None
+        contents[2].parts[0].function_response.id = None
+
+        request, pruned = await self._prune(contents)
+
+        assert pruned == 0
+        assert _response(request.contents, 1).response == {"result": "1" * 4000}
 
     @pytest.mark.asyncio
     async def test_reuses_an_existing_artifact_instead_of_saving_again(self):
