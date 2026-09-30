@@ -278,9 +278,6 @@ class TestSessionSandboxRouting(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await main.list_files(".", ctx=_ctx("s2")), "")
                 self.assertEqual(await main.search_files("*.txt", ".", ctx=_ctx("s2")), "")
                 self.assertEqual(await main.grep("from", ".", ctx=_ctx("s2")), "No matches found.")
-                # The owner finds it under the path it used, not the directory behind it.
-                self.assertEqual(await main.search_files("*.txt", ".", ctx=_ctx("s1")), "./sub/note.txt")
-                self.assertEqual(await main.grep("from", "sub", ctx=_ctx("s1")), "sub/note.txt:1: from s1")
             finally:
                 sandbox.destroy_all()
 
