@@ -709,7 +709,7 @@ class TestPruneOldToolResults:
         _, pruned = await self._prune(contents, ctx=ctx)
 
         assert pruned == 1
-        assert json.loads(ctx.saved["tool_output_t_c1.txt"].text) == response
+        assert [json.loads(part.text) for part in ctx.saved.values()] == [response]
 
     @pytest.mark.asyncio
     async def test_a_result_without_a_call_id_is_not_pruned(self):
@@ -726,19 +726,26 @@ class TestPruneOldToolResults:
         assert _response(request.contents, 1).response == {"result": "1" * 4000}
 
     @pytest.mark.asyncio
-    async def test_ids_that_the_artifact_name_would_alter_are_not_pruned(self):
-        """`a/b` and `a?b` would both be saved as `tool_output_t_a_b.txt`, so one
-        pointer would lead to the other result."""
+    @pytest.mark.parametrize("calls", [
+        [("t", "a/b"), ("t", "a?b")],  # ids that differ only where a file name replaces characters
+        [("t_a", "b"), ("t", "a_b")],  # tool/id pairs that join to the same text
+    ])
+    async def test_distinct_results_never_share_an_artifact(self, calls):
         contents = _turns(4)
-        for n, call_id in ((1, "a/b"), (2, "a?b")):
-            contents[(n - 1) * 4 + 1].parts[0].function_call.id = call_id
-            contents[(n - 1) * 4 + 2].parts[0].function_response.id = call_id
+        for n, (name, call_id) in enumerate(calls, 1):
+            contents[(n - 1) * 4 + 1].parts[0].function_call = types.FunctionCall(id=call_id, name=name, args={})
+            contents[(n - 1) * 4 + 2].parts[0].function_response = types.FunctionResponse(
+                id=call_id, name=name, response={"result": str(n) * 4000})
         ctx = _ArtifactContext()
 
         request, pruned = await self._prune(contents, ctx=ctx)
 
-        assert pruned == 0
-        assert ctx.saved == {}
+        assert pruned == 2
+        read = make_read_tool_output_tool(max_chars=10_000).func
+        for n in (1, 2):
+            placeholder = _response(request.contents, n).response["result"]
+            artifact = re.search(r"read_tool_output\('([^']+)'\)", placeholder).group(1)
+            assert (await read(artifact_name=artifact, tool_context=ctx))["content"] == str(n) * 4000
 
     @pytest.mark.asyncio
     async def test_reuses_an_existing_artifact_instead_of_saving_again(self):
