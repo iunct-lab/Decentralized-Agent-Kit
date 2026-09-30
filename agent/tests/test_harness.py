@@ -413,6 +413,35 @@ class TestToolCallGuard:
             assert await self._call(plugin, second) is None
 
     @pytest.mark.asyncio
+    async def test_calls_intercepted_by_an_earlier_plugin_are_still_counted(self):
+        """In the app the PermissionPlugin runs first; when it answers a call
+        (denied / needs approval) ADK skips the later plugins' before_tool_callback,
+        but still runs every after_tool_callback."""
+        from google.adk.plugins.base_plugin import BasePlugin
+        from google.adk.plugins.plugin_manager import PluginManager
+
+        class DenyRunCommand(BasePlugin):
+            async def before_tool_callback(self, *, tool, tool_args, tool_context):
+                return {"observation": "denied_by_policy"} if tool.name == "run_command" else None
+
+        plugin, ctx = self._plugin(max_invocation_tool_calls=6), self._ctx()
+        manager = PluginManager(plugins=[DenyRunCommand(name="deny"), plugin])
+
+        async def call(name, n):
+            ctx.function_call_id = f"call-{n}"
+            tool, args = _tool(name), {"path": "a.txt"}
+            result = await manager.run_before_tool_callback(tool=tool, tool_args=args, tool_context=ctx)
+            await manager.run_after_tool_callback(
+                tool=tool, tool_args=args, tool_context=ctx, result=result or {"result": "ok"})
+            return result
+
+        calls = ["read_file"] * 3 + ["run_command", "read_file", "run_command"]
+        assert [await call(name, n) for n, name in enumerate(calls)] == [None] * 3 + [
+            {"observation": "denied_by_policy"}, None, {"observation": "denied_by_policy"}]
+        # The two denied calls broke the read_file streak and count toward the limit.
+        assert (await call("read_file", 6))["observation"] == "step_limit_exceeded"
+
+    @pytest.mark.asyncio
     async def test_guard_state_is_invocation_scoped_temp_state(self):
         plugin, ctx = self._plugin(), self._ctx()
         await self._call(plugin, ctx)
