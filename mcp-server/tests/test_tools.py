@@ -3,8 +3,11 @@ from unittest.mock import patch, mock_open, MagicMock, AsyncMock
 import os
 import sys
 import subprocess
+import tempfile
+from types import SimpleNamespace
 
 # Add parent directory to path to import main
+from sandbox import SandboxManager
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import main
@@ -192,6 +195,75 @@ class TestMCPTools(unittest.IsolatedAsyncioTestCase):
         with patch('os.walk', side_effect=PermissionError("Permission denied")):
             result = await main.search_files("*.py", "/test")
             self.assertIn("Error searching files", result)
+
+
+def _ctx(session_key=None):
+    """The smallest stand-in for FastMCP's Context: only the HTTP request headers."""
+    headers = {} if session_key is None else {"x-dak-session-key": session_key}
+    return SimpleNamespace(request_context=SimpleNamespace(request=SimpleNamespace(headers=headers)))
+
+
+class TestSessionSandboxRouting(unittest.IsolatedAsyncioTestCase):
+    """Tools run in the caller session's environment (docs/design/session-sandbox.md)."""
+
+    async def test_off_mode_keeps_the_callers_path_even_with_a_session_header(self):
+        # Default SANDBOX_MODE=off: a ctx with a session key must not change path resolution.
+        self.assertEqual(main._sandbox.mode, "off")
+        with patch('builtins.open', mock_open()) as mock_file, patch('os.makedirs'):
+            await main.write_file("/test/path.txt", "x", ctx=_ctx("s1"))
+        mock_file.assert_called_once_with("/test/path.txt", "w", encoding="utf-8")
+        with patch('subprocess.run') as run:
+            await main.run_command("echo hi", ctx=_ctx("s1"))
+        self.assertIsNone(run.call_args.kwargs["cwd"])
+
+    async def test_inproc_rejects_paths_outside_the_session_workspace(self):
+        with patch.object(main, "_sandbox", SandboxManager(mode="inproc")) as sandbox:
+            try:
+                for path in ("../escape.txt", "/etc/hostname"):
+                    result = await main.read_file(path, ctx=_ctx("s1"))
+                    self.assertIn("outside the session workspace", result)
+                result = await main.write_file("../escape.txt", "x", ctx=_ctx("s1"))
+                self.assertIn("outside the session workspace", result)
+            finally:
+                sandbox.destroy_all()
+
+    async def test_inproc_run_command_runs_in_the_session_workdir(self):
+        with patch.object(main, "_sandbox", SandboxManager(mode="inproc")) as sandbox:
+            try:
+                with patch('subprocess.run') as run:
+                    await main.run_command("ls", ctx=_ctx("s1"))
+                self.assertEqual(run.call_args.kwargs["cwd"], sandbox.ensure_session("s1")["workdir"])
+            finally:
+                sandbox.destroy_all()
+
+    async def test_missing_header_uses_the_default_session(self):
+        with patch.object(main, "_sandbox", SandboxManager(mode="inproc")) as sandbox:
+            try:
+                await main.write_file("a.txt", "x", ctx=_ctx())
+                await main.write_file("b.txt", "y")
+                self.assertEqual(sorted(sandbox._sessions), ["default"])
+                listing = await main.list_files(".", ctx=_ctx())
+                self.assertEqual(listing.split(), ["a.txt", "b.txt"])
+            finally:
+                sandbox.destroy_all()
+
+    async def test_docker_run_command_executes_in_the_session_container(self):
+        run = MagicMock()
+        run.return_value = MagicMock(returncode=0, stdout="hi\n", stderr="")
+        with patch.object(main, "_sandbox", SandboxManager(mode="docker", run=run)) as sandbox:
+            result = await main.run_command("echo hi | cat", ctx=_ctx("s1"))
+        cmd = run.call_args.args[0]
+        name = sandbox._container_name("s1")
+        self.assertEqual(cmd[:5], ["docker", "exec", "-w", "/workspace", name])
+        self.assertEqual(cmd[-3:], ["sh", "-c", "echo hi | cat"])  # shell semantics kept
+        self.assertIn("hi", result)
+
+    async def test_docker_file_tools_refuse_instead_of_touching_the_server_files(self):
+        with patch.object(main, "_sandbox", SandboxManager(mode="docker", run=MagicMock())), \
+                patch('builtins.open', mock_open(read_data="server file")) as mock_file:
+            result = await main.read_file("README.md", ctx=_ctx("s1"))
+        self.assertIn("not available in SANDBOX_MODE=docker", result)
+        mock_file.assert_not_called()
 
 
 if __name__ == '__main__':

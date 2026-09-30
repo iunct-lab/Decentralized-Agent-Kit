@@ -12,7 +12,10 @@ COPY pyproject.toml uv.lock .python-version ./
 RUN uv sync --frozen --no-install-project
 
 # Copy source code
-COPY main.py .
+COPY main.py sandbox.py ./
+# docker CLI (client only) for SANDBOX_MODE=docker. It reaches a daemon only when
+# the host's Docker socket is mounted, which docker-compose.yml does not do.
+COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY README.md .
 
 # Install project
