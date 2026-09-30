@@ -174,7 +174,7 @@ def read_plan(tool_context) -> str:
     return format_todos(todos) if isinstance(todos, list) and todos else "No plan recorded yet."
 
 
-def switch_mode(reason: str = "", new_focus: str = "") -> str:
+async def switch_mode(tool_context, reason: str = "", new_focus: str = "") -> str:
     """
     Request a mode switch.
 
@@ -186,6 +186,12 @@ def switch_mode(reason: str = "", new_focus: str = "") -> str:
     1. If you don't know what tools are available, call `list_skills` first.
     2. Call `switch_mode(reason="...", new_focus="...")` to switch to a mode that includes the desired tools.
     """
+    # The switch happens here, while the tool runs: only a call that the
+    # permission plugin let through (allowed, or approved) switches (#410).
+    agent = getattr(getattr(tool_context, "_invocation_context", None), "agent", None)
+    apply_switch = getattr(agent, "apply_switch_request", None)
+    if apply_switch is not None:
+        await apply_switch(tool_context, reason, new_focus)
     return f"Mode switch requested: {reason}. New focus: {new_focus}"
 
 
