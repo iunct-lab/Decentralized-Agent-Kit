@@ -98,7 +98,7 @@ class SandboxManager:
         try:
             self._run(["docker", "rm", "-f", *names], check=False, capture_output=True, text=True, timeout=60)
         except subprocess.TimeoutExpired:
-            pass
+            print(f"Warning: docker rm -f {' '.join(names)} timed out; left for the next sweep()")
 
     def destroy_session(self, session_key: str) -> None:
         with self._lock:
