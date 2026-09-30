@@ -34,6 +34,9 @@ Three layers, cheapest first:
 All limits derive from the model's context window (``MODEL_CONTEXT_WINDOW`` or
 LiteLLM's model map), so a llama.cpp server launched with 8K gets tight budgets
 while a 1M-token Gemini model is left mostly alone.
+
+Whether to enable ADK's ContextCacheConfig is decided in
+docs/design/prompt_cache_evaluation.md (PBI #94).
 """
 import hashlib
 import json
