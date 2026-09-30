@@ -63,9 +63,12 @@ Docker・実 LLM は使っていない（2026-09-30、google-adk 2.8）。
   （スクリプトのモデルは指示を読まない。下の「未検証」）
 - AP2: プラグインを入れると `PaymentRequiredError` が支払いの Observation にならず、反省の指示になる
   （`test_plugin_pre_empts_ap2_payment_observation`）。支払いの判断をモデルに渡す流れが壊れる
-- ハーネスのガードは実行を 3 回で止めるが、止めた後もモデルが呼び続ければモデル呼び出しは続く（上限は
-  `DAK_MAX_TOOL_CALLS`・`max_llm_calls`・`DAK_MAX_WALL_SECONDS`）。また、同じ引数で 4 回目に成功するはずの
-  呼び出しも止める
+- ハーネスのガードが止めるのはツールの実行で、モデル呼び出しではない。止めた後もモデルがツールを呼び続ければ、
+  `repeated_call`・`step_limit_exceeded`・`wall_time_exceeded` の Observation を受け取りながらモデル呼び出しは続く。
+  モデル呼び出しを止めるのは ADK の `RunConfig.max_llm_calls`（既定 500、環境変数 `ADK_MAX_LLM_CALLS`）だけで、
+  超えると `LlmCallsLimitExceededError` で invocation が終わる。呼び出しごとの `dak:max_llm_calls` は解決
+  （`call_config.resolve_call_limits`、#201）まであり、強制は #202（未完）。また、ハーネスのガードは同じ引数で
+  4 回目に成功するはずの呼び出しも止める
 
 ## 判断
 
@@ -76,10 +79,12 @@ Docker・実 LLM は使っていない（2026-09-30、google-adk 2.8）。
    （`docs/architecture/harness_engineering.md` §3 の 0）と逆になる。throw 無しでは回数の上限にならない
 2. AP2 の `PaymentRequiredError` を `AdaptiveAgent._on_tool_error` より先に握りつぶす。入れるなら
    サブクラスで支払いのエラーを素通しさせる改修が要り、標準のプラグインを使う利点が薄れる
-3. 無限の再試行を止める役目は、ハーネスの 0 段目（#170、PBI #99）が既に担っている。上限と停止条件は
-   そちら: 同じ呼び出しは `DAK_MAX_REPEATED_TOOL_CALLS`（3）回まで、invocation の呼び出しは
-   `DAK_MAX_TOOL_CALLS`（40）回まで、`DAK_MAX_WALL_SECONDS`（300）秒まで、モデル呼び出しは
-   `dak:max_llm_calls` / `RunConfig.max_llm_calls`。どれも超えたら理由付きの Observation を返す
+3. 失敗するツールの実行を繰り返させない役目は、ハーネスの 0 段目（#170、PBI #99）が既に担っている。
+   上限と停止条件はそちら: 同じ呼び出しの実行は `DAK_MAX_REPEATED_TOOL_CALLS`（3）回まで、invocation の
+   ツール実行は `DAK_MAX_TOOL_CALLS`（40）回まで、`DAK_MAX_WALL_SECONDS`（300）秒まで。超えたらツールを
+   実行せず理由付きの Observation を返す。モデル呼び出しの回数は ReflectAndRetry を入れても減らない
+   （throw 無しの表の 21）ので、その上限は別の話で、今は ADK の `RunConfig.max_llm_calls`（既定 500）が
+   例外で止める。呼び出しごとの上限を理由付きで返すのは PBI #134（強制は #202）
 4. 反省の指示は失敗 1 回ごとに約 1,000 文字（に引数とエラー）を足す。小さい窓（8K）のモデルでは、それ自体が圧縮を早める
 
 ## 未検証のこと
