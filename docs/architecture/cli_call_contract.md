@@ -47,7 +47,7 @@ PBI #17。外部のシステム（シェルスクリプト、CI、別のエー�
 | agent に接続できない（`run_task` が `ConnectionError`） | 0 | `Error: down` |
 | 応答が構造化された失敗（`{"error": "model_not_allowed", ...}`） | 0 | その JSON が枠つきの Markdown として出る |
 | 確認の要るツールに当たり、stdin が空（非対話） | 0 | 承認の枠、`Allow this tool execution? [y/N]: `、`Error: `（空） |
-| プロンプトの引数が無い | 2 | Typer の使い方の誤り |
+| プロンプトの引数が無い | 2 | 何も書かない（Typer（Click）の使い方の誤りは stderr に出る。`CliRunner` は 2 つを混ぜて見せる） |
 
 最後から 2 行目の中身: 承認の問い（`_answer_approvals` の `typer.confirm`、`main.py:69`）は stdin が EOF だと `click.Abort` を投げ、
 `run` の `except Exception` がそれを空のメッセージの `Error: ` として飲み込む。`reply_approval` は呼ばれないので、
