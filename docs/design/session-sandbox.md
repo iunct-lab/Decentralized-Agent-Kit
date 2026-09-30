@@ -97,6 +97,6 @@ Docker を使わず、mcp-server のプロセスの中でセッションごと�
 
 ## 未検証事項
 
-- `ctx.request_context.request.headers` で `X-DAK-Session-Key` が取れることはコードから読んだもので、実機では確かめていない（#284 の手順 1）
+- 確かめたこと（2026-09-30）: `SANDBOX_MODE=inproc` の mcp-server を uvicorn で起動し、`X-DAK-Session-Key` の異なる 2 つの MCP クライアント（`mcp` の `streamablehttp_client`）から呼んだ。ヘッダは `ctx.request_context.request.headers` で取れ、互いのファイルは見えず、`../` は拒まれ、TTL のあと作業ディレクトリは消えた（#284 の PR #444）。inproc の不可視と破棄は `mcp-server/tests/` の単体テストでも確かめる（#285）
 - `docker` モードの隔離（上のフラグが実際に効くこと、TTL の破棄）は動かしていない（#285、承認後）
 - rootless の Docker では、ソケットに触れて得られるのはそのデーモンを動かすユーザの権限で、上の「リスク」（ホストの root 相当）より小さい。一方で `--cpus` / `--pids-limit` は cgroup v2 の委譲が無いと効かない。どちらも実機で確かめていない

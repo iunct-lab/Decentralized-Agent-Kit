@@ -165,6 +165,31 @@ class TestSandboxManager(unittest.TestCase):
         self.assertEqual(run.call_args.args[0], ["ls"])
         self.assertEqual(run.call_args.kwargs["cwd"], "/tmp/dak-sandbox-x")
 
+    def test_two_session_keys_get_different_inproc_workdirs(self):
+        # Real mkdtemp/rmtree: no Docker needed.
+        manager = SandboxManager(mode="inproc")
+        try:
+            first = manager.ensure_session("alice:s1")["workdir"]
+            second = manager.ensure_session("bob:s2")["workdir"]
+            self.assertNotEqual(first, second)
+            self.assertTrue(os.path.isdir(first) and os.path.isdir(second))
+        finally:
+            manager.destroy_all()
+
+    def test_inproc_workdir_is_removed_on_destroy(self):
+        manager = SandboxManager(mode="inproc")
+        workdir = manager.ensure_session("s1")["workdir"]
+        with open(os.path.join(workdir, "left.txt"), "w") as f:
+            f.write("x")
+        manager.destroy_session("s1")
+        self.assertFalse(os.path.exists(workdir))
+
+    def test_inproc_workdir_is_removed_after_the_ttl(self):
+        manager = SandboxManager(mode="inproc", ttl_seconds=10)
+        workdir = manager.ensure_session("s1")["workdir"]
+        manager.reap_expired(now=manager._sessions["s1"]["last_used"] + 11)
+        self.assertFalse(os.path.exists(workdir))
+
     def test_destroy_all_removes_every_session(self):
         run = MagicMock()
         manager = SandboxManager(mode="docker", run=run)
