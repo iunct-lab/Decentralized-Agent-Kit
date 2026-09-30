@@ -17,7 +17,7 @@ Task 本文の `python3.13` は誤りで、agent の venv は 3.12。
   ```
 
   long running の呼び出しなので invocation はここで終わり、`POST /run` の応答も返る（HTTP 接続は残らない）
-- 答えは、同じ `app_name` / `user_id` / `session_id` への次の `POST /run` の `new_message` に載せた functionResponse:
+- 答えは、同じ `app_name` / `user_id` / `session_id` への次の `POST /run` の `new_message` に載せた functionResponse（1 つのメッセージに複数入れてよい。ADK は最後の user のメッセージの答えを全部読む）:
 
   ```json
   {"parts": [{"functionResponse": {"id": "<adk_request_confirmation の id>", "name": "adk_request_confirmation",
@@ -79,7 +79,7 @@ reply は `id` と次の本文で受ける（HTTP は #175 の `POST /approvals/
 
 ### 承認: `{"mode": "once" | "always" | "reject", "reason": ""}`
 
-`approvals.build_reply_function_response(fc_id, mode, reason)`（#173）が作る `new_message`:
+`approvals.build_reply_function_response(fc_id, mode, reason, unanswered)`（#173、`unanswered` は #406）が作る `new_message`。答える確認への functionResponse に加えて、同じ時点で承認待ちの他の確認（`unanswered`。ADK は最後の user のメッセージの答えしか読まないので、答えないと捨てられる）それぞれに `reject`（理由 `approvals.UNANSWERED_REASON`。期限切れのものは `timed_out`）の functionResponse を同じメッセージに入れる。それらも一覧から消えるので、SSE では `approval.replied` が出る。質問（`ask_question`）は入れない（質問の答えは自由文で、確認の functionResponse では答えられない。質問と確認が同時に待つのは、1 回の応答で `ask_question` と確認の要るツールを両方呼んだときだけで、その場合はどちらに答えてももう一方は捨てられる。扱いは決めていない）:
 
 | DAK の `mode` | `response.confirmed` | `response.payload` | モデルに届く Observation |
 |---|---|---|---|
@@ -136,7 +136,7 @@ MRTR の形: サーバはクライアントの要求（`tools/call` など）に
 
 ## 未検証事項
 
-- （#406 で解消）1 回のモデルの応答が複数の確認を出したとき、reply が 1 件だけに答えると、残りの確認は捨てられていた（ADK は最後の user イベントの答えしか読まない）。2026-09-30 に利用者の判断（#406 の `## 回答` A）で、reply のメッセージに、答えていない同じターンの確認への `reject`（理由 `approvals.UNANSWERED_REASON`。期限切れのものは `timed_out`）を入れるようにした（`approvals.build_reply_function_response` の `unanswered`）。モデルには `denied_by_user` の Observation として届き、必要ならモデルがもう一度呼ぶ（そのとき改めて確認が出る）。fake-LLM 構成の `tests/integration/test_approvals.py` の並列の 2 件で確かめた
+- （#406 で解消）1 回のモデルの応答が複数の確認を出したとき、reply が 1 件だけに答えると、残りの確認は捨てられていた（ADK は最後の user イベントの答えしか読まない）。2026-09-29 の利用者の判断（#406 の `## 回答` A）で、reply のメッセージに、答えていない同じターンの確認への `reject`（理由 `approvals.UNANSWERED_REASON`。期限切れのものは `timed_out`）を入れるようにした（`approvals.build_reply_function_response` の `unanswered`）。モデルには `denied_by_user` の Observation として届き、必要ならモデルがもう一度呼ぶ（そのとき改めて確認が出る）。fake-LLM 構成の `tests/integration/test_approvals.py` の並列の 2 件で確かめた
 
 - この文書の ADK の流れはコードを読んで確かめたもので、動かしてはいない（#175 の統合テストで確かめる）
 - 別のエージェント（sub_agent）が出した確認は、そのエージェントの processor が処理する（`request_confirmation.py` の「authored by another agent」）。DAK の sub_agent は A2A の `RemoteA2aAgent` だけ（`agent/dak_agent/agent.py:91-92`）で、ツールの確認はその先のエージェントの中で起きる。こちらのセッションに `adk_request_confirmation` を出すのは `AdaptiveAgent` だけなので、一覧は author を見ない（動かしてはいない）

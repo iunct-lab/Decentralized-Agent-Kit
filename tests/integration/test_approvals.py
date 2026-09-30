@@ -228,6 +228,11 @@ def test_answering_one_of_two_parallel_approvals_answers_the_other(fake_llm):
     assert resp.status_code == 200, resp.text
     assert _pending(user_id, session_id) == []
 
-    last = _last_model_request(MODEL)
-    assert "first" in last  # the approved command's output
-    assert "denied_by_user" in last and "same turn" in last
+    results = [r["response"] for r in function_responses(_session_events(user_id, session_id))
+               if r["name"] == "run_command"]
+    ran = [r for r in results if "error" not in r and "observation" not in r]
+    assert len(ran) == 1, results  # only the approved command ran
+    assert "first" in json.dumps(ran[0]) and "second" not in json.dumps(ran[0])
+    denied = [r for r in results if r.get("observation") == "denied_by_user"]
+    assert len(denied) == 1 and "same turn" in denied[0]["reason"], results
+    assert "denied_by_user" in _last_model_request(MODEL)  # and the model heard of it
