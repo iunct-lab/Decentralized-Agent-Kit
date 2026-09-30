@@ -31,12 +31,15 @@ mcp-server が `docker` CLI でセッションごとに使い捨てのコンテ�
 - セッションのコンテナ: 名前は `dak-sandbox-` + `sha256(session_key)` の先頭 16 桁。起動コマンド:
 
   ```
-  docker run -d --name <name> --network none --read-only --tmpfs /workspace:rw,size=256m
+  docker run -d --name <name> --label dak.sandbox=1 --network none
+    --read-only --tmpfs /workspace:rw,exec,size=256m --tmpfs /tmp:rw,size=64m --env HOME=/workspace
     --cpus=<SANDBOX_CPUS> --memory=<SANDBOX_MEMORY> --pids-limit=<SANDBOX_PIDS_LIMIT>
     --cap-drop ALL --user nobody <SANDBOX_IMAGE> sleep infinity
   ```
 
-  作業ディレクトリは tmpfs の `/workspace` で、コンテナを消せば中身も消える。`/workspace` 以外は読み取り専用
+  作業ディレクトリは tmpfs の `/workspace` で、コンテナを消せば中身も消える。`/workspace` と `/tmp` 以外は読み取り専用。
+  Docker の `--tmpfs` は既定で `noexec` なので、`/workspace` には `exec` を付ける（付けないと `run_command("./build.sh")` が Permission denied になる）。
+  `nobody` のホーム（`/nonexistent`）は無いので `HOME=/workspace` にする（`~` に書く CLI が動くように）
 - ツールの実行: 全部 `docker exec -w /workspace <name> ...` でコンテナの中で動かす。`run_command` は今の `shell=True` と同じ意味を保つため `["sh", "-c", command]` を渡す（`shlex.split` にするとパイプやリダイレクトが効かなくなる）。ワークスペースはコンテナの中にしか無いので、ファイル系ツールも mcp-server のプロセスから `open()` できない。ファイル系ツールを `docker exec` で動かす部分は、ソケットの採否が決まってから別の Task にする（下の「決定」3）
 - 利点: 本物のプロセス・ファイルシステム・ネットワークの分離。`--network none` / `--read-only` / `--tmpfs` / `--cpus` / `--memory` / `--pids-limit` / `--cap-drop ALL` / `--user` が全部使え、受け入れ条件 2（ネットワーク遮断と CPU・メモリ・PID の上限）を満たせるのはこの案だけ
 - リスク: **Docker ソケットに触れるプロセスはホストの root と同じことができる**（`docker run --privileged -v /:/host ...` でホストのファイルシステム全体を読み書きできる）。ソケットをマウントした mcp-server で隔離の外のコード（`SANDBOX_MODE=off` / `inproc` の `run_command`）が動くと、`8001` に届く相手なら誰でもホストの root 相当になる。隔離コンテナ自身にはソケットを見せないので、`docker` モードの `run_command` からは届かない
@@ -45,7 +48,7 @@ mcp-server が `docker` CLI でセッションごとに使い捨てのコンテ�
 
 Docker を使わず、mcp-server のプロセスの中でセッションごとに作業ディレクトリを分ける。
 
-- セッションごとに `tempfile.mkdtemp(prefix="dak-sandbox-...")` の一時ディレクトリを作り、ファイル系ツールの相対パスをそこで解決する。解決した実パス（`os.path.realpath`）がそのディレクトリの外に出るパス（絶対パス、`..`、外を指すシンボリックリンク）は拒否してエラーを返す。これで**ファイル系ツールどうしでは**別セッションのファイルが見えない
+- セッションごとに `tempfile.mkdtemp(prefix="dak-sandbox-<sha256(session_key) の先頭 16 桁>-")` の一時ディレクトリを作り（キーはヘッダの値そのままで、`/` や `..` を含みうるので、コンテナ名と同じくハッシュしてから使う）、ファイル系ツールの相対パスをそこで解決する。解決した実パス（`os.path.realpath`）がそのディレクトリの外に出るパス（絶対パス、`..`、外を指すシンボリックリンク）は拒否してエラーを返す。これで**ファイル系ツールどうしでは**別セッションのファイルが見えない
 - `run_command` は `cwd` をそのディレクトリにして同じ `subprocess.run(..., shell=True)` で動かす。シェルは `cd /` も絶対パスも使えるので、`run_command` からは他のセッションのディレクトリも `/projects` も見える
 - **真のプロセス・ネットワーク分離は提供できない**（同じ mcp-server のプロセス・同じユーザ・同じネットワーク名前空間で動く）。`resource.setrlimit` で子プロセスに CPU 時間・メモリ・FD 数の上限をかける案もあるが、この PBI では入れない: 上限は `run_command` の子プロセス 1 つずつにしか効かず（PID 数は利用者単位で、コンテナの root には効かない）、受け入れ条件 2 の「確認できる上限」にならないため。上限とネットワーク遮断は `docker` モードだけのものとする
 - 利点: Docker ソケットが要らない。Docker の無い環境（CI、非 Docker の開発機）でも動き、単体テストで確かめられる
@@ -64,6 +67,7 @@ Docker を使わず、mcp-server のプロセスの中でセッションごと�
 1. **SandboxManager（`mcp-server/sandbox.py`、#283）**
    - 設定: `SANDBOX_MODE`（既定 `off`）、`SANDBOX_IMAGE`（既定 `python:3.12-slim`）、`SANDBOX_TTL_SECONDS`（既定 `900`）、`SANDBOX_CPUS`（既定 `1`）、`SANDBOX_MEMORY`（既定 `512m`）、`SANDBOX_PIDS_LIMIT`（既定 `128`）
    - `ensure_session(session_key)` で遅延生成し、同じキーは使い回す。`destroy_session(session_key)` で破棄（`docker rm -f` / `shutil.rmtree`）。`reap_expired(now)` で最後の利用から TTL を過ぎたものを破棄する。サーバの停止時に残りを全部破棄する `destroy_all()` も持つ（止めたサーバのコンテナを残さない）
+   - 強制終了（OOM・SIGKILL）で `destroy_all()` が走らなかったコンテナは、メモリの表に無いので TTL でも消えず、同じキーの次の `docker run --name` が「名前が使われている」で失敗する。`docker` モードのコンテナには `--label dak.sandbox=1` を付け、起動時に `sweep()`（`docker ps -aq --filter label=dak.sandbox=1` の全部を `docker rm -f`）で消す。同じ Docker デーモンを `docker` モードの mcp-server 2 つで共有すると、後から起動した方が先の方のコンテナを消す。共有しないこととする
    - `subprocess.run` は差し替えられるようにし、単体テストは組み立てたコマンドと状態の遷移だけを見る（実際のコンテナは #285）
    - 許可・拒否の判断は持たない
 2. **配線（`mcp-server/main.py`、#284）**
@@ -71,14 +75,15 @@ Docker を使わず、mcp-server のプロセスの中でセッションごと�
    - `workdir is None`（`off`）なら今のコードの経路をそのまま通す
    - `inproc`: ファイル系ツールは上の「in-process 案」の閉じ込めで解決し、`run_command` は `cwd=workdir`
    - `docker`: `run_command` は `exec_in_session`（`docker exec -w /workspace <name> sh -c <command>`）。ファイル系ツールは 3 の Task ができるまで「`docker` モードでは未対応」のエラーを返す（黙って mcp-server の側のファイルを触らない）
-   - TTL の破棄: `lifespan` で `min(SANDBOX_TTL_SECONDS, 60)` 秒ごとに `reap_expired()` を呼ぶループを回し、停止時に `destroy_all()` する。呼び出しが来ないときも TTL 後に破棄される
+   - TTL の破棄: `lifespan` の起動時に `sweep()` し、`min(SANDBOX_TTL_SECONDS, 60)` 秒ごとに `reap_expired()` を呼ぶループを回し、停止時に `destroy_all()` する。呼び出しが来ないときも TTL 後に破棄される
+   - 「最後の利用」は呼び出しの始まり（`ensure_session`）の時刻。それでも実行中の呼び出しのセッションは消えない: ツールの本体は `async def` の中で同期の `subprocess.run` / ファイル I/O をするので、その間 event loop は塞がり、`lifespan` の reaper は呼び出しの合間にしか走らない。ツールをスレッドや非同期の実行に変えるなら、実行中の呼び出しの数を持って reaper に飛ばさせる
    - `docker-compose.yml` は、利用者がソケットのマウントを承認するまで変えない（#284 の「着手前に確認」）。`mcp-server/Dockerfile` には `sandbox.py` のコピーと `docker` CLI を足す（CLI だけではホストに届かない。届くのはソケットをマウントしたときだけ）
 3. **ソケットを承認されたら**（`## 判断待ち` の A）
    - ソケットのマウントは基本の `docker-compose.yml` に入れず、opt-in の上書きファイル（`docker-compose.sandbox.yml`。`SANDBOX_MODE=docker` とソケットを一緒に設定する）に置く。基本の構成でソケットが見えることは無い
    - mcp-server は、ソケット（`/var/run/docker.sock`）が見えるのに `SANDBOX_MODE` が `docker` でなければ起動を拒む（上の「リスク」: 隔離の外の `run_command` がホストの root 相当になる組み合わせを作らない）
    - `docker` モードのファイル系ツールを `docker exec` で動かす Task を切る
    - #285 の `docker` モードの実機検証（2 セッションの不可視、ネットワーク遮断、`docker inspect` の `NanoCpus` / `Memory` / `PidsLimit`、TTL 後の `docker ps`）を行う
-4. **検証（#285）**: `inproc` の不可視と破棄は `cd mcp-server && uv run pytest -q` で確かめる（Docker 不要）。`docker` モードは Docker のデーモンに届く実機でだけ確かめられ、承認が無ければ `pytest.mark.skip`（理由: 未承認）にする。`tests/integration/` が通っても `docker` モードを確かめたことにはならない（`permission-boundary.md` の「#20 への制約」）
+4. **検証（#285）**: `inproc` の不可視と破棄は `cd mcp-server && uv run pytest -q` で確かめる（Docker 不要）。`docker` モードは Docker のデーモンに届く実機でだけ確かめられ、明示の環境変数（`DAK_SANDBOX_DOCKER_TESTS=1`）が無ければ `pytest.mark.skipif` で飛ばす（承認のあとにコードを直さずに回せるように。理由の文に「未承認なら回さない」と書く）。`tests/integration/` が通っても `docker` モードを確かめたことにはならない（`permission-boundary.md` の「#20 への制約」）
 
 ## 利用者の判断（#20 の `## 判断待ち`）
 
