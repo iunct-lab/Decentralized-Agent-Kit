@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 # summarises it away.
 STATE_TODOS = "dak_todos"
 TODO_STATUSES = ("pending", "in_progress", "done")
+# The session's first user message, kept verbatim so compaction never loses it.
+STATE_ORIGINAL_REQUEST = "dak_original_request"
 
 
 def attempt_answer(answer: str, confidence: str, sources_used: list[str], tool_context) -> str:
@@ -58,8 +60,8 @@ def planner(task_description: str, plan_steps: list[str], allowed_tools: list[st
         task_description: Description of the task to plan for.
         plan_steps: Ordered list of steps to accomplish the task.
         allowed_tools: List of tool names you intend to use (e.g. ["read_file", "run_command"]).
-                       'planner', 'ask_question', 'attempt_answer', 'switch_mode', 'write_todos' and
-                       'read_plan' are always allowed.
+                       'planner', 'ask_question', 'attempt_answer', 'switch_mode', 'write_todos',
+                       'read_plan' and 'read_original_request' are always allowed.
     """
     plan_str = "\n".join([f"{i + 1}. {step}" for i, step in enumerate(plan_steps)])
 
@@ -174,6 +176,15 @@ def read_plan(tool_context) -> str:
     return format_todos(todos) if isinstance(todos, list) and todos else "No plan recorded yet."
 
 
+def read_original_request(tool_context) -> str:
+    """
+    Read the user's first request of this session in full (the `# Original Request`
+    in your instructions may be cut short).
+    """
+    request = tool_context.state.get(STATE_ORIGINAL_REQUEST)
+    return request if isinstance(request, str) and request else "No original request recorded yet."
+
+
 async def switch_mode(tool_context, reason: str = "", new_focus: str = "") -> str:
     """
     Request a mode switch.
@@ -218,6 +229,7 @@ def make_builtin_tools(enforcer_mode: bool = False) -> List[FunctionTool]:
         FunctionTool(switch_mode, require_confirmation=False),
         FunctionTool(write_todos, require_confirmation=False),
         FunctionTool(read_plan, require_confirmation=False),
+        FunctionTool(read_original_request, require_confirmation=False),
     ]
     if enforcer_mode:
         tools.append(FunctionTool(attempt_answer, require_confirmation=False))

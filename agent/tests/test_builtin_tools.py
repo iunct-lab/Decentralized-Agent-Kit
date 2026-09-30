@@ -6,10 +6,12 @@ from unittest.mock import MagicMock, patch
 from dak_agent.builtin_tools import (
     ask_question,
     attempt_answer,
+    STATE_ORIGINAL_REQUEST,
     STATE_TODOS,
     format_todos,
     make_builtin_tools,
     planner,
+    read_original_request,
     read_plan,
     switch_mode,
     write_todos,
@@ -20,13 +22,14 @@ class TestBuiltinTools(unittest.TestCase):
     def test_make_builtin_tools_default(self):
         tools = make_builtin_tools(enforcer_mode=False)
         names = [t.name for t in tools]
-        self.assertEqual(names, ["planner", "switch_mode", "write_todos", "read_plan"])
+        self.assertEqual(names, ["planner", "switch_mode", "write_todos", "read_plan", "read_original_request"])
 
     def test_make_builtin_tools_enforcer(self):
         tools = make_builtin_tools(enforcer_mode=True)
         names = [t.name for t in tools]
         self.assertEqual(
-            names, ["planner", "switch_mode", "write_todos", "read_plan", "attempt_answer", "ask_question"])
+            names, ["planner", "switch_mode", "write_todos", "read_plan", "read_original_request",
+                    "attempt_answer", "ask_question"])
 
     def test_planner_does_not_block_on_confirmation_by_default(self):
         """A confirmation-gated planner stalls /run and A2A runs (no UI to approve)."""
@@ -101,6 +104,21 @@ class TestBuiltinTools(unittest.TestCase):
 
         write_todos([{"step": "read repo", "status": "done"}], tool_context)
         self.assertEqual(read_plan(tool_context), "1. [done] read repo")
+
+    def test_read_original_request_returns_state(self):
+        """PBI #103: the whole first request, which `# Original Request` may cut."""
+        tool_context = MagicMock()
+        tool_context.state = {}
+        self.assertEqual(read_original_request(tool_context), "No original request recorded yet.")
+
+        request = "Fix the login bug in {auth}.py\n" + "y" * 20_000
+        tool_context.state = {STATE_ORIGINAL_REQUEST: request}
+        self.assertEqual(read_original_request(tool_context), request)
+
+    def test_read_original_request_is_always_allowed_by_the_pact(self):
+        from dak_agent.enforcer import ALWAYS_ALLOWED
+
+        self.assertIn("read_original_request", ALWAYS_ALLOWED)
 
     def test_make_builtin_tools_includes_write_todos_and_read_plan(self):
         for enforcer_mode in (False, True):

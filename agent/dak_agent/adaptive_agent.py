@@ -34,8 +34,6 @@ CALLER_MCP_PROBE_TIMEOUT_S = 30.0
 # Per-invocation (ADK drops `temp:` state after the invocation): the tool names
 # each reachable caller MCP server listed on this call, {url: [names]}.
 STATE_CALLER_MCP_TOOLS = "temp:dak_caller_mcp_tools"
-# The session's first user message, kept verbatim so compaction never loses it.
-STATE_ORIGINAL_REQUEST = "dak_original_request"
 
 
 class AdaptiveAgent(LlmAgent):
@@ -269,12 +267,12 @@ class AdaptiveAgent(LlmAgent):
         """The session's first user message, rebuilt from state every turn so
         compaction of the event history never loses it (the summary's own
         `User request` depends on the model). Capped like the plan."""
-        request = state.get(STATE_ORIGINAL_REQUEST)
+        request = state.get(builtin_tools.STATE_ORIGINAL_REQUEST)
         if not isinstance(request, str) or not request:
             return ""
         max_chars = HarnessSettings(context_window=self._mode_manager.max_context_tokens).plan_chars
         if len(request) > max_chars:
-            marker = "\n[truncated]"
+            marker = "\n[truncated — call read_original_request for the full text]"
             request = request[: max_chars - len(marker)] + marker
         return f"\n\n# Original Request\n{request}"
 
@@ -282,12 +280,12 @@ class AdaptiveAgent(LlmAgent):
     def _capture_original_request(context: CallbackContext) -> None:
         """Keep the text of the session's first user message, once."""
         state = context.state
-        if state.get(STATE_ORIGINAL_REQUEST):
+        if state.get(builtin_tools.STATE_ORIGINAL_REQUEST):
             return
         content = context.user_content
         text = "\n".join(p.text for p in (content.parts or []) if p.text) if content else ""
         if text:
-            state[STATE_ORIGINAL_REQUEST] = text
+            state[builtin_tools.STATE_ORIGINAL_REQUEST] = text
 
     def _resolve_session_tools(
         self, state: MutableMapping[str, Any], call_settings: Dict[str, Any]

@@ -47,6 +47,9 @@ Always available (in every mode), and always allowed by the Ulysses Pact. The pl
 ### `read_plan`
 *   **Description**: Returns the current plan and progress, or `No plan recorded yet.`
 
+### `read_original_request`
+*   **Description**: Returns the session's first user message in full (state `dak_original_request`), or `No original request recorded yet.` The system instruction carries it as `# Original Request`, capped like the plan; when cut, it ends with a pointer to this tool. Always available and always allowed by the Ulysses Pact.
+
 ---
 
 ## 4. Enforcer Mode Tools

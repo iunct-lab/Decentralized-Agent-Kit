@@ -19,8 +19,9 @@ PLAN_KEY = "enforcer_allowed_tools"
 # Core tools that are usable regardless of the active plan. Includes the
 # client-side skill tools (list_skills/enable_skill) so the agent can always
 # discover and enable capabilities, transfer_to_agent for A2A delegation, and
-# read_tool_output so a truncated result of an allowed tool can be paged, and
-# write_todos/read_plan so the plan's progress can always be recorded and read.
+# read_tool_output so a truncated result of an allowed tool can be paged,
+# write_todos/read_plan so the plan's progress can always be recorded and read,
+# and read_original_request so the whole request can always be read.
 ALWAYS_ALLOWED: Set[str] = {
     "planner",
     "ask_question",
@@ -34,6 +35,7 @@ ALWAYS_ALLOWED: Set[str] = {
     "read_tool_output",
     "write_todos",
     "read_plan",
+    "read_original_request",
 }
 
 ENFORCER_INSTRUCTION = '''You are a helpful assistant powered by the Decentralized Agent Kit.
