@@ -459,6 +459,7 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         section = instruction.split("# Original Request\n", 1)[1]
         self.assertLessEqual(len(section), 1_000)
         self.assertTrue(section.startswith("y" * 100))
+        self.assertIn("read_original_request", section)  # where the rest is
 
     async def test_original_request_reaches_later_turns_verbatim(self):
         """The first user message is sent with every later model call, and,

@@ -193,7 +193,7 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 
 - セッションの最初のユーザー発話（テキストのパートを改行でつないだもの）を、最初の呼び出しの始めに state の `dak_original_request` へ一度だけ保存する。後のターンで上書きしない。
 - 指示は計画と同じく state から組み直され、`# Current Plan` の後に `# Original Request` として入る。要約の `User request` 節はモデルの出来に左右されるが、こちらは圧縮の出来によらず残る。
-- 計画と同じく、利用者が書いた文なので ADK の `{var}` 置換を通さない。長さは計画と同じ上限（`HarnessSettings.plan_chars`）で切り、切ったら `[truncated]` を付ける。`dak:instruction` を渡した呼び出しには入れない（指示全体を置き換えるため）。
+- 計画と同じく、利用者が書いた文なので ADK の `{var}` 置換を通さない。長さは計画と同じ上限（`HarnessSettings.plan_chars`）で切り、切ったら `[truncated — call read_original_request for the full text]` を付ける。全文は組み込みツール `read_original_request` が state から返す（`read_plan` と同じく Pact で絞っていても呼べる）。`dak:instruction` を渡した呼び出しには入れない（指示全体を置き換えるため）。
 - 検証: `test_adaptive_agent.py::test_original_request_reaches_later_turns_verbatim`（2 ターン目の指示に 1 ターン目の発話がそのまま入る）。
 
 ### 承認の保留と reply（#100）
