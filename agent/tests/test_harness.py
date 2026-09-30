@@ -568,6 +568,53 @@ class TestRequestBudgetGuard:
         assert request.contents[0] is summary
         assert len(summary.parts[0].text) == len("User request: ") + 3000
 
+    def test_settings_tail_reserve_is_a_fifth_of_the_window(self):
+        assert HarnessSettings(context_window=8192).tail_reserve_tokens == 1638
+        assert HarnessSettings(context_window=1000).tail_reserve_tokens == 256  # floor
+        with patch.dict(os.environ, {"MODEL_CONTEXT_WINDOW": "8192", "DAK_TAIL_RESERVE_RATIO": "0.5"}):
+            assert HarnessSettings.from_env("openai/llamacpp").tail_reserve_tokens == 4096
+
+    def test_tail_keep_count_keeps_whole_user_turns_within_the_budget(self):
+        """PBI #103 AC1: the tail starts at a user turn, so a turn is never cut
+        in the middle when it fits."""
+        contents = _turns(3, size=400)  # 12 contents, ~100 tokens per tool result
+        assert harness._tail_keep_count(contents, budget_tokens=250) == 8  # turns 2-3 (~210 tokens)
+        assert harness._tail_keep_count(contents, budget_tokens=150) == 4  # turn 3 only
+
+    def test_tail_keep_count_cuts_inside_a_turn_larger_than_the_budget(self):
+        """A long tool loop in one turn: keep as many of its newest contents as
+        fit, rather than protecting the whole turn (the guard must still be
+        able to shrink the request)."""
+        contents = [types.Content(role="user", parts=[types.Part(text="q")]),
+                    _fr("a", 400), _fr("b", 400), _fr("c", 400)]  # ~100 tokens each
+        assert harness._tail_keep_count(contents, budget_tokens=250) == 2
+
+    def test_tail_keep_count_minimum_is_one(self):
+        assert harness._tail_keep_count([_fr("a", 4000)], budget_tokens=10) == 1
+        assert harness._tail_keep_count([], budget_tokens=10) == 0
+
+    @pytest.mark.asyncio
+    async def test_before_model_callback_keeps_the_latest_user_turn_verbatim(self):
+        """The guard shrinks the older turn and leaves the current one whole,
+        its reasoning included (a fixed `keep_last=2` dropped that first)."""
+        thought = types.Part(text="x" * 400, thought=True)
+        current = [
+            types.Content(role="user", parts=[types.Part(text="q2")]),
+            types.Content(role="model", parts=[thought, types.Part(
+                function_call=types.FunctionCall(id="c2", name="t", args={}))]),
+            _fr("c2", 1200),
+            types.Content(role="model", parts=[types.Part(function_call=types.FunctionCall(id="c3", name="t", args={}))]),
+            _fr("c3", 1200),
+        ]
+        contents = [types.Content(role="user", parts=[types.Part(text="q1")]), _fr("c1", 12000), *current]
+        plugin = ContextHarnessPlugin(HarnessSettings(context_window=4000), "test-model")
+        request = LlmRequest(contents=contents)
+        with patch("dak_agent.call_config.resolve_dak_settings", return_value={}):
+            await plugin.before_model_callback(callback_context=_ArtifactContext(), llm_request=request)
+
+        assert "elided" in request.contents[1].parts[0].function_response.response["result"]
+        assert request.contents[2:] == current
+
 
 class _ArtifactContext:
     """The artifact half of a CallbackContext / ToolContext, kept in a dict."""
@@ -861,7 +908,7 @@ class TestPerCallHarnessSettings:
         with patch("dak_agent.call_config.resolve_dak_settings", return_value={"dak:model": self.OTHER}), \
                 patch.object(harness, "fit_request_to_budget") as fit:
             await plugin.before_model_callback(callback_context=MagicMock(), llm_request=request)
-        fit.assert_called_once_with(request, int(1_048_576 * 0.85))
+        fit.assert_called_once_with(request, int(1_048_576 * 0.85), keep_last=1)
 
 
 class TestEnsureUserQuery:
@@ -1056,6 +1103,7 @@ def _make_fake_llm(tool_calls: int | list, thoughts: bool = False, plan: bool = 
         system_instructions: list = []
         summaries_before_request: list = []
         summary_tokens: list = []
+        summary_prompts: list = []
         summaries: int = 0
 
         async def generate_content_async(self, llm_request, stream=False):
@@ -1067,8 +1115,10 @@ def _make_fake_llm(tool_calls: int | list, thoughts: bool = False, plan: bool = 
                 if tokens > WINDOW:
                     raise ValueError(f"the request exceeds the available context size ({tokens} > {WINDOW})")
                 self.summaries += 1
+                self.summary_prompts.append(text)
                 yield LlmResponse(content=types.Content(role="model", parts=[types.Part(
-                    text="User request: inspect logs. Progress: read logs.")]), usage_metadata=usage)
+                    text=f"User request: inspect logs. Progress: read logs (summary {self.summaries}).")]),
+                    usage_metadata=usage)
                 return
             self.request_tokens.append(tokens)
             self.system_instructions.append(llm_request.config.system_instruction or "")
@@ -1188,6 +1238,21 @@ async def test_harness_keeps_every_request_inside_the_window():
     # Full outputs were offloaded for read_tool_output.
     keys = await artifacts.list_artifact_keys(app_name="dak_agent", user_id="u", session_id=session.id)
     assert any(k.startswith("tool_output_big_tool") for k in keys)
+
+
+@pytest.mark.asyncio
+async def test_second_compaction_carries_forward_the_first_summary():
+    """PBI #103 AC1: the second compaction summarises the first summary along
+    with the newer events (ADK seeds it with the previous compacted content),
+    so the rolling summary is updated rather than started over."""
+    llm, _, final_text, error, _ = await _run(use_harness=True, tool_calls=12)
+
+    assert error is None
+    assert final_text == "done"
+    assert llm.summaries >= 2
+    assert "(summary 1)" not in llm.summary_prompts[0]
+    assert "(summary 1)" in llm.summary_prompts[1]
+    assert max(llm.request_tokens) <= WINDOW
 
 
 @pytest.mark.asyncio
