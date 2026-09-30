@@ -33,7 +33,7 @@ PBI #94 / Task #226。ADK の `ContextCacheConfig` を DAK で既定で有効に
 - **配線は壊れない**: 圧縮（`EventsCompactionConfig` + `BudgetedEventSummarizer`）が 3 ターンで 2 回以上走っても、要約の前後を問わずエージェントの全リクエストに同じ `cache_config` が載る（テスト `test_cache_config_survives_compaction`）。DAK の要約器が自分で作るリクエストには載らない（`cache_config` は `None`）ので、要約の呼び出しがキャッシュを書くことは無い
 - **ヒットは別問題**: プレフィックスキャッシュは先頭から一致する所までしか効かない。DAK には毎ターン先頭付近を書き換える仕組みが 3 つある。どれもこの PBI では変えない（プレフィックスの規律は #105）
   1. 圧縮: 古いイベントを要約に置き換えるので、要約の直後のターンは system 指示より後が全部ミスになる
-  2. 古いツール結果の刈り込み（`harness.py` の `prune_old_tool_results`）: 直近の数ターン（`prune_protect_user_turns`、既定 2）より前で、保護するトークン数（`prune_protect_tokens`）を超えた分の結果をポインタに置き換える。刈り込む境界がターンごとに進むので、そこから後ろがミスになる
+  2. 古いツール結果の刈り込み（`harness.py` の `prune_old_tool_results`）: 直近の数ターン（`prune_protect_user_turns`、既定 2）より前で、保護するトークン数（`HarnessSettings.prune_protect_token_budget`。既定は窓の 2 割、`DAK_PRUNE_PROTECT_TOKENS` で固定できる）を超えた分の結果をポインタに置き換える。刈り込む境界がターンごとに進むので、そこから後ろがミスになる
   3. system 指示の末尾の計画と最初の依頼（`adaptive_agent.py` の `_verbatim_sections`）: `write_todos` で計画が変わると system 指示そのものが変わり、system の印もミスになる
 - Anthropic / Bedrock の Claude では、ミスしたターンは書き込み（Anthropic の料金表では通常の入力より高い）だけが増える。圧縮の頻度が高い小さい窓ほど損になりうる
 - Gemini では、資源は（最初のリクエストを除き）system 指示とツール定義だけなので、圧縮や刈り込みでは作り直さない。作り直すのは 3 の計画の書き換えなどで system 指示が変わったとき、と最初のリクエストの後の 1 回（資源の中身が `[system, user]` から system とツールだけに変わる）。そのたびに作成の往復と、資源の保存の料金がかかる
