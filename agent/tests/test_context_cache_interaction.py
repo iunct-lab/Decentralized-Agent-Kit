@@ -15,7 +15,7 @@ from google.adk.agents.context_cache_config import ContextCacheConfig
 from google.adk.apps import App
 from google.adk.artifacts import InMemoryArtifactService
 from google.adk.models.base_llm import BaseLlm
-from google.adk.models.lite_llm import LiteLlm
+from google.adk.models.lite_llm import LiteLlm, LiteLLMClient
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.runners import Runner
@@ -123,6 +123,7 @@ def local_server():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{server.server_port}", bodies
     server.shutdown()
+    server.server_close()
 
 
 @pytest.mark.asyncio
@@ -135,7 +136,14 @@ async def test_local_llm_routes(local_server, model, path, marked):
     message from role and content, so the marks never leave; the OpenAI route to
     a custom host keeps them, and llama-server receives cache_control."""
     base, bodies = local_server
-    llm = LiteLlm(model=model, api_base=base + path, api_key="unused")
+    calls = []
+
+    class RecordingClient(LiteLLMClient):
+        async def acompletion(self, **kwargs):
+            calls.append(kwargs)
+            return await super().acompletion(**kwargs)
+
+    llm = LiteLlm(model=model, api_base=base + path, api_key="unused", llm_client=RecordingClient())
     request = LlmRequest(
         contents=[types.Content(role="user", parts=[types.Part(text="hi")])],
         config=types.GenerateContentConfig(system_instruction="Inspect the logs."),
@@ -144,5 +152,6 @@ async def test_local_llm_routes(local_server, model, path, marked):
     async for _ in llm.generate_content_async(request):
         pass
 
+    assert len(calls[0]["cache_control_injection_points"]) == 2  # marked on both routes
     chat = next(b for b in bodies if b.get("messages"))
     assert ["cache_control" in m for m in chat["messages"]] == [marked, marked]
