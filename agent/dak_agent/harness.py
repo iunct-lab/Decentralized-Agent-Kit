@@ -61,6 +61,11 @@ logger = logging.getLogger(__name__)
 
 READ_TOOL_OUTPUT_NAME = "read_tool_output"
 
+# How many times the session's history has been compacted, and whether that is
+# more than `compaction_warning_count` (a new session would answer better).
+STATE_COMPACTION_COUNT = "dak_compaction_count"
+STATE_RECOMMEND_NEW_SESSION = "dak_recommend_new_session"
+
 # Fraction of the context window a single tool result may occupy. Several
 # results usually accumulate before compaction can run, so keep it small.
 _TOOL_OUTPUT_WINDOW_FRACTION = 0.15
@@ -179,6 +184,7 @@ class HarnessSettings:
     prune_protect_user_turns: int = 2
     prune_minimum_tokens: int = 512
     tail_reserve_ratio: float = 0.2
+    compaction_warning_count: int = 3
 
     @classmethod
     def from_env(cls, model_name: str) -> "HarnessSettings":
@@ -198,6 +204,7 @@ class HarnessSettings:
             prune_protect_user_turns=_env_int("DAK_PRUNE_PROTECT_USER_TURNS", 2, 0),
             prune_minimum_tokens=_env_int("DAK_PRUNE_MINIMUM_TOKENS", 512, 0),
             tail_reserve_ratio=_env_float("DAK_TAIL_RESERVE_RATIO", 0.2, 0.0, 1.0),
+            compaction_warning_count=_env_int("DAK_COMPACTION_WARNING_COUNT", 3, 1),
         )
 
     @property
@@ -750,6 +757,23 @@ def fit_request_to_budget(llm_request, budget_tokens: int, keep_last: int = 2) -
     return elided
 
 
+def _record_compactions(callback_context, warning_count: int) -> None:
+    """Count the session's compaction events into state (recounted every time
+    rather than incremented, so nothing is missed or counted twice), and flag
+    a new session once there are more than `warning_count`."""
+    session = getattr(callback_context, "session", None)
+    if session is None:
+        return
+    count = sum(1 for e in session.events if e.actions and e.actions.compaction)
+    state = callback_context.state
+    if state.get(STATE_COMPACTION_COUNT) != count:
+        state[STATE_COMPACTION_COUNT] = count
+    if count > warning_count and not state.get(STATE_RECOMMEND_NEW_SESSION):
+        state[STATE_RECOMMEND_NEW_SESSION] = True
+        logger.warning("Context harness: the session has been compacted %d times; a new session is recommended "
+                       "(answers get less accurate with each compaction).", count)
+
+
 # --- Pruning old tool results ---
 
 
@@ -1024,6 +1048,7 @@ class ContextHarnessPlugin(BasePlugin):
 
     async def before_model_callback(self, *, callback_context, llm_request) -> None:
         settings = self._settings_for(callback_context)
+        _record_compactions(callback_context, settings.compaction_warning_count)
         ensure_user_query(llm_request)
         await prune_old_tool_results(llm_request, callback_context, settings.prune_protect_token_budget,
                                      settings.prune_protect_user_turns, settings.prune_minimum_tokens)

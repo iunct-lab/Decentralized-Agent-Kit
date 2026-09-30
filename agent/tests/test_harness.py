@@ -853,6 +853,62 @@ class TestPruneOldToolResults:
         assert fit.call_args.args[0] is request
 
 
+class TestCompactionCount:
+    """PBI #103 AC3: how many times the session was compacted, and whether to
+    recommend a new session, are in state."""
+
+    def _context(self, compactions: int, state=None):
+        from google.adk.events.event_actions import EventActions, EventCompaction
+
+        events = [MagicMock(actions=EventActions())]
+        events += [MagicMock(actions=EventActions(compaction=EventCompaction(
+            start_timestamp=n, end_timestamp=n + 0.5, compacted_content=types.Content(role="model", parts=[])))
+            ) for n in range(compactions)]
+        ctx = _ArtifactContext()
+        ctx.session = MagicMock(events=events)
+        ctx.state = {} if state is None else state
+        return ctx
+
+    async def _call(self, ctx, **settings):
+        plugin = ContextHarnessPlugin(HarnessSettings(context_window=8192, **settings), "test-model")
+        request = LlmRequest(contents=[types.Content(role="user", parts=[types.Part(text="hi")])])
+        with patch("dak_agent.call_config.resolve_dak_settings", return_value={}):
+            await plugin.before_model_callback(callback_context=ctx, llm_request=request)
+
+    def test_settings(self):
+        assert HarnessSettings(context_window=8192).compaction_warning_count == 3
+        with patch.dict(os.environ, {"MODEL_CONTEXT_WINDOW": "8192", "DAK_COMPACTION_WARNING_COUNT": "5"}):
+            assert HarnessSettings.from_env("openai/llamacpp").compaction_warning_count == 5
+        with patch.dict(os.environ, {"MODEL_CONTEXT_WINDOW": "8192", "DAK_COMPACTION_WARNING_COUNT": "0"}):
+            assert HarnessSettings.from_env("openai/llamacpp").compaction_warning_count == 3
+
+    @pytest.mark.asyncio
+    async def test_before_model_callback_counts_compaction_events(self):
+        ctx = self._context(compactions=2)
+        await self._call(ctx)
+        assert ctx.state == {harness.STATE_COMPACTION_COUNT: 2}
+
+    @pytest.mark.asyncio
+    async def test_before_model_callback_sets_recommend_new_session_after_threshold(self, caplog):
+        ctx = self._context(compactions=2)
+        await self._call(ctx, compaction_warning_count=2)
+        assert harness.STATE_RECOMMEND_NEW_SESSION not in ctx.state  # at the limit, not over it
+
+        ctx = self._context(compactions=3, state=ctx.state)
+        with caplog.at_level("WARNING", logger="dak_agent.harness"):
+            await self._call(ctx, compaction_warning_count=2)
+            await self._call(ctx, compaction_warning_count=2)
+        assert ctx.state == {harness.STATE_COMPACTION_COUNT: 3, harness.STATE_RECOMMEND_NEW_SESSION: True}
+        assert len([r for r in caplog.records if "new session" in r.getMessage()]) == 1  # once, on the change
+
+    @pytest.mark.asyncio
+    async def test_without_a_session_nothing_is_recorded(self):
+        ctx = _ArtifactContext()
+        ctx.state = {}
+        await self._call(ctx)
+        assert ctx.state == {}
+
+
 class TestPerCallHarnessSettings:
     """PBI #138 AC3: the request budget follows the model chosen per call
     (`dak:model`); the default model keeps the startup settings."""
@@ -1255,6 +1311,18 @@ async def test_second_compaction_carries_forward_the_first_summary():
     assert "(summary 1)" not in llm.summary_prompts[0]
     assert "(summary 1)" in llm.summary_prompts[1]
     assert max(llm.request_tokens) <= WINDOW
+
+
+@pytest.mark.asyncio
+async def test_compaction_count_is_recorded_in_state():
+    """PBI #103 AC3: after two compactions in a real run, state has the count."""
+    llm, session, final_text, error, _ = await _run(use_harness=True, tool_calls=12)
+
+    assert error is None
+    assert final_text == "done"
+    compactions = sum(1 for e in session.events if e.actions.compaction)
+    assert compactions >= 2
+    assert session.state[harness.STATE_COMPACTION_COUNT] == compactions
 
 
 @pytest.mark.asyncio

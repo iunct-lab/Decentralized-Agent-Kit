@@ -93,6 +93,10 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
      （`--jinja`）はこれを `No user query found in messages` で拒否する（実機で確認。
      Anthropic も先頭がユーザーであることを要求する）。そこでユーザーの text ターンが
      無いときは、「以下の要約から作業を続けて」という短いユーザーターンを先頭に補う。
+   - 毎回、セッションの圧縮イベントを数え直して state の `dak_compaction_count` に書く（#103）。
+     `DAK_COMPACTION_WARNING_COUNT`（既定 3）回を超えたら `dak_recommend_new_session` を `true` にし、
+     警告ログを 1 回出す（圧縮を重ねるほど答えの精度が落ちるので、新しいセッションを勧める印）。
+     クライアントへの表示はまだ無く、state に書くところまで。
    - 次に、古いツール結果を要約なしで剪定する（`prune_old_tool_results`、#102）。直近
      `DAK_PRUNE_PROTECT_USER_TURNS`（既定 2）件のユーザーターン（利用者のテキストを持つターン。
      ツール結果は数えない）以降は触らず、それより前のツール応答を新しい方から数えて
@@ -146,6 +150,7 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 | `DAK_COMPACTION_INTERVAL` | `20` | sliding-window 圧縮の間隔（ユーザーターン数） |
 | `DAK_COMPACTION_INPUT_RATIO` | `0.5` | 1 回の要約リクエストに入れる履歴の上限（窓占有率）。残りは要約の出力枠 |
 | `DAK_REQUEST_BUDGET_RATIO` | `0.85` | 最終ガードの上限 |
+| `DAK_COMPACTION_WARNING_COUNT` | `3` | 圧縮がこの回数を超えたら `dak_recommend_new_session` を立てる |
 | `DAK_TAIL_RESERVE_RATIO` | `0.2` | 最終ガードが原文のまま残す直近 tail（窓占有率、最低 256 トークン。ユーザーターンの境界から） |
 | `DAK_MODEL_ERROR_RETRY_ATTEMPTS` | `2` | 窓超過のエラーを受けたときの呼び直しの回数（予算は毎回半分）。`0` で呼び直さずに説明文を返す |
 | `DAK_TOOL_OUTPUT_MAX_CHARS` | 窓の 15%（2K〜40K 文字） | 1 回のツール結果の上限 |
