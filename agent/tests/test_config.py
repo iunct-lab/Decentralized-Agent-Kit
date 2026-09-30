@@ -86,14 +86,9 @@ class TestResolveModelName(unittest.TestCase):
         env = {"MODEL_NAME": "openai/llamacpp", "GEMINI_MODEL_NAME": "gemini-x"}
         self.assertEqual(resolve_model_name(env), "openai/llamacpp")
 
-    def test_legacy_gemini_model_name_is_second_and_logged(self):
-        with self.assertLogs("dak_agent.config", level="WARNING") as logs:
-            self.assertEqual(resolve_model_name({"GEMINI_MODEL_NAME": "gemini-x"}), "gemini-x")
-        self.assertIn("GEMINI_MODEL_NAME", logs.output[0])
-
-    def test_model_name_does_not_log_legacy_warning(self):
-        with self.assertNoLogs("dak_agent.config", level="WARNING"):
-            resolve_model_name({"MODEL_NAME": "openai/llamacpp", "GEMINI_MODEL_NAME": "gemini-x"})
+    def test_gemini_model_name_is_ignored(self):
+        """The old GEMINI_MODEL_NAME alias is gone; only MODEL_NAME picks the model."""
+        self.assertEqual(resolve_model_name({"GEMINI_MODEL_NAME": "gemini-x"}), DEFAULT_MODEL_NAME)
 
     def test_unset_falls_back_to_default(self):
         self.assertEqual(resolve_model_name({}), DEFAULT_MODEL_NAME)
@@ -103,7 +98,7 @@ class TestResolveModelName(unittest.TestCase):
         self.assertEqual(resolve_model_name({"MODEL_NAME": ""}), DEFAULT_MODEL_NAME)
         self.assertEqual(resolve_model_name({"MODEL_NAME": "  "}), DEFAULT_MODEL_NAME)
         self.assertEqual(
-            resolve_model_name({"MODEL_NAME": "", "GEMINI_MODEL_NAME": "gemini-x"}), "gemini-x"
+            resolve_model_name({"MODEL_NAME": "", "GEMINI_MODEL_NAME": "gemini-x"}), DEFAULT_MODEL_NAME
         )
 
     def test_reads_process_env_by_default(self):
