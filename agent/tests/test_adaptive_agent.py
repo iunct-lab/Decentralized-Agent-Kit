@@ -185,6 +185,7 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
     def _session_context(self, agent, state):
         context = MagicMock()
         context.state = state
+        context.user_content = None
         context._invocation_context.agent = MagicMock()
         return context
 
@@ -405,6 +406,99 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         larger = agent._resolve_session_instruction(state, {}).split("# Current Plan\n", 1)[1]
         self.assertGreater(len(larger), 1_000)
         self.assertLessEqual(len(larger), 1_638)
+
+    async def test_restore_session_config_captures_original_request_once(self):
+        from google.genai import types
+
+        agent = AdaptiveAgent(model="test-model", name="test_agent",
+                              instruction="Initial instruction", tools=self.mock_tools)
+        state = {}
+        first = self._session_context(agent, state)
+        first.user_content = types.Content(role="user", parts=[
+            types.Part(text="Fix the login bug"), types.Part(text="in auth.py")])
+        await agent._restore_session_config(first)
+        self.assertEqual(state["dak_original_request"], "Fix the login bug\nin auth.py")
+
+        second = self._session_context(agent, state)
+        second.user_content = types.Content(role="user", parts=[types.Part(text="continue")])
+        await agent._restore_session_config(second)
+        self.assertEqual(state["dak_original_request"], "Fix the login bug\nin auth.py")
+
+    async def test_restore_session_config_skips_a_turn_without_text(self):
+        """A first turn with no text (a tool response, an empty resume) must
+        not block capturing the first real request later."""
+        from google.genai import types
+
+        agent = AdaptiveAgent(model="test-model", name="test_agent",
+                              instruction="Initial instruction", tools=self.mock_tools)
+        state = {}
+        await agent._restore_session_config(self._session_context(agent, state))
+        no_text = self._session_context(agent, state)
+        no_text.user_content = types.Content(role="user", parts=[types.Part(
+            function_response=types.FunctionResponse(name="t", response={"ok": True}))])
+        await agent._restore_session_config(no_text)
+        self.assertNotIn("dak_original_request", state)
+
+    def test_resolve_session_instruction_includes_original_request_when_present(self):
+        agent = AdaptiveAgent(model="test-model", name="test_agent",
+                              instruction="Initial instruction", tools=self.mock_tools)
+
+        instruction = agent._resolve_session_instruction({"dak_original_request": "Fix the login bug"}, {})
+
+        self.assertTrue(instruction.startswith("Initial instruction"))
+        self.assertIn("# Original Request\nFix the login bug", instruction)
+        self.assertNotIn("# Original Request", agent._resolve_session_instruction({}, {}))
+
+    def test_original_request_section_is_capped_by_the_window(self):
+        agent = AdaptiveAgent(model="test-model", name="test_agent",
+                              instruction="Initial instruction", tools=self.mock_tools)
+        agent._mode_manager.max_context_tokens = 8192  # plan_chars == 1,000
+
+        instruction = agent._resolve_session_instruction({"dak_original_request": "y" * 5_000}, {})
+
+        section = instruction.split("# Original Request\n", 1)[1]
+        self.assertLessEqual(len(section), 1_000)
+        self.assertTrue(section.startswith("y" * 100))
+
+    async def test_original_request_reaches_later_turns_verbatim(self):
+        """The first user message is sent with every later model call, and,
+        like the plan, `{name}` in it must not go through ADK's session-state
+        injection (an unknown name would fail the turn)."""
+        from google.adk.apps import App
+        from google.adk.artifacts import InMemoryArtifactService
+        from google.adk.models.base_llm import BaseLlm
+        from google.adk.models.llm_response import LlmResponse
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
+        from google.genai import types
+
+        requests = []
+
+        class RecordingLlm(BaseLlm):
+            async def generate_content_async(self, llm_request, stream=False):
+                requests.append(llm_request)
+                yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text="ok")]))
+
+        agent = AdaptiveAgent(model=RecordingLlm(model="recording"), name="dak_agent",
+                              instruction="Hello {greeting}.", tools=[])
+        sessions = InMemorySessionService()
+        session = await sessions.create_session(app_name="dak_agent", user_id="u", state={"greeting": "operator"})
+        runner = Runner(app=App(name="dak_agent", root_agent=agent), session_service=sessions,
+                        artifact_service=InMemoryArtifactService())
+
+        with patch("dak_agent.remote_tools.discover_remote_tools", return_value={}):
+            for text in ("rename {old} to {new} in the repo", "continue"):
+                async for _ in runner.run_async(
+                    user_id="u", session_id=session.id,
+                    new_message=types.Content(role="user", parts=[types.Part(text=text)]),
+                ):
+                    pass
+
+        self.assertEqual(len(requests), 2)
+        system = requests[-1].config.system_instruction
+        self.assertIn("Hello operator.", system)
+        self.assertIn("# Original Request\nrename {old} to {new} in the repo", system)
+        self.assertNotIn("continue", system)
 
     def _tools_agent(self):
         from dak_agent.builtin_tools import switch_mode
