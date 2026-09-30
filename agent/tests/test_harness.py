@@ -351,6 +351,80 @@ class TestToolOutputBudget:
         assert result is None
 
 
+class TestToolCallGuard:
+    def _plugin(self, **overrides):
+        return ContextHarnessPlugin(HarnessSettings(context_window=8192, **overrides), "test-model")
+
+    def _ctx(self, invocation_id="inv-1", state=None):
+        ctx = MagicMock()
+        ctx.invocation_id = invocation_id
+        ctx.state = {} if state is None else state
+        return ctx
+
+    async def _call(self, plugin, ctx, name="read_file", args=None):
+        return await plugin.before_tool_callback(
+            tool=_tool(name), tool_args={"path": "a.txt"} if args is None else args, tool_context=ctx)
+
+    @pytest.mark.asyncio
+    async def test_repeated_identical_call_is_blocked_after_threshold(self):
+        plugin, ctx = self._plugin(), self._ctx()
+        results = [await self._call(plugin, ctx) for _ in range(4)]
+        assert results[:3] == [None, None, None]
+        assert results[3]["observation"] == "repeated_call"
+        assert results[3]["tool"] == "read_file"
+        assert results[3]["count"] == 4
+
+    @pytest.mark.asyncio
+    async def test_different_args_or_tools_break_the_streak(self):
+        plugin, ctx = self._plugin(), self._ctx()
+        for i in range(8):
+            assert await self._call(plugin, ctx, args={"path": f"{i}.txt"}) is None
+        for name in ("read_file", "read_file", "read_file", "list_dir", "read_file"):
+            assert await self._call(plugin, ctx, name=name) is None
+
+    @pytest.mark.asyncio
+    async def test_step_limit_stops_further_calls(self):
+        plugin, ctx = self._plugin(max_invocation_tool_calls=5), self._ctx()
+        for i in range(5):
+            assert await self._call(plugin, ctx, args={"path": f"{i}.txt"}) is None
+        blocked = await self._call(plugin, ctx, args={"path": "5.txt"})
+        assert blocked["observation"] == "step_limit_exceeded"
+        assert blocked["limit"] == 5
+
+    @pytest.mark.asyncio
+    async def test_wall_time_limit_stops_further_calls(self):
+        plugin, ctx = self._plugin(max_wall_seconds=60.0), self._ctx()
+        with patch.object(harness.time, "time", return_value=1_000.0):
+            assert await self._call(plugin, ctx, args={"path": "0.txt"}) is None
+        with patch.object(harness.time, "time", return_value=1_061.0):
+            blocked = await self._call(plugin, ctx, args={"path": "1.txt"})
+        assert blocked["observation"] == "wall_time_exceeded"
+        assert blocked["elapsed_seconds"] == 61.0
+        assert blocked["limit_seconds"] == 60.0
+
+    @pytest.mark.asyncio
+    async def test_different_invocation_ids_have_independent_guards(self):
+        plugin, state = self._plugin(max_invocation_tool_calls=3), {}
+        first, second = self._ctx("inv-1", state), self._ctx("inv-2", state)
+        for _ in range(3):
+            assert await self._call(plugin, first) is None
+        assert (await self._call(plugin, first))["observation"] == "step_limit_exceeded"
+        for _ in range(3):
+            assert await self._call(plugin, second) is None
+
+    @pytest.mark.asyncio
+    async def test_guard_state_is_invocation_scoped_temp_state(self):
+        plugin, ctx = self._plugin(), self._ctx()
+        await self._call(plugin, ctx)
+        assert list(ctx.state) == ["temp:dak_tool_guard"]  # `temp:` is never persisted by ADK
+
+    @patch.dict(os.environ, {"MODEL_CONTEXT_WINDOW": "8192", "DAK_MAX_REPEATED_TOOL_CALLS": "5",
+                             "DAK_MAX_TOOL_CALLS": "12", "DAK_MAX_WALL_SECONDS": "90"})
+    def test_limits_from_env(self):
+        s = HarnessSettings.from_env("openai/llamacpp")
+        assert (s.max_repeated_tool_calls, s.max_invocation_tool_calls, s.max_wall_seconds) == (5, 12, 90.0)
+
+
 class TestReadToolOutput:
     def _ctx(self, text):
         ctx = MagicMock()

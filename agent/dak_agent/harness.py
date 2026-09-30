@@ -2,6 +2,10 @@
 
 Three layers, cheapest first:
 
+0. Tool-call guard (``ContextHarnessPlugin.before_tool_callback``): a tool
+   call that repeats the previous one too often, or comes past the
+   invocation's tool-call or wall-time limit, is not run; the model gets an
+   observation saying why instead (never an exception).
 1. Tool-output budget (``ContextHarnessPlugin.after_tool_callback``): an
    oversized tool result is replaced by a head/tail preview and the full text
    is offloaded to an artifact the agent can page through with
@@ -29,12 +33,14 @@ All limits derive from the model's context window (``MODEL_CONTEXT_WINDOW`` or
 LiteLLM's model map), so a llama.cpp server launched with 8K gets tight budgets
 while a 1M-token Gemini model is left mostly alone.
 """
+import hashlib
 import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, replace
-from typing import Any, Dict, Optional
+from typing import Any, Dict, MutableMapping, Optional
 
 from google.adk.apps.app import EventsCompactionConfig
 from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
@@ -159,6 +165,9 @@ class HarnessSettings:
     tool_output_max_chars: Optional[int] = None
     compaction_input_ratio: float = 0.5
     model_error_retry_attempts: int = 2
+    max_repeated_tool_calls: int = 3
+    max_invocation_tool_calls: int = 40
+    max_wall_seconds: float = 300.0
 
     @classmethod
     def from_env(cls, model_name: str) -> "HarnessSettings":
@@ -171,6 +180,9 @@ class HarnessSettings:
             tool_output_max_chars=_env_int("DAK_TOOL_OUTPUT_MAX_CHARS", 0, 0) or None,
             compaction_input_ratio=_env_float("DAK_COMPACTION_INPUT_RATIO", 0.5, 0.0, 1.0),
             model_error_retry_attempts=_env_int("DAK_MODEL_ERROR_RETRY_ATTEMPTS", 2, 0),
+            max_repeated_tool_calls=_env_int("DAK_MAX_REPEATED_TOOL_CALLS", 3, 1),
+            max_invocation_tool_calls=_env_int("DAK_MAX_TOOL_CALLS", 40, 1),
+            max_wall_seconds=_env_float("DAK_MAX_WALL_SECONDS", 300.0, 0.0, float("inf")),
         )
 
     @property
@@ -677,6 +689,28 @@ def fit_request_to_budget(llm_request, budget_tokens: int, keep_last: int = 2) -
     return elided
 
 
+# --- Tool-call guard ---
+
+# `temp:` state lives only for the current invocation and is never persisted,
+# so the per-invocation counters do not pile up in the session.
+_GUARD_STATE_KEY = "temp:dak_tool_guard"
+
+
+def _call_signature(tool_name: str, tool_args: dict) -> str:
+    canonical = json.dumps(tool_args, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256((tool_name + canonical).encode()).hexdigest()
+
+
+def _guard_state(state: MutableMapping, invocation_id: str) -> dict:
+    return state.setdefault(_GUARD_STATE_KEY, {}).setdefault(invocation_id, {
+        "step_count": 0,
+        "start_ts": time.time(),
+        "last_signature": None,
+        "streak": 0,
+        "violation_streak": 0,
+    })
+
+
 COMPACTED_USER_QUERY = (
     "[The earlier conversation, including my original request, was compacted "
     "into the summary that follows. Continue the task from it.]"
@@ -703,7 +737,8 @@ def ensure_user_query(llm_request) -> bool:
 
 
 class ContextHarnessPlugin(BasePlugin):
-    """App-wide plugin implementing the tool-output budget and the request guard."""
+    """App-wide plugin implementing the tool-call guard, the tool-output budget
+    and the request guard."""
 
     def __init__(self, settings: HarnessSettings, default_model_name: str, name: str = "dak_context_harness"):
         super().__init__(name=name)
@@ -731,6 +766,48 @@ class ContextHarnessPlugin(BasePlugin):
             settings = replace(self.settings, context_window=window)
             self._settings_cache[model_name] = settings
         return settings
+
+    async def before_tool_callback(self, *, tool, tool_args, tool_context) -> Optional[dict]:
+        """Stop a runaway tool loop: past the invocation's wall-time or tool-call
+        limit, or when the same call (tool + args) repeats more than
+        ``max_repeated_tool_calls`` times in a row, the tool is not run and the
+        returned dict is the observation the model sees instead."""
+        settings = self.settings
+        guard = _guard_state(tool_context.state, tool_context.invocation_id)
+        tool_name = getattr(tool, "name", "tool")
+        guard["step_count"] += 1
+        signature = _call_signature(tool_name, tool_args or {})
+        guard["streak"] = guard["streak"] + 1 if signature == guard["last_signature"] else 1
+        guard["last_signature"] = signature
+
+        elapsed = time.time() - guard["start_ts"]
+        if elapsed > settings.max_wall_seconds:
+            logger.warning("Tool guard: %s blocked, invocation ran %.0fs (limit %.0fs)",
+                           tool_name, elapsed, settings.max_wall_seconds)
+            return {
+                "observation": "wall_time_exceeded",
+                "elapsed_seconds": round(elapsed, 1),
+                "limit_seconds": settings.max_wall_seconds,
+                "hint": "This invocation has run too long; summarize progress and finish with attempt_answer.",
+            }
+        if guard["step_count"] > settings.max_invocation_tool_calls:
+            logger.warning("Tool guard: %s blocked, tool-call limit %d reached",
+                           tool_name, settings.max_invocation_tool_calls)
+            return {
+                "observation": "step_limit_exceeded",
+                "limit": settings.max_invocation_tool_calls,
+                "hint": "No more tool calls are allowed in this invocation; answer with what you have "
+                        "(attempt_answer) or ask the user to continue.",
+            }
+        if guard["streak"] > settings.max_repeated_tool_calls:
+            logger.warning("Tool guard: %s blocked, same call repeated %d times", tool_name, guard["streak"])
+            return {
+                "observation": "repeated_call",
+                "tool": tool_name,
+                "count": guard["streak"],
+                "hint": "Try a different approach instead of repeating the same call.",
+            }
+        return None
 
     async def after_tool_callback(self, *, tool, tool_args, tool_context, result) -> Optional[dict]:
         tool_name = getattr(tool, "name", "tool")
