@@ -136,7 +136,8 @@ def test_planner_restriction_does_not_block_write_todos_and_read_plan(mock_conte
     is separate from the pact's tool restriction (planner, `enforcer_allowed_tools`)."""
     mock_context.state[PLAN_KEY] = ["read_file"]
 
-    for tool_name, args in (("write_todos", {"items": [{"step": "a", "status": "done"}]}), ("read_plan", {})):
+    for tool_name, args in (("write_todos", {"items": [{"step": "a", "status": "done"}]}), ("read_plan", {}),
+                            ("read_original_request", {})):
         assert enforcer_validator(create_llm_response(tool_name=tool_name, tool_args=args), mock_context) is None
 
     blocked = enforcer_validator(create_llm_response(tool_name="write_file", tool_args={"path": "x"}), mock_context)
