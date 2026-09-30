@@ -36,7 +36,7 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
 | 計画 / TODO | `write_todos` | `PlanReActPlanner` / `BuiltInPlanner` | `planner`（確認必須・状態に残らない） |
 | サブエージェント（コンテキスト分離） | `task` ツール | `AgentTool`（子エージェントを独立コンテキストで実行し結果だけ返す） | A2A peer のみ。調査用の分離サブエージェントは無し |
 | スキル（段階的開示） | Skills | `SkillToolset`（list/search/load skill、resource、script） | 独自 `SkillRegistry` + `enable_skill` |
-| ツール失敗からの回復 | リトライ / 自己修正 | `ReflectAndRetryToolPlugin` | `on_tool_error` で観測値化のみ |
+| ツール失敗からの回復 | リトライ / 自己修正 | `ReflectAndRetryToolPlugin` | `on_tool_error` で観測値化 + §3 の 0（繰り返しのガード）。ReflectAndRetry は不採用（`docs/design/reflect_retry_plugin.md`、#91） |
 | プロンプトキャッシュ | Anthropic cache | `ContextCacheConfig`（2.8 で Anthropic のキャッシュブレークポイント対応） | 未使用 |
 | 中断・再開 | チェックポイント | `ResumabilityConfig` | 未使用 |
 | ベンダ製ハーネスの取り込み | — | `google.adk.labs.antigravity.AntigravityAgent`（Antigravity SDK の harness を ADK ノードとして包む。labs 扱い・Gemini 前提） | 不採用（マルチプロバイダ/ローカル LLM という憲章と合わない） |
@@ -237,7 +237,7 @@ MRTR（MCP 2026-07-28、SEP-2322）との対応: 保留の 1 件 ↔ `InputRequi
 | ~~P2~~ | ~~**コンテキスト超過からの回復**~~ | **済み（#88）**: 圧縮側は §5、モデル呼び出し側は §3 の 4（予算を絞って有限回呼び直し、尽きたら説明文で終える） | #88 |
 | P2 | **窓サイズの自動検出** | llama-server の `/props`（`n_ctx`）から窓を取る。compose 既定の 8192 と実サーバーの 32768 のようなずれを防ぐ | #89 |
 | P2 | **`SkillToolset` への移行** | 独自の `SkillRegistry`/`enable_skill` を ADK 標準（Agent Skills 仕様・段階的開示・リソース読み込み）に寄せ、保守コストを下げる | #90, #81 |
-| P2 | **ツール失敗の自己修正** | `ReflectAndRetryToolPlugin` を試す | #91 |
+| ~~P2~~ | ~~**ツール失敗の自己修正**~~ | **済み（#91）**: 比べて不採用。理由と上限・停止条件は `docs/design/reflect_retry_plugin.md` | #91 |
 | P2 | **モード切替の整理** | 圧縮とスキルで役割の多くが代替されたので、Meta-LLM によるモード切替を残すかどうかを評価で判断する（動的ツール削減 #81 と合わせて検討） | #92, #81 |
 | P3 | **長時間タスクの評価** | nightly-eval に「リポジトリ調査」系の長いゴールデンシナリオを加え、窓超過率・圧縮回数・トークン数を Langfuse の指標で追う | #93, #5, #71 |
 | P3 | **プロンプトキャッシュ** | `ContextCacheConfig`（Gemini/Anthropic）でコストと遅延を下げる | #94 |
