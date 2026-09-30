@@ -141,9 +141,11 @@ class TestSandboxManager(unittest.TestCase):
         manager.ensure_session("b")
         run.reset_mock()
         run.side_effect = subprocess.TimeoutExpired("docker rm", 60)
-        manager.destroy_all()  # sweep() at the next start removes what timed out
+        with patch("builtins.print") as warn:
+            manager.destroy_all()  # sweep() at the next start removes what timed out
         self.assertEqual(manager._sessions, {})
         self.assertEqual(run.call_count, 2)
+        self.assertIn("timed out", warn.call_args.args[0])  # the operator gets a signal
 
     def test_destroy_all_removes_every_session(self):
         run = MagicMock()
@@ -152,8 +154,8 @@ class TestSandboxManager(unittest.TestCase):
         manager.ensure_session("b")
         manager.destroy_all()
         self.assertEqual(manager._sessions, {})
-        self.assertEqual(run.call_args_list[-2].args[0][:3], ["docker", "rm", "-f"])
-        self.assertEqual(run.call_args_list[-1].args[0][:3], ["docker", "rm", "-f"])
+        removed = {call.args[0][3] for call in run.call_args_list[-2:] if call.args[0][:3] == ["docker", "rm", "-f"]}
+        self.assertEqual(removed, {manager._container_name("a"), manager._container_name("b")})
 
 
 if __name__ == "__main__":
