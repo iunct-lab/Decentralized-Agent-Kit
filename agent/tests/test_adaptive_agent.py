@@ -110,7 +110,7 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
 
     @patch("dak_agent.mode_manager.ModeManager.generate_mode_config")
     async def test_switch_mode_tool_trigger(self, mock_generate_config):
-        """Test that LLM calling switch_mode triggers a switch."""
+        """A switch_mode call that ran triggers a switch."""
         agent = AdaptiveAgent(
             model="test-model",
             name="test_agent",
@@ -121,14 +121,6 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         # Mock generate_config
         mock_generate_config.return_value = ("New Instruction", ["tool1"], [])
 
-        # Create LLM response with switch_mode tool call
-        llm_response = MagicMock()
-        mock_part = MagicMock()
-        mock_part.function_call = MagicMock()
-        mock_part.function_call.name = "switch_mode"
-        mock_part.function_call.args = {"reason": "test", "new_focus": "debugging"}
-        llm_response.content.parts = [mock_part]
-
         context = MagicMock()
         context.session.events = []
         # Bypass initial turn trigger for this session.
@@ -137,8 +129,14 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         # mock's "live copy" back at `agent` itself so the assertions below
         # can observe the switch (see AdaptiveAgent._live_agent).
         context._invocation_context.agent = agent
+        context.tool_confirmation = None
+        tool = MagicMock()
+        tool.name = "switch_mode"
 
-        await agent._wrapped_callback(llm_response=llm_response, callback_context=context)
+        # The switch happens once the switch_mode tool has run (after the
+        # permission plugin let it through), not when the model asks (#410).
+        await agent._after_tool(tool, {"reason": "test", "new_focus": "debugging"}, context,
+                                "Mode switch requested: test. New focus: debugging")
 
         # Verify Switch happened
         self.assertEqual(agent.instruction, "New Instruction")
