@@ -1,0 +1,15 @@
+{
+  "name": "search_edit",
+  "prompt": "grep for target in tmp_search_edit_golden.txt and replace it with TARGET",
+  "model": "fake-default",
+  "script": [
+    {"tool_call": {"name": "enable_skill", "args": {"skill_name": "grep"}}},
+    {"tool_call": {"name": "enable_skill", "args": {"skill_name": "edit_file"}}},
+    {"tool_call": {"name": "grep", "args": {"pattern": "target", "path": "tmp_search_edit_golden.txt"}}},
+    {"tool_call": {"name": "edit_file", "args": {"path": "tmp_search_edit_golden.txt", "old_string": "target", "new_string": "TARGET"}}},
+    {"text": "Found it; the edit waits for approval."}
+  ],
+  "expect": {
+    "function_calls": ["grep", "edit_file"]
+  }
+}
