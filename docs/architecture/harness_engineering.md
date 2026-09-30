@@ -83,7 +83,8 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
    - 直近のプロンプトが窓の 60% を超えたら、モデルを呼ぶ前に古いイベントを要約して
      置き換える。直近 4 イベントはそのまま残し、関数呼び出しと応答のペアは ADK が壊さない。
    - 要約プロンプトは「元の依頼の原文、調べ済みのファイルと事実、決定事項、残作業」を
-     残すよう DAK 用に調整した。
+     残すよう DAK 用に調整した。2 回目以降の圧縮では、ADK が前回の要約を要約対象の先頭に入れるので、
+     要約は作り直しではなく前回の要約の更新になる（`test_second_compaction_carries_forward_the_first_summary`、#103）。
    - 要約は ADK 標準の `LlmEventSummarizer` ではなく、DAK の `BudgetedEventSummarizer`
      が作る。要約リクエスト自身を窓に収め（§5）、失敗しても例外を投げない。
 3. **リクエストガード**（`ContextHarnessPlugin.before_model_callback`）
@@ -104,7 +105,10 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
      ツールループは保護の範囲なので剪定されず、従来どおり圧縮が受け持つ。
    - 組み立て後のリクエストが窓の 85% を超える場合、古いツール応答から順に
      `[elided …]` に差し替える。ADK はセッションの Content をそのまま使うため、
-     オブジェクトは書き換えずに差し替える。
+     オブジェクトは書き換えずに差し替える。直近の tail（`DAK_TAIL_RESERVE_RATIO`、既定: 窓の 20%）は
+     原文のまま残す。tail はユーザーターンの境界から始め（`_tail_keep_count`、#103）、予算に収まる
+     新しいターンを丸ごと残す。1 ターンの長いツールループのように最新のターンだけで予算を超えるときは、
+     そのターンの新しい側を予算の分だけ残す（ガードが残りを縮められるように）。
    - 見積もりは **CJK を 1 文字 = 1 トークン**で数える。単純な `len // 4` では日本語で
      3〜4 倍の過小評価になる。
 4. **超過からの回復**（`ContextHarnessPlugin.on_model_error_callback`、#88）
@@ -141,6 +145,7 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 | `DAK_COMPACTION_INTERVAL` | `20` | sliding-window 圧縮の間隔（ユーザーターン数） |
 | `DAK_COMPACTION_INPUT_RATIO` | `0.5` | 1 回の要約リクエストに入れる履歴の上限（窓占有率）。残りは要約の出力枠 |
 | `DAK_REQUEST_BUDGET_RATIO` | `0.85` | 最終ガードの上限 |
+| `DAK_TAIL_RESERVE_RATIO` | `0.2` | 最終ガードが原文のまま残す直近 tail（窓占有率、最低 256 トークン。ユーザーターンの境界から） |
 | `DAK_MODEL_ERROR_RETRY_ATTEMPTS` | `2` | 窓超過のエラーを受けたときの呼び直しの回数（予算は毎回半分）。`0` で呼び直さずに説明文を返す |
 | `DAK_TOOL_OUTPUT_MAX_CHARS` | 窓の 15%（2K〜40K 文字） | 1 回のツール結果の上限 |
 | `DAK_PRUNE_PROTECT_USER_TURNS` | `2` | 剪定しない直近のユーザーターン数 |

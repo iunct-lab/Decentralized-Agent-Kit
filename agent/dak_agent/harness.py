@@ -178,6 +178,7 @@ class HarnessSettings:
     prune_protect_tokens: Optional[int] = None
     prune_protect_user_turns: int = 2
     prune_minimum_tokens: int = 512
+    tail_reserve_ratio: float = 0.2
 
     @classmethod
     def from_env(cls, model_name: str) -> "HarnessSettings":
@@ -196,6 +197,7 @@ class HarnessSettings:
             prune_protect_tokens=_env_int("DAK_PRUNE_PROTECT_TOKENS", 0, 0) or None,
             prune_protect_user_turns=_env_int("DAK_PRUNE_PROTECT_USER_TURNS", 2, 0),
             prune_minimum_tokens=_env_int("DAK_PRUNE_MINIMUM_TOKENS", 512, 0),
+            tail_reserve_ratio=_env_float("DAK_TAIL_RESERVE_RATIO", 0.2, 0.0, 1.0),
         )
 
     @property
@@ -231,6 +233,11 @@ class HarnessSettings:
         if self.prune_protect_tokens:
             return self.prune_protect_tokens
         return max(1, int(self.context_window * _PRUNE_PROTECT_WINDOW_FRACTION))
+
+    @property
+    def tail_reserve_tokens(self) -> int:
+        """The newest part of a request the budget guard leaves verbatim."""
+        return max(256, int(self.context_window * self.tail_reserve_ratio))
 
     @property
     def plan_chars(self) -> int:
@@ -665,6 +672,25 @@ def _elide_part(part: types.Part, kind: str) -> Optional[types.Part]:
     return None
 
 
+def _tail_keep_count(contents: list, budget_tokens: int) -> int:
+    """How many of the newest contents the budget guard leaves verbatim: the
+    newest user turns (a user text and everything after it) that fit in
+    `budget_tokens`, so a turn is not cut in the middle. When even the newest
+    turn does not fit (a long tool loop), as many of its newest contents as
+    fit, so the guard can still shrink the rest. At least 1 unless empty."""
+    used = 0
+    fitting = 0  # newest contents inside the budget
+    boundary = 0  # of those, up to the oldest user turn start
+    for index in range(len(contents) - 1, -1, -1):
+        used += _content_tokens(contents[index])
+        if used > budget_tokens:
+            break
+        fitting += 1
+        if _is_user_turn(contents[index]):
+            boundary = fitting
+    return boundary or max(fitting, min(1, len(contents)))
+
+
 def fit_request_to_budget(llm_request, budget_tokens: int, keep_last: int = 2) -> int:
     """Elide the oldest tool payloads / long texts until the request fits.
 
@@ -994,7 +1020,8 @@ class ContextHarnessPlugin(BasePlugin):
         ensure_user_query(llm_request)
         await prune_old_tool_results(llm_request, callback_context, settings.prune_protect_token_budget,
                                      settings.prune_protect_user_turns, settings.prune_minimum_tokens)
-        fit_request_to_budget(llm_request, settings.request_token_budget)
+        fit_request_to_budget(llm_request, settings.request_token_budget,
+                              keep_last=_tail_keep_count(llm_request.contents or [], settings.tail_reserve_tokens))
         return None
 
     async def on_model_error_callback(self, *, callback_context, llm_request, error) -> Optional[LlmResponse]:
