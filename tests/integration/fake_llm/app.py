@@ -66,13 +66,14 @@ def get_requests(model: str):
 
 def _build_message(item: Dict[str, Any]) -> (dict, str):
     """Convert a scripted item into an OpenAI assistant message + finish_reason."""
-    if "tool_call" in item:
-        call = item["tool_call"]
+    if "tool_call" in item or "tool_calls" in item:
+        calls = item.get("tool_calls") or [item["tool_call"]]  # several = parallel calls in one response
         message = {
             "role": "assistant",
             "content": None,
             "tool_calls": [
                 {
+                    "index": i,  # tells streamed parallel calls apart
                     "id": f"call_{uuid.uuid4().hex[:8]}",
                     "type": "function",
                     "function": {
@@ -80,6 +81,7 @@ def _build_message(item: Dict[str, Any]) -> (dict, str):
                         "arguments": json.dumps(call.get("args", {})),
                     },
                 }
+                for i, call in enumerate(calls)
             ],
         }
         return message, "tool_calls"

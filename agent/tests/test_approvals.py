@@ -4,6 +4,7 @@ import pytest
 
 from dak_agent.approvals import (
     PENDING_TIMEOUT_SECONDS,
+    UNANSWERED_REASON,
     build_question_reply,
     build_reply_function_response,
     is_expired,
@@ -85,6 +86,18 @@ def test_build_reply_reject_carries_reason():
     response = message["parts"][0]["functionResponse"]["response"]
     assert response["confirmed"] is False
     assert response["payload"]["reason"] == "not now"
+
+
+def test_build_reply_answers_the_unanswered_confirmations_of_the_turn():
+    """ADK reads only the last user message: the other confirmations from the
+    same turn get a rejection (or timed_out) in it too (#406)."""
+    message = build_reply_function_response("adk-1", "once", unanswered=[("adk-2", "pending"), ("adk-3", "timed_out")])
+    answers = {p["functionResponse"]["id"]: p["functionResponse"]["response"] for p in message["parts"]}
+    assert answers == {
+        "adk-1": {"confirmed": True, "payload": {"mode": "once", "reason": ""}},
+        "adk-2": {"confirmed": False, "payload": {"mode": "reject", "reason": UNANSWERED_REASON}},
+        "adk-3": {"confirmed": False, "payload": {"mode": "timed_out", "reason": ""}},
+    }
 
 
 def test_build_reply_refuses_unknown_mode():

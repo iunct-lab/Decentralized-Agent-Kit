@@ -112,8 +112,10 @@ async def reply(approval_id: str, body: Reply):
             if body.mode is None:
                 raise HTTPException(status_code=422, detail="an approval needs a mode")
             timed_out = item["status"] == "timed_out"
+            unanswered = [(pid, p["status"]) for pid, p in pending.items()
+                          if pid != approval_id and p["kind"] == "approval"]
             message = approvals.build_reply_function_response(
-                approval_id, "timed_out" if timed_out else body.mode, "" if timed_out else body.reason)
+                approval_id, "timed_out" if timed_out else body.mode, "" if timed_out else body.reason, unanswered)
 
         resp = await client.post("/run", json={
             "app_name": body.app_name, "user_id": body.user_id,

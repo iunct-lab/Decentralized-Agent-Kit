@@ -198,3 +198,36 @@ def test_bff_pending_answered_by_dak_cli(fake_llm, tmp_path):
     again = _dak_cli(tmp_path, "approve", item["id"], "--session", session_id, "--user", user_id)
     assert again.returncode != 0
     assert "404" in again.stdout
+
+
+def test_answering_one_of_two_parallel_approvals_answers_the_other(fake_llm):
+    """Two run_command calls in one response both wait for approval. Answering
+    one also answers the other (rejected with a reason), so its result reaches
+    the model instead of being dropped (#406)."""
+    fake_llm.clear(MODEL)
+    fake_llm.script(MODEL, [
+        fake_llm.tool_calls(fake_llm.tool_call("run_command", command="echo first"),
+                            fake_llm.tool_call("run_command", command="echo second")),
+        fake_llm.text("One ran, one did not."),
+    ])
+    session_id = f"session_it_{uuid.uuid4().hex[:8]}"
+    user_id = f"user_{session_id}"
+    httpx.post(f"{AGENT_URL}/apps/dak_agent/users/{user_id}/sessions/{session_id}", json={},
+               timeout=30.0).raise_for_status()
+    httpx.post(f"{AGENT_URL}/run", json={
+        "app_name": "dak_agent", "user_id": user_id, "session_id": session_id,
+        "new_message": {"parts": [{"text": "run both"}]},
+        "state_delta": {"dak:tools": ["run_command"]},
+    }, timeout=AGENT_RUN_TIMEOUT).raise_for_status()
+
+    pending = _pending(user_id, session_id)
+    assert sorted(p["tool_args"]["command"] for p in pending) == ["echo first", "echo second"], pending
+    first = next(p for p in pending if p["tool_args"]["command"] == "echo first")
+
+    resp = _reply(first["id"], user_id, session_id, mode="once")
+    assert resp.status_code == 200, resp.text
+    assert _pending(user_id, session_id) == []
+
+    last = _last_model_request(MODEL)
+    assert "first" in last  # the approved command's output
+    assert "denied_by_user" in last and "same turn" in last

@@ -453,3 +453,44 @@ def test_switch_mode_is_applied_even_when_a_plugin_replaces_its_result():
     _, state, generate = _switch_mode_run(DEFAULT_RULES, plugins=[Replacing(name="replacing")])
     generate.assert_called_once()
     assert state.get(STATE_MODE_INSTRUCTION) == "Switched instruction."
+
+
+# --- Two confirmations in one turn, one answered (#406) ---
+
+class TwoCallsLlm(BaseLlm):
+    """Calls run_command twice in one response, then answers with text."""
+    requests: list = []
+
+    async def generate_content_async(self, llm_request, stream=False):
+        self.requests.append(llm_request)
+        if len(self.requests) == 1:
+            parts = [types.Part(function_call=types.FunctionCall(id=f"fc-{n}", name="run_command", args={"command": f"rm {n}"}))
+                     for n in ("a", "b")]
+        else:
+            parts = [types.Part(text="done")]
+        yield LlmResponse(content=types.Content(role="model", parts=parts))
+
+
+def test_answering_one_of_two_confirmations_answers_the_other():
+    from dak_agent import approvals
+
+    tool = mcp_tool("run_command")
+    llm = TwoCallsLlm(model="two", requests=[])
+    agent = AdaptiveAgent(model=llm, name="dak_agent", instruction="x", tools=[tool])
+    agent._builtin_tools.append(tool)  # stands in for the MCP toolset
+    h = Harness(tool, {}, agent=agent)
+    with patch("dak_agent.remote_tools.discover_remote_tools", return_value={}):
+        events = h.say("remove both")
+        dumped = [e.model_dump(mode="json", by_alias=True, exclude_none=True) for e in events]
+        pending = approvals.list_pending_approvals(dumped)
+        assert [p["tool_args"] for p in pending] == [{"command": "rm a"}, {"command": "rm b"}]
+
+        first, second = pending
+        message = approvals.build_reply_function_response(
+            first["id"], "once", unanswered=[(second["id"], "pending")])
+        h.send(types.Content.model_validate({"role": "user", **message}))
+
+    assert tool.calls == [{"command": "rm a"}]  # only the answered one ran
+    sent = [p.function_response.response for c in h.llm.requests[-1].contents for p in c.parts
+            if p.function_response and p.function_response.name == "run_command"]
+    assert {"observation": "denied_by_user", "reason": approvals.UNANSWERED_REASON} in sent
