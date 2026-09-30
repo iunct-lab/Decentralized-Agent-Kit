@@ -708,7 +708,15 @@ def _guard_state(state: MutableMapping, invocation_id: str) -> dict:
         "last_signature": None,
         "streak": 0,
         "violation_streak": 0,
+        "checked_calls": [],
     })
+
+
+def _count_call(guard: dict, tool_name: str, tool_args: Optional[dict]) -> None:
+    guard["step_count"] += 1
+    signature = _call_signature(tool_name, tool_args or {})
+    guard["streak"] = guard["streak"] + 1 if signature == guard["last_signature"] else 1
+    guard["last_signature"] = signature
 
 
 COMPACTED_USER_QUERY = (
@@ -775,10 +783,8 @@ class ContextHarnessPlugin(BasePlugin):
         settings = self.settings
         guard = _guard_state(tool_context.state, tool_context.invocation_id)
         tool_name = getattr(tool, "name", "tool")
-        guard["step_count"] += 1
-        signature = _call_signature(tool_name, tool_args or {})
-        guard["streak"] = guard["streak"] + 1 if signature == guard["last_signature"] else 1
-        guard["last_signature"] = signature
+        _count_call(guard, tool_name, tool_args)
+        guard["checked_calls"].append(tool_context.function_call_id)
 
         elapsed = time.time() - guard["start_ts"]
         if elapsed > settings.max_wall_seconds:
@@ -811,6 +817,15 @@ class ContextHarnessPlugin(BasePlugin):
 
     async def after_tool_callback(self, *, tool, tool_args, tool_context, result) -> Optional[dict]:
         tool_name = getattr(tool, "name", "tool")
+        # A call answered by an earlier plugin (the PermissionPlugin denying it or
+        # asking for approval) never reached before_tool_callback, but ADK runs
+        # every after_tool_callback: count it here so it still breaks a streak
+        # and counts toward the limit.
+        guard = _guard_state(tool_context.state, tool_context.invocation_id)
+        if tool_context.function_call_id in guard["checked_calls"]:
+            guard["checked_calls"].remove(tool_context.function_call_id)
+        else:
+            _count_call(guard, tool_name, tool_args)
         if tool_name == READ_TOOL_OUTPUT_NAME:
             return None  # already paged to the budget
         max_chars = self.settings.tool_output_chars

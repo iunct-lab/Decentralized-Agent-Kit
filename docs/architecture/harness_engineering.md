@@ -59,6 +59,8 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
        超えて続いた → `{"observation": "repeated_call", "tool", "count", "hint"}`
      - 1 invocation のツール呼び出しが `DAK_MAX_TOOL_CALLS`（既定 40）回を超えた → `step_limit_exceeded`
      - invocation の最初のツール呼び出しから `DAK_MAX_WALL_SECONDS`（既定 300）秒を超えた → `wall_time_exceeded`
+   - `PermissionPlugin` が先に答えた呼び出し（拒否・承認待ち）は ADK がこの `before_tool_callback` を飛ばすので、
+     `after_tool_callback`（ADK はすべてのプラグインで実行する）で数える。拒否された呼び出しも連続を切り、上限に数える。
    - カウンタは invocation ごとに `temp:dak_tool_guard` に持つ（ADK の `temp:` state は保存されないので、
      セッションに溜まらず、次の invocation は 0 から数える）。
    - ツール定義を次のモデル呼び出しから外すことはしない（PBI #99 の決定ログ）。
