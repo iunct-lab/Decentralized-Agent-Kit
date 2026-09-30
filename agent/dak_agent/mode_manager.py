@@ -109,8 +109,9 @@ class ModeManager:
         """Decide whether to switch modes: after a model response (marks the
         first turn) and when the switch_mode tool runs.
 
-        Only an explicit `switch_mode` call triggers a switch; the first turn
-        of a session always keeps the default minimal toolset.
+        Only an explicit `switch_mode` call triggers a switch. The session's
+        first model response only marks the first turn; a `switch_mode` call
+        in it switches once the tool runs.
 
         Args:
             state: The current session's state (`callback_context.state`).
