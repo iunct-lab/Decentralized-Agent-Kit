@@ -51,22 +51,25 @@ Gemini の無料枠に収まれば $0 だが、回数制限が未確認なので
 
 ## 切り替える
 
-鍵の値はファイルにもコマンドの履歴にも残さない（`gh secret set` は値を標準入力から読む）。
+鍵の値はファイルにもコマンドの履歴にも残さない（`gh secret set` は値を標準入力から読む）。手元のシェルの環境変数を使うので、1〜4 は同じシェルで続けて行う。
 
 1. 今の値を控える: `gh variable get MAINT_LLM_BASE_URL`、`gh variable get MAINT_LLM_MODEL`（2026-10-01 時点は Gemini の OpenAI 互換の URL と `gemini-3.5-flash`）、`gh variable get MAINT_ASSESSOR`（無ければ「無し」と控える。2026-10-01 時点は無し）。secret は読み出せないので、元の鍵がどこにあるかを控える。
-2. Actions の変数と secret を変える:
+2. 変える前に、手元で同じ URL・モデル・鍵で 1 回だけ呼んで確かめる（数トークン分の費用がかかる。Issue は作らない）。鍵は画面に出さずに読み、ファイルに書かない:
    ```bash
-   gh variable set MAINT_LLM_BASE_URL --body "https://api.openai.com/v1"   # Gemini なら https://generativelanguage.googleapis.com/v1beta/openai
-   gh variable set MAINT_LLM_MODEL --body "<model id>"
-   gh secret set MAINT_LLM_API_KEY                                         # 値はプロンプトに貼る
-   ```
-3. 変える前に、手元で同じ URL・モデル・鍵で 1 回だけ呼んで確かめる（数トークン分の費用がかかる。Issue は作らない）。鍵は環境変数から渡し、ファイルに書かない:
-   ```bash
+   export MAINT_LLM_BASE_URL="https://api.openai.com/v1"   # Gemini なら https://generativelanguage.googleapis.com/v1beta/openai
+   export MAINT_LLM_MODEL="<model id>"
+   read -rs MAINT_LLM_API_KEY && export MAINT_LLM_API_KEY  # 値を貼って Enter（表示されない）
    curl -sS "$MAINT_LLM_BASE_URL/chat/completions" -H "Authorization: Bearer $MAINT_LLM_API_KEY" -H "Content-Type: application/json" \
      -d "{\"model\": \"$MAINT_LLM_MODEL\", \"temperature\": 0, \"messages\": [{\"role\": \"user\", \"content\": \"Reply with []\"}]}"
    ```
    `choices` が返ること。`400`（`temperature` を受け付けないなど）や `401` なら切り替えない。定期実行のワークフローを手で回すと、LLM を何度も呼び、提案があれば Issue を起票するので、確かめには使わない。
-4. `dependency-triage` でも LLM に判定させるなら、Dependabot 側の secret にも同じ鍵を入れる: `gh secret set MAINT_LLM_API_KEY --app dependabot`。
+3. 同じ値で Actions の変数と secret を変える（同じシェルで続ける）:
+   ```bash
+   gh variable set MAINT_LLM_BASE_URL --body "$MAINT_LLM_BASE_URL"
+   gh variable set MAINT_LLM_MODEL --body "$MAINT_LLM_MODEL"
+   printf '%s' "$MAINT_LLM_API_KEY" | gh secret set MAINT_LLM_API_KEY
+   ```
+4. `dependency-triage` でも LLM に判定させるなら、Dependabot 側の secret にも同じ鍵を入れる: `printf '%s' "$MAINT_LLM_API_KEY" | gh secret set MAINT_LLM_API_KEY --app dependabot`。
    - Dependabot の PR で動く `dependency-triage` には、Actions の secret は渡らず、Dependabot の secret が渡る。リポジトリの変数（`vars.*`）は渡る（2026-09-28 の Dependabot の実行のログで `MAINT_LLM_BASE_URL` / `MAINT_LLM_MODEL` に値があった）。変数は Actions と共通なので、Dependabot 側に別に置くものは無い。
    - `dependency-triage.yml` は `vars.MAINT_ASSESSOR` が無ければ、`MAINT_LLM_BASE_URL` と `MAINT_LLM_MODEL` があるだけで LLM で判定する。Dependabot の secret が無いと鍵なしで呼び、失敗してパッケージごとにヒューリスティックに落ちる（同じ実行で 503 とタイムアウトが出ていた）。LLM に判定させないなら `gh variable set MAINT_ASSESSOR --body heuristic` で無駄な呼び出しを止める。
    - 逆に LLM に判定させるなら、`MAINT_ASSESSOR` が `heuristic` になっていないこと（無いか `llm`）を確かめる。`heuristic` のままだと、Dependabot 側に鍵を入れてもヒューリスティックで判定する。
