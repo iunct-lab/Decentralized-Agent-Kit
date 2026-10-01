@@ -6,7 +6,8 @@ import os
 # Add parent directory to path to import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dak_agent.adaptive_agent import AdaptiveAgent
+from dak_agent import builtin_tools, plan_mode
+from dak_agent.adaptive_agent import PLAN_MODE_REMINDER, AdaptiveAgent
 from dak_agent.mode_manager import ModeManager, FIRST_TURN_DONE_KEY
 from google.adk.tools import FunctionTool
 
@@ -340,6 +341,43 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Hello operator.", system)
         self.assertIn("1. [pending] fill {summary}", system)
 
+    async def test_plan_mode_reminder_and_verbatim_plan_both_reach_the_model(self):
+        """The plan is kept out of `{var}` injection by cutting it off the
+        instruction's end; the reminder must not shift that cut."""
+        from google.adk.apps import App
+        from google.adk.artifacts import InMemoryArtifactService
+        from google.adk.models.base_llm import BaseLlm
+        from google.adk.models.llm_response import LlmResponse
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
+        from google.genai import types
+
+        requests = []
+
+        class RecordingLlm(BaseLlm):
+            async def generate_content_async(self, llm_request, stream=False):
+                requests.append(llm_request)
+                yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text="ok")]))
+
+        agent = AdaptiveAgent(model=RecordingLlm(model="recording"), name="dak_agent", instruction="Base.", tools=[])
+        sessions = InMemorySessionService()
+        session = await sessions.create_session(
+            app_name="dak_agent", user_id="u",
+            state={plan_mode.PLAN_MODE_KEY: True, "dak_todos": [{"step": "fill {summary}", "status": "pending"}]})
+        runner = Runner(app=App(name="dak_agent", root_agent=agent), session_service=sessions,
+                        artifact_service=InMemoryArtifactService())
+
+        with patch("dak_agent.remote_tools.discover_remote_tools", return_value={}):
+            async for _ in runner.run_async(
+                user_id="u", session_id=session.id,
+                new_message=types.Content(role="user", parts=[types.Part(text="hi")]),
+            ):
+                pass
+
+        system = requests[-1].config.system_instruction
+        self.assertIn(PLAN_MODE_REMINDER.strip(), system)
+        self.assertIn("1. [pending] fill {summary}", system)
+
     async def test_plan_written_mid_invocation_reaches_the_next_model_call(self):
         """Compaction happens inside long invocations, so the plan must be in
         the instruction from the model call right after write_todos, not only
@@ -362,7 +400,7 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("20. [pending] step 19", requests[1].config.system_instruction)
 
-    async def _plan_then_answer(self, plan, plugins=()):
+    async def _plan_then_answer(self, plan, plugins=(), call=None):
         from google.adk.apps import App
         from google.adk.artifacts import InMemoryArtifactService
         from google.adk.models.base_llm import BaseLlm
@@ -372,7 +410,7 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         from google.adk.tools import FunctionTool
         from google.genai import types
 
-        from dak_agent.builtin_tools import write_todos
+        from dak_agent.builtin_tools import planner, write_todos
 
         requests = []
 
@@ -381,13 +419,13 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
                 requests.append(llm_request)
                 if len(requests) == 1:
                     part = types.Part(function_call=types.FunctionCall(
-                        id="fc-1", name="write_todos", args={"items": plan}))
+                        id="fc-1", **(call or {"name": "write_todos", "args": {"items": plan}})))
                 else:
                     part = types.Part(text="done")
                 yield LlmResponse(content=types.Content(role="model", parts=[part]))
 
         agent = AdaptiveAgent(model=PlanThenAnswer(model="plan"), name="dak_agent",
-                              instruction="Base.", tools=[FunctionTool(write_todos)])
+                              instruction="Base.", tools=[FunctionTool(write_todos), FunctionTool(planner)])
         sessions = InMemorySessionService()
         session = await sessions.create_session(app_name="dak_agent", user_id="u")
         runner = Runner(app=App(name="dak_agent", root_agent=agent, plugins=list(plugins)),
@@ -400,6 +438,37 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
             ):
                 pass
         return requests
+
+    def test_resolve_session_instruction_includes_plan_mode_reminder_when_active(self):
+        agent = AdaptiveAgent(model="test-model", name="test_agent",
+                              instruction="Initial instruction", tools=self.mock_tools)
+        instruction = agent._resolve_session_instruction({plan_mode.PLAN_MODE_KEY: True}, {})
+        self.assertIn("Plan mode", instruction)
+        self.assertIn("plan_exit", instruction)
+
+    def test_resolve_session_instruction_omits_plan_mode_reminder_when_inactive(self):
+        agent = AdaptiveAgent(model="test-model", name="test_agent",
+                              instruction="Initial instruction", tools=self.mock_tools)
+        self.assertNotIn("Plan mode", agent._resolve_session_instruction({}, {}))
+        self.assertNotIn("Plan mode", agent._resolve_session_instruction({plan_mode.PLAN_MODE_KEY: False}, {}))
+
+    def test_resolve_session_instruction_shows_plan_progress_alongside_plan_mode_reminder(self):
+        agent = AdaptiveAgent(model="test-model", name="test_agent",
+                              instruction="Initial instruction", tools=self.mock_tools)
+        state = {plan_mode.PLAN_MODE_KEY: True,
+                 builtin_tools.STATE_TODOS: [{"step": "read repo", "status": "done"}]}
+        instruction = agent._resolve_session_instruction(state, {})
+        self.assertIn("# Current Plan\n1. [done] read repo", instruction)
+        self.assertIn("Plan mode", instruction)
+
+    async def test_plan_mode_reminder_reaches_the_next_model_call(self):
+        """Entering Plan mode mid-invocation: the very next model call is already constrained."""
+        requests = await self._plan_then_answer([], call={
+            "name": "planner", "args": {"task_description": "t", "plan_steps": ["read"], "enter_plan_mode": True}})
+
+        self.assertEqual(len(requests), 2)
+        self.assertNotIn("Plan mode", requests[0].config.system_instruction)
+        self.assertIn("Plan mode", requests[1].config.system_instruction)
 
     def test_call_instruction_replaces_the_plan_too(self):
         """`dak:instruction` makes the system prompt exactly the caller's text

@@ -83,6 +83,7 @@ def planner(task_description: str, plan_steps: list[str], allowed_tools: list[st
         )
     if enter_plan_mode and tool_context is not None:
         plan_mode.enter(tool_context.state)
+        _refresh_instruction(tool_context)  # the Plan mode reminder from the next model call on
         restriction_msg += (
             "\n\n[System] Plan Mode Active: only read-only tools are available. Mutating tools "
             "(write_file/edit_file outside plans/*.md, run_command) will be denied until plan_exit is approved."
@@ -297,6 +298,7 @@ def plan_exit(plan_path: str, tool_context) -> str:
     # Registered with require_confirmation=True: ADK runs this body only after
     # the user approved, so a rejection leaves the session in Plan mode.
     plan_mode.exit_(tool_context.state)
+    _refresh_instruction(tool_context)
     return f"Plan approved. Exited plan mode; mutating tools are available again. Approved plan: {plan_path}"
 
 
