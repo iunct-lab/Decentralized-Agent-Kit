@@ -1304,7 +1304,6 @@ PLAN = [{"step": "read repo", "status": "done"}, {"step": "write summary", "stat
 def _make_fake_llm(tool_calls: int | list, thoughts: bool = False, plan: bool = False, overflows: int = 0):
     from google.adk.models.base_llm import BaseLlm
     from google.adk.models.llm_response import LlmResponse
-    from google.adk.models.llm_response import LlmResponse
 
     class ScriptedLlm(BaseLlm):
         """In each user turn, calls big_tool `tool_calls` times (a list: per turn, the last
