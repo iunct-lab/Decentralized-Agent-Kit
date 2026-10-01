@@ -609,7 +609,8 @@ class TestContextHarnessPluginHooks:
         await plugin.before_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx)
         result = await plugin.after_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx,
                                                   result="secret")
-        assert result["truncated"] is True
+        assert result["observation"] == "hook_rewrote_output"
+        assert result["result"]["truncated"] is True
         assert "secret" not in json.dumps(result)
 
     @pytest.mark.asyncio
@@ -620,6 +621,45 @@ class TestContextHarnessPluginHooks:
         result = await plugin.after_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx,
                                                   result="secret")
         assert result == {"observation": "hook_rewrote_output", "result": "redacted"}
+
+    async def _rewritten(self, monkeypatch, result):
+        """after_tool_callback's answer for a call whose input a PreToolUse hook rewrote."""
+        plugin = self._plugin(monkeypatch, self._echo(
+            "PreToolUse", {"hookSpecificOutput": {"updatedInput": {"command": "ls -la"}}}))
+        ctx, args = self._ctx(), {"command": "ls"}
+        await plugin.before_tool_callback(tool=_tool("run_command"), tool_args=args, tool_context=ctx)
+        return ctx, await plugin.after_tool_callback(tool=_tool("run_command"), tool_args=args, tool_context=ctx,
+                                                     result=result)
+
+    @pytest.mark.asyncio
+    async def test_rewrite_keeps_an_mcp_media_result_as_it_is(self, monkeypatch):
+        image = {"content": [{"type": "image", "data": "A" * 50_000, "mimeType": "image/png"}]}
+        ctx, result = await self._rewritten(monkeypatch, image)
+        assert result["observation"] == "hook_rewrote_input"
+        assert result["result"] == image
+        ctx.save_artifact.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rewrite_keeps_is_error_of_a_large_error_result(self, monkeypatch):
+        _, result = await self._rewritten(monkeypatch, {"content": [{"type": "text", "text": "e" * 50_000}],
+                                                        "isError": True})
+        assert result["observation"] == "hook_rewrote_input"
+        assert result["result"]["truncated"] is True
+        assert result["result"]["isError"] is True
+
+    @pytest.mark.asyncio
+    async def test_post_hook_skipped_when_the_tool_raised(self, monkeypatch):
+        # Claude Code runs PostToolUse after a tool succeeds; a failure is not audited as a result.
+        plugin = self._plugin(monkeypatch, {"event": "PostToolUse", "type": "command", "command": "exit 2"})
+        ctx = self._ctx()
+        await plugin.before_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx)
+        assert await plugin.on_tool_error_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx,
+                                                   error=ValueError("boom")) is None
+        with patch("dak_agent.hooks.run_hook") as run_hook:
+            result = await plugin.after_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx,
+                                                      result={"error": "boom"})
+        assert result is None
+        run_hook.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_post_hook_skipped_when_an_earlier_plugin_answered(self, monkeypatch):
