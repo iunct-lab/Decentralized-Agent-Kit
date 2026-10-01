@@ -174,3 +174,8 @@ def test_an_empty_json_object_is_read_as_json(inputs):
 def test_broken_json_around_an_empty_object_is_not_parsed_ok(inputs):
     r = run_case("charter-review", lambda prompt: '{"title": invalid, "revisions": {}}', inputs)
     assert not r.parsed_ok
+
+
+def test_an_empty_object_in_prose_is_read_as_json(inputs):
+    r = run_case("charter-review", lambda prompt: "No proposals: {}", inputs)
+    assert r.parsed_ok

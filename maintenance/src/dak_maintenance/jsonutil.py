@@ -10,10 +10,12 @@ _OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 _ARR_RE = re.compile(r"\[.*\]", re.DOTALL)
 
 
-def extract_json(text: str):
-    """Return the first JSON object or array found, or {} if none/invalid."""
+def extract_json(text: str, default=None):
+    """Return the first JSON object or array found, or `default` ({} unless given) if none/invalid."""
+    if default is None:
+        default = {}
     if not text:
-        return {}
+        return default
     m = _FENCE_RE.search(text)
     candidate = m.group(1) if m else None
     if candidate is None:
@@ -25,8 +27,8 @@ def extract_json(text: str):
         else:
             candidate = (obj or arr).group(0) if (obj or arr) else None
     if candidate is None:
-        return {}
+        return default
     try:
         return json.loads(candidate)
     except json.JSONDecodeError:
-        return {}
+        return default
