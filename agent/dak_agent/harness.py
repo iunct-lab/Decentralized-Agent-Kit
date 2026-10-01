@@ -1138,7 +1138,7 @@ class ContextHarnessPlugin(BasePlugin):
     async def after_run_callback(self, *, invocation_context) -> None:
         """Stop hooks: audit and notify only. ADK's after_run_callback returns
         None and cannot keep the agent going, so a deny is logged, not obeyed."""
-        matched = hooks.hooks_for(self._hooks, "Stop", "*")
+        matched = [h for h in self._hooks if h.event == "Stop"]  # no tool, so `if` does not apply
         if not matched:
             return None
         session_id = getattr(getattr(invocation_context, "session", None), "id", "") or ""

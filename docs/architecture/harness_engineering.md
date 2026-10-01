@@ -241,7 +241,7 @@ MRTR（MCP 2026-07-28、SEP-2322）との対応: 保留の 1 件 ↔ `InputRequi
 | `type` | ○ | `command`（シェルで実行）/ `http`（POST） |
 | `command` / `url` | type に応じて ○ | 実行するコマンド / 送り先の URL |
 | `timeout` | | 秒（正の数、既定 30）。過ぎたらエラー扱いで、command はプロセスグループごと止める |
-| `if` | | ツール名の glob（例 `run_*`）。無ければ全ツール |
+| `if` | | ツール名の glob（例 `run_*`）。無ければ全ツール。Stop には効かない（ツールが無いので常に起動する） |
 
 ```json
 [{"event": "PreToolUse", "type": "command", "command": "python3 /opt/hooks/no_rm.py", "if": "run_command"}]
@@ -264,8 +264,10 @@ MRTR（MCP 2026-07-28、SEP-2322）との対応: 保留の 1 件 ↔ `InputRequi
 | PostToolUse の `updatedToolOutput` | `{"observation": "hook_rewrote_output", "result": ...}`（元の出力は載せない。そのあとツール出力の上限を受ける） |
 
 - PreToolUse は実行ガード（反復・回数・時間）のあとに起動する。ガードが止めた呼び出しでは起動しない
+- `updatedInput` は ADK が渡した引数をその場で書き換えるので、ツールは ADK の通常の経路で動く（エラーは `on_tool_error` を通る）。PostToolUse には書き換え後の引数が届く
+- 書き換えた引数は `PermissionPlugin` で評価し直さない（`PermissionPlugin` は書き換えの前に元の引数で評価済み）。hook は運用者の設定で、`agent_config.yaml` の規則と同じく信頼する（Claude Code でも hook の `allow` は権限の確認を飛ばす）。規則で止めたい入力へ書き換える hook を置かない
 - PostToolUse は、ツールが実際に動いた呼び出しだけで起動する（`PermissionPlugin` が拒否・承認待ちにした呼び出しや、ガード・PreToolUse が止めた呼び出しでは起動しない）
-- **Stop は監査・通知専用で、止められない。** ADK の `after_run_callback` は戻り値が `None` 固定で、Claude Code の Stop hook のように拒否してエージェントを続けさせることができない。拒否やエラーが返っても警告をログに出すだけ
+- **Stop は監査・通知専用で、止められない。** ADK の `after_run_callback` は戻り値が `None` 固定で、Claude Code の Stop hook のように拒否してエージェントを続けさせることができない。拒否やエラーが返っても警告をログに出すだけ。ADK は実行がエラーで終わったときは `after_run_callback` を呼ばないので、Stop も起動しない（全実行の記録には使えない）。Stop は最後のイベントの後、応答のストリームを閉じる前に動くので、遅い hook はその間ストリームを開いたままにする（`timeout` を短くする）
 - 検証: `agent/tests/test_hooks.py`（読み込み・exit 2・JSON の拒否・書き換え・タイムアウト・Claude Code 用スクリプトの互換）、`agent/tests/test_harness.py::TestContextHarnessPluginHooks`（結線、Stop がブロックしないこと）
 
 ## 4. 残りのギャップとバックログ（優先度順）
