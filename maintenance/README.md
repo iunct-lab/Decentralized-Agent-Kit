@@ -49,7 +49,7 @@ uv run dak-maint compare-models --models models.json --prices prices.json --out 
 
 鍵はファイルに書かず、`api_key_env` に名前を書いた環境変数から読む。呼び出しが失敗したケース（`temperature` を受け付けない 400 など）は表の `error` に残して次へ進む。
 トークン数は応答の `usage`（Bedrock は Converse の `usage`）から取り、返さないモデルは「—」。
-`JSON` は各段の応答が JSON として読めたかだけを見る。形の違う JSON（watch のクエリ生成に配列でなくオブジェクトを返すなど）は処理が捨てるので、`yes` で件数 0 になる。件数 0 の行は、表の下の出力とトークン数（後の段が呼ばれたか）も合わせて読む。`--prices` の形が違えば、モデルを呼ぶ前に exit 2 で止まる。triage は既存の評価器がオブジェクトの答えだけを読むので、配列で答えると `no` になる（error に `'list' object has no attribute 'get'`）。比べるときは、定期実行（2 件まで）と違い提案を全部数えて並べる。
+`JSON` は各段の応答が JSON として読めたかだけを見る。形の違う JSON（watch のクエリ生成に配列でなくオブジェクトを返すなど）は処理が捨てるので、`yes` で件数 0 になる。件数 0 の行は、表の下の出力とトークン数（後の段が呼ばれたか）も合わせて読む。`--prices` の形が違えば、モデルを呼ぶ前に exit 2 で止まる。triage は既存の評価器がオブジェクトの答えだけを読むので、配列で答えると `no` になる（error に `'list' object has no attribute 'get'`）。watch と feature-sync は、定期実行（2 件まで）と違い 50 件まで数えて並べる（charter-review は処理そのものが 1 件にまとめる）。`--prices` / `--out` が読めない・書けないときも、モデルを呼ぶ前に exit 2。固定入力は `tests/fixtures/` から読むので、ソースのまま `uv run` で動かす（wheel には入らない）。
 
 判定は「Tier0(semver+CI) で大半を決め、曖昧な時だけ LLM に委ねる」設計。
 `--assessor llm` で triage のリスク評価も LLM 化。reasoning 系（watch/feature-sync/charter-review）は

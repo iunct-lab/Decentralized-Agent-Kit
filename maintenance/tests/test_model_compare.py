@@ -223,3 +223,24 @@ def test_the_comparison_lists_every_proposal_not_just_two(inputs):
     many = json.dumps([{"title": f"[tech-watch] t{i}", "subject": "s", "url": "u", "fit": "f", "sketch": "s"} for i in range(5)])
     r = run_case("watch", answering({"watch": many}), inputs)
     assert r.count == 5
+
+
+@pytest.mark.parametrize("args", [["--prices", "missing.json"], ["--prices", "PRICES", "--out", "no-such-dir/compare.md"],
+                                  ["--prices", "BOOL"]])
+def test_bad_options_stop_before_any_model_is_called(tmp_path, monkeypatch, args):
+    models = tmp_path / "models.json"
+    models.write_text(json.dumps([{"name": "fake", "base_url": "http://llm/v1", "model": "m", "api_key_env": ""}]))
+    (tmp_path / "PRICES").write_text('{"fake": {"input": 0.1, "output": 0.5}}')
+    (tmp_path / "BOOL").write_text('{"fake": {"input": true, "output": 0.5}}')
+    monkeypatch.chdir(tmp_path)
+
+    def post(*a, **kw):
+        raise AssertionError("a model was called")
+
+    monkeypatch.setattr(llm_client.httpx, "post", post)
+    assert main(["compare-models", "--models", str(models), *args]) == 2
+
+
+def test_model_text_stays_on_its_line():
+    r = CaseResult("m", "triage", True, 1, 0.1, None, None, "", ["breaking: line one\nline two"])
+    assert "- m / triage: breaking: line one line two" in render_table([r], {})
