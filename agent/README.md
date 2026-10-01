@@ -175,8 +175,6 @@ Managed via `uv` and defined in `pyproject.toml`:
 - `fastapi`: Web framework
 - `uvicorn`: ASGI server
 - `google-generativeai`: Gemini integration
-- `openai`: OpenAI integration
-- `anthropic`: Anthropic integration
 - `mcp`: MCP protocol client
 - `pymongo`: MongoDB/FerretDB client
 - `pyjwt`: JWT validation
