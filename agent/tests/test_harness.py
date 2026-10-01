@@ -699,24 +699,73 @@ class TestContextHarnessPluginHooks:
         assert result == {"observation": "blocked_by_hook", "reason": "leak", "hook_event": "PostToolUse",
                           "original_args": {"command": "ls"}, "updated_args": {"command": "ls -la"}}
 
+    @staticmethod
+    def _confirmation_ctx(ctx, pending):
+        from google.adk.tools.tool_confirmation import ToolConfirmation
+
+        if pending:
+            ctx.tool_confirmation = None
+            ctx.actions.requested_tool_confirmations = {ctx.function_call_id: ToolConfirmation(hint="?")}
+        else:
+            ctx.tool_confirmation = ToolConfirmation(confirmed=False)
+            ctx.actions.requested_tool_confirmations = {}
+        return ctx
+
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("answer", [
-        {"error": "This tool call requires confirmation, please approve or reject."},
-        {"error": "This tool call is rejected."},
-    ])
-    async def test_confirmation_answer_is_left_to_the_agent(self, monkeypatch, answer):
+    @pytest.mark.parametrize("pending", [True, False])
+    async def test_confirmation_answer_is_left_to_the_agent(self, monkeypatch, pending):
         # ADK's own require_confirmation answers from inside run_async: the tool did not run,
         # and a wrapper would make ADK skip the agent's _restore_reject_reason.
         plugin = self._plugin(monkeypatch,
                               self._echo("PreToolUse", {"hookSpecificOutput": {"updatedInput": {"steps": ["b"]}}}),
                               {"event": "PostToolUse", "type": "command", "command": "exit 2"})
-        ctx, args = self._ctx(), {"steps": ["a"]}
+        ctx, args = self._confirmation_ctx(self._ctx(), pending), {"steps": ["a"]}
         await plugin.before_tool_callback(tool=_tool("planner"), tool_args=args, tool_context=ctx)
+        answer = harness._CONFIRMATION_ANSWERS[0 if pending else 1]
         with patch("dak_agent.hooks.run_hook") as run_hook:
             result = await plugin.after_tool_callback(tool=_tool("planner"), tool_args=args, tool_context=ctx,
                                                       result=dict(answer))
         assert result is None
         run_hook.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_confirmation_answers_match_what_adk_returns(self):
+        # Pins the wording: an ADK upgrade that rewords these makes this fail.
+        from google.adk.tools import FunctionTool
+        from google.adk.tools.tool_confirmation import ToolConfirmation
+
+        def planner(steps: list[str]) -> str:
+            return "ok"
+
+        tool = FunctionTool(planner, require_confirmation=True)
+        pending_ctx = MagicMock(tool_confirmation=None)
+        rejected_ctx = MagicMock(tool_confirmation=ToolConfirmation(confirmed=False))
+        assert await tool.run_async(args={"steps": []}, tool_context=pending_ctx) in harness._CONFIRMATION_ANSWERS
+        assert await tool.run_async(args={"steps": []}, tool_context=rejected_ctx) in harness._CONFIRMATION_ANSWERS
+
+    @pytest.mark.asyncio
+    async def test_rejection_text_from_a_tool_that_ran_is_still_audited(self, monkeypatch):
+        plugin = self._plugin(monkeypatch, {"event": "PostToolUse", "type": "command", "command": "exit 0"})
+        ctx = self._ctx()
+        ctx.tool_confirmation = None
+        ctx.actions.requested_tool_confirmations = {}
+        await plugin.before_tool_callback(tool=_tool("relay"), tool_args={}, tool_context=ctx)
+        with patch("dak_agent.hooks.run_hook", return_value={"decision": "allow", "reason": "",
+                                                             "updated_input": None, "updated_output": None}) as run_hook:
+            await plugin.after_tool_callback(tool=_tool("relay"), tool_args={}, tool_context=ctx,
+                                             result={"error": "This tool call is rejected."})
+        run_hook.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_only_a_boolean_is_error_skips_the_post_hook(self, monkeypatch):
+        plugin = self._plugin(monkeypatch, {"event": "PostToolUse", "type": "command", "command": "exit 0"})
+        ctx = self._ctx()
+        await plugin.before_tool_callback(tool=_tool("local_tool"), tool_args={}, tool_context=ctx)
+        with patch("dak_agent.hooks.run_hook", return_value={"decision": "allow", "reason": "",
+                                                             "updated_input": None, "updated_output": None}) as run_hook:
+            await plugin.after_tool_callback(tool=_tool("local_tool"), tool_args={}, tool_context=ctx,
+                                             result={"is_error": "no"})
+        run_hook.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_post_hook_skipped_when_an_earlier_plugin_answered(self, monkeypatch):
