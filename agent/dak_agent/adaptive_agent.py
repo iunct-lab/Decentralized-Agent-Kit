@@ -1,5 +1,6 @@
 """AdaptiveAgent: an LlmAgent with Dynamic Mode Switching and Agent Skills."""
 import asyncio
+import difflib
 import json
 import logging
 import os
@@ -528,6 +529,18 @@ class AdaptiveAgent(LlmAgent):
         if self._enable_ap2 and isinstance(error, PaymentRequiredError) and self._payment_handler:
             logger.info(f"AP2: Payment Required for {tool_name}: {error.price} {error.currency}")
             return self._payment_handler.format_payment_error(tool_name, error)
+
+        # ADK hands an unregistered name here as a stand-in tool (functions.py `_get_tool`).
+        if (isinstance(error, ValueError) and "not found" in str(error) and tool is not None
+                and getattr(tool, "description", "") == "Tool not found"):
+            live_tools = tool_context._invocation_context.agent.tools
+            names = [n for n in (getattr(t, "name", None) or getattr(t, "__name__", None) for t in live_tools)
+                     if isinstance(n, str)]
+            matches = difflib.get_close_matches(tool_name, names, n=3, cutoff=0.4)
+            hint = ("Call one of the candidates, or list_skills to see everything available." if matches
+                    else "Call list_skills to see the available tools.")
+            logger.warning(f"Unknown tool called: {tool_name} (candidates: {matches})")
+            return {"observation": "unknown_tool", "tool": tool_name, "candidates": matches, "hint": hint}
 
         error_msg = str(error)
         logger.warning(f"Tool error caught: {tool_name} - {error_msg}")

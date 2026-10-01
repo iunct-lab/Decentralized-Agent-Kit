@@ -681,5 +681,95 @@ class TestRestoreRejectReason(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(responses[-1], {"observation": "denied_by_user", "reason": "not now"})
 
 
+class TestUnknownToolObservation(unittest.IsolatedAsyncioTestCase):
+    """A call to a tool that does not exist reaches `_on_tool_error` through ADK's
+    "Tool not found" path; the model gets the closest names back instead of a bare error."""
+
+    def _agent(self):
+        return AdaptiveAgent(model="test-model", name="test_agent", instruction="i", tools=[])
+
+    def _unknown(self, agent, name, live_tools):
+        from google.adk.tools.base_tool import BaseTool
+        ctx = MagicMock()
+        ctx._invocation_context.agent.tools = live_tools
+        error = ValueError(f"Tool '{name}' not found.\nAvailable tools: ...")
+        return agent._on_tool_error(BaseTool(name=name, description="Tool not found"), {}, ctx, error)
+
+    def test_on_tool_error_suggests_close_tool_names_for_unknown_tool(self):
+        def read_file(path: str) -> str:
+            """Read a file."""
+            return path
+
+        live_tools = [FunctionTool(read_file), FunctionTool(lambda: None)]
+        result = self._unknown(self._agent(), "read_fiel", live_tools)
+        self.assertEqual(result["observation"], "unknown_tool")
+        self.assertEqual(result["tool"], "read_fiel")
+        self.assertIn("read_file", result["candidates"])
+        self.assertIn("list_skills", result["hint"])
+
+    def test_on_tool_error_falls_back_when_no_close_match(self):
+        def read_file(path: str) -> str:
+            """Read a file."""
+            return path
+
+        result = self._unknown(self._agent(), "zzzzzz", [FunctionTool(read_file)])
+        self.assertEqual(result["candidates"], [])
+        self.assertEqual(result["hint"], "Call list_skills to see the available tools.")
+
+    def test_on_tool_error_other_errors_unaffected(self):
+        tool = MagicMock()
+        tool.name = "read_file"
+        result = self._agent()._on_tool_error(tool, {}, MagicMock(), ValueError("file not found"))
+        self.assertEqual(result, {"error": "Tool 'read_file' failed: file not found"})
+
+    async def test_unknown_tool_is_not_run_and_the_corrected_call_succeeds(self):
+        """Through ADK's Runner: the model calls `read_fiel`, sees the candidates,
+        and its next call to `read_file` runs."""
+        from google.adk.apps import App
+        from google.adk.models.base_llm import BaseLlm
+        from google.adk.models.llm_response import LlmResponse
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
+        from google.genai import types
+
+        ran = []
+
+        def read_file(path: str) -> str:
+            """Read a file."""
+            ran.append(path)
+            return f"contents of {path}"
+
+        requests = []
+
+        class TypoThenFix(BaseLlm):
+            async def generate_content_async(self, llm_request, stream=False):
+                requests.append(llm_request)
+                name = {1: "read_fiel", 2: "read_file"}.get(len(requests))
+                part = (types.Part(function_call=types.FunctionCall(id=f"fc-{len(requests)}", name=name,
+                                                                    args={"path": "a.txt"}))
+                        if name else types.Part(text="done"))
+                yield LlmResponse(content=types.Content(role="model", parts=[part]))
+
+        agent = AdaptiveAgent(model=TypoThenFix(model="m"), name="dak_agent", instruction="i",
+                              tools=[FunctionTool(read_file)])
+        sessions = InMemorySessionService()
+        session = await sessions.create_session(app_name="dak_agent", user_id="u")
+        runner = Runner(app=App(name="dak_agent", root_agent=agent), session_service=sessions)
+        with patch("dak_agent.remote_tools.discover_remote_tools", return_value={}):
+            async for _ in runner.run_async(user_id="u", session_id=session.id,
+                                            new_message=types.Content(role="user", parts=[types.Part(text="hi")])):
+                pass
+
+        def responses(request, name):
+            return [p.function_response.response for c in request.contents for p in c.parts
+                    if p.function_response and p.function_response.name == name]
+
+        [unknown] = responses(requests[1], "read_fiel")
+        self.assertEqual(unknown["observation"], "unknown_tool")
+        self.assertIn("read_file", unknown["candidates"])
+        self.assertEqual(responses(requests[2], "read_file"), [{"result": "contents of a.txt"}])
+        self.assertEqual(ran, ["a.txt"])  # only the corrected call ran
+
+
 if __name__ == '__main__':
     unittest.main()
