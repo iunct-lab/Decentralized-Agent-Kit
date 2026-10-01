@@ -204,3 +204,22 @@ def test_an_empty_maintenance_key_is_sent_as_before(monkeypatch):
                         or FakeResponse({"choices": [{"message": {"content": "[]"}}]}))
     llm_client.make_complete()("hi")
     assert seen == ["Bearer "]
+
+
+def test_an_http_error_shows_what_the_api_said_on_one_line(inputs):
+    import httpx
+    req = httpx.Request("POST", "http://llm/v1/chat/completions")
+    resp = httpx.Response(400, request=req, json={"error": {"message": "Unsupported parameter: temperature"}})
+
+    def fail(prompt):
+        resp.raise_for_status()
+
+    r = run_case("triage", fail, inputs)
+    assert "Unsupported parameter: temperature" in r.error
+    assert "\n" not in r.error
+
+
+def test_the_comparison_lists_every_proposal_not_just_two(inputs):
+    many = json.dumps([{"title": f"[tech-watch] t{i}", "subject": "s", "url": "u", "fit": "f", "sketch": "s"} for i in range(5)])
+    r = run_case("watch", answering({"watch": many}), inputs)
+    assert r.count == 5
