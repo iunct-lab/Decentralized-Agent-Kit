@@ -1,0 +1,75 @@
+# 保守の定期実行に使うモデルの選び方
+
+保守の定期実行（`tech-watch` / `feature-sync` / `charter-review` / `dependency-triage` の LLM 評価）は、
+リポジトリの変数 `MAINT_LLM_BASE_URL` / `MAINT_LLM_MODEL` と secret `MAINT_LLM_API_KEY` でモデルを選ぶ
+（`maintenance/src/dak_maintenance/llm_client.py` の `make_complete`）。この文書は候補の価格・無料枠・月額の見積もりを比べ、
+切り替えと元に戻す手順を書く。同じ入力で出力を比べた実測は「結果」の節（PBI #348 の #351 で埋める）。
+
+## 候補（価格は 1M トークンあたりの USD、入力 / 出力、標準、短いコンテキスト）
+
+| モデル | 入力 | 出力 | 無料枠 | 無料枠のデータの扱い | 無料枠の回数制限 | 出典・確認日 |
+|---|---|---|---|---|---|---|
+| `gemini-3.5-flash` | $1.50 | $9.00 | あり | Google の製品改善に使われうる（有料枠は使われない） | 未確認（AI Studio の画面でだけ見られる） | [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing)、2026-10-01 確認 |
+| `gemini-3.5-flash-lite` | $0.30 | $2.50 | あり | 同上 | 未確認（同上） | 同上 |
+| `gemini-3.8-flash` | $0.75（2026-12-31 まで）、$1.50（2027-01-01 から） | $3.75（2026-12-31 まで）、$7.50（2027-01-01 から） | あり（期限つき。2026-09-24 の確認では 2026-12-31 まで） | 同上 | 未確認（同上） | 同上 |
+| `gpt-6-luna` | $0.10 | $0.50 | なし | API の入出力は学習に使われない（明示して共有しない限り）。不正利用の監視ログは最長 30 日 | — | [OpenAI API pricing](https://developers.openai.com/api/docs/pricing)、[Your data](https://developers.openai.com/api/docs/guides/your-data)、2026-10-01 確認 |
+| `gpt-5.6-luna` | $0.20 | $1.20 | なし | 同上 | — | 同上 |
+| `gpt-5-nano` | $0.05 | $0.40 | なし | 同上 | — | 同上 |
+| Ollama `llama3.1:8b` | $0 | $0 | —（自前のホスト） | 外に出ない | ホストの性能しだい | 自前で動かすので価格表なし。Actions から届くホストが要る |
+
+- 回数制限の一次資料は「Rate limits depend on a variety of factors (such as your usage tier) and can be viewed in Google AI Studio.」（[Rate limits](https://ai.google.dev/gemini-api/docs/rate-limits)、2026-09-02 更新）で、数値は載っていない。
+- 推論するモデルは、見えない推論のトークンも出力として課金されうる。下の見積もりは本文の出力だけで数えているので、推論の多いモデルほど実際は高い（#351 の実測で置き換える）。
+- `make_complete` は常に `temperature: 0` を送る。受け付けるかはモデルごとに違い未確認で、#351 で実際に呼んで確かめる。
+- Amazon Bedrock（IAM、API キー不要。`MAINT_LLM_MODEL=bedrock/<id>`）の道もある（`docs/maintenance/README.md` の「LLM プロバイダ設定」）。Bedrock 上の価格は未確認で、この表に入れていない。
+
+## 月額の見積もり
+
+回数（2026-09-01〜2026-10-01 の実績から）:
+
+| ワークフロー | 回数 / 月 | 1 回あたりの LLM 呼び出し | 1 呼び出しの入力の目安 |
+|---|---|---|---|
+| `tech-watch`（毎月 1 日・15 日） | 2 | 2（クエリ生成 1 + 評価 1、`watch.py`） | 生成 2.5k、評価 18k（憲章 + 検索 25 件 × 約 600 字） |
+| `feature-sync`（毎週月曜） | 4.3 | 依存ごとに 1（`feature.py`。`collect-deps --max-items 10` で週 10 件まで。月 47 件あったので上限に当たる） | 11k（憲章 + changelog 8,000 字まで） |
+| `charter-review`（四半期） | 1/3 | 1（`charter.py`。検索 5 クエリ × 3 件） | 12k |
+| `dependency-triage`（Dependabot の PR ごと） | 18 回の実行・47 パッケージ（PR 14 件） | パッケージごとに 1（`risk.py`） | 8.5k（changelog 8,000 字まで） |
+
+- トークン数は 1 字 ≈ 1 トークンで数えた（日本語の多い憲章に合わせた多めの見積もり）。出力は 1 呼び出し 0.3k〜1.5k。
+- 合計: triage を除くと入力 約 0.51M / 出力 約 0.03M、triage を含むと入力 約 1.02M / 出力 約 0.05M（feature-sync と triage が大半）。
+- 実測（`dak-maint compare-models` のトークン数）が出たら #351 で置き換える。
+
+| モデル | triage を除く | triage を含む |
+|---|---|---|
+| `gemini-3.5-flash` | $1.03 | $2.02 |
+| `gemini-3.5-flash-lite` | $0.23 | $0.44 |
+| `gemini-3.8-flash`（2026-12-31 まで / 2027-01-01 から） | $0.49 / $0.99 | $0.97 / $1.94 |
+| `gpt-6-luna` | $0.07 | $0.13 |
+| `gpt-5.6-luna` | $0.14 | $0.27 |
+| `gpt-5-nano` | $0.04 | $0.07 |
+| Ollama `llama3.1:8b` | $0（ホストの費用は別） | $0 |
+
+Gemini の無料枠に収まれば $0 だが、回数制限が未確認なので収まるかは分からない（feature-sync と triage は 1 回の実行で最大 10 回ほど続けて呼ぶ）。
+
+## 切り替える
+
+鍵の値はファイルにもコマンドの履歴にも残さない（`gh secret set` は値を標準入力から読む）。
+
+1. 今の値を控える: `gh variable get MAINT_LLM_BASE_URL`、`gh variable get MAINT_LLM_MODEL`（2026-10-01 時点は Gemini の OpenAI 互換の URL と `gemini-3.5-flash`）。secret は読み出せないので、元の鍵がどこにあるかを控える。
+2. Actions の変数と secret を変える:
+   ```bash
+   gh variable set MAINT_LLM_BASE_URL --body "https://api.openai.com/v1"   # Gemini なら https://generativelanguage.googleapis.com/v1beta/openai
+   gh variable set MAINT_LLM_MODEL --body "<model id>"
+   gh secret set MAINT_LLM_API_KEY                                         # 値はプロンプトに貼る
+   ```
+3. 一度だけ確かめる: `gh workflow run feature-sync.yml`（Web 検索を使わない）を回し、ログに `400`（`temperature` を受け付けないなど）や `401` が無いこと。
+4. `dependency-triage` でも LLM に判定させるなら、Dependabot 側の secret にも同じ鍵を入れる: `gh secret set MAINT_LLM_API_KEY --app dependabot`。
+   - Dependabot の PR で動く `dependency-triage` には、Actions の secret は渡らず、Dependabot の secret が渡る。リポジトリの変数（`vars.*`）は渡る（2026-09-28 の Dependabot の実行のログで `MAINT_LLM_BASE_URL` / `MAINT_LLM_MODEL` に値があった）。変数は Actions と共通なので、Dependabot 側に別に置くものは無い。
+   - `dependency-triage.yml` は `vars.MAINT_ASSESSOR` が無ければ、`MAINT_LLM_BASE_URL` と `MAINT_LLM_MODEL` があるだけで LLM で判定する。Dependabot の secret が無いと鍵なしで呼び、失敗してパッケージごとにヒューリスティックに落ちる（同じ実行で 503 とタイムアウトが出ていた）。LLM に判定させないなら `gh variable set MAINT_ASSESSOR --body heuristic` で無駄な呼び出しを止める。
+5. Ollama にするなら、Actions の runner から届くホストの `http://<host>:11434/v1` と `llama3.1:8b`、`MAINT_LLM_API_KEY` は任意の値。
+
+## 元に戻す
+
+1 で控えた値を `gh variable set MAINT_LLM_BASE_URL` / `gh variable set MAINT_LLM_MODEL` で戻し、`gh secret set MAINT_LLM_API_KEY` に元の鍵を入れ直す。Dependabot 側に入れたなら `gh secret set MAINT_LLM_API_KEY --app dependabot` も戻すか `gh secret delete MAINT_LLM_API_KEY --app dependabot` で消す。`MAINT_ASSESSOR` を足したなら `gh variable delete MAINT_ASSESSOR`。
+
+## 結果
+
+（#351 で、`dak-maint compare-models` を候補で回した表・所見・推奨を書く）

@@ -45,9 +45,9 @@
    - `gh variable set MAINT_LLM_BASE_URL --body "<base url>"`
    - `gh variable set MAINT_LLM_MODEL --body "<model id>"`
    - `gh secret set MAINT_LLM_API_KEY --body "<api key>"`（Ollama は任意の値でOK）
-   - プリセット例（2026-08 時点の参考価格 in/out per 1M tok）:
-     - **OpenAI**: `https://api.openai.com/v1` / `gpt-5.6-luna`（$0.20/$1.20 — **有料の第一推奨**。tool calling 対応・1M ctx でこの価格帯では最も能力/コスト比が良い。さらに絞るなら `gpt-5-nano` $0.05/$0.40）
-     - **Gemini**: `https://generativelanguage.googleapis.com/v1beta/openai` / `gemini-3.5-flash-lite`（$0.30/$2.50、AI Studio 無料枠あり — **ゼロコスト運用ならこれ**。tool 信頼性は 2.5-lite より向上。品質重視なら `gemini-3.8-flash` $0.75/$3.75 プロモ価格・無料枠あり（ただし無料枠の RPD は小さい）。※2.5 系は世代落ちで Vertex 側は 2026-10 引退予定のため新規設定では避ける）
+   - プリセット例（in/out per 1M tok、2026-10-01 確認。候補の比較・無料枠の条件・月額の見積もり・切り替えと元に戻す手順は [model-choice.md](model-choice.md)）:
+     - **OpenAI**: `https://api.openai.com/v1` / `gpt-6-luna`（$0.10/$0.50）。`gpt-5.6-luna` $0.20/$1.20、`gpt-5-nano` $0.05/$0.40
+     - **Gemini**: `https://generativelanguage.googleapis.com/v1beta/openai` / `gemini-3.5-flash-lite`（$0.30/$2.50、AI Studio 無料枠あり。無料枠の入出力は Google の製品改善に使われうる）。`gemini-3.5-flash` $1.50/$9.00、`gemini-3.8-flash` $0.75/$3.75（2026-12-31 まで。2027-01-01 から $1.50/$7.50）
      - **Ollama**: `http://<host>:11434/v1` / `llama3.1:8b`（無料・要ホスト）
      - **Amazon Bedrock（IAM。API キー不要）**: `MAINT_LLM_MODEL=bedrock/global.openai.gpt-6-luna`（inference profile。`MAINT_LLM_BASE_URL` / `MAINT_LLM_API_KEY` は使わない）。ワークフローが GitHub の OIDC で IAM ロールを引き受け、Converse API を呼ぶ。準備:
        - AWS に GitHub の OIDC プロバイダ（`token.actions.githubusercontent.com`、audience `sts.amazonaws.com`）と、`repo:<owner>/<repo>:ref:refs/heads/main` だけが引き受けられるロールを作る。権限は使う inference profile とその基になるモデルへの `bedrock:InvokeModel` だけ
