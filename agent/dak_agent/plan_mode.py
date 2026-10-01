@@ -19,7 +19,7 @@ PLAN_MODE_RULES: List[Rule] = [
         Rule("*", tool, "*", "deny"),
         Rule("*", tool, PLAN_FILE_GLOB, "allow"),
         # fnmatch's `*` also matches `/` and `..`: `plans/../agent/x.md` is not a plan file.
-        Rule("*", tool, "*..*", "deny"),
+        *(Rule("*", tool, p, "deny") for p in ("../*", "*/../*")),
     )),
     Rule("*", "run_command", "*", "deny"),
 ]
