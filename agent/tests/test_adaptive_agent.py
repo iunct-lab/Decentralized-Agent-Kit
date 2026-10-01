@@ -574,7 +574,7 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         section = instruction.split("# Handoff\n", 1)[1]
         self.assertLessEqual(len(section), 1_000)
         self.assertTrue(section.startswith("Objective: ship\nDone:\n- zzz"))
-        self.assertIn("write_handoff", section)  # how to make it fit
+        self.assertIn("read_handoff", section)  # where the rest is
 
     async def test_handoff_written_mid_invocation_reaches_the_next_model_call(self):
         """Like the plan: a handoff written inside a long invocation is in the

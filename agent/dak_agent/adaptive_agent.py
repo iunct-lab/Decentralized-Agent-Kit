@@ -281,14 +281,14 @@ class AdaptiveAgent(LlmAgent):
     def _handoff_section(self, state: MutableMapping[str, Any]) -> str:
         """The session's handoff (`write_handoff`), rebuilt from state every
         turn, so a session resumed after a reset, over A2A or by another
-        process starts from it. Capped like the plan."""
+        process starts from it. Capped like the plan; read_handoff has it all."""
         handoff = state.get(builtin_tools.STATE_HANDOFF)
         if not isinstance(handoff, dict) or not handoff:
             return ""
         text = builtin_tools.format_handoff(handoff)
         max_chars = HarnessSettings(context_window=self._mode_manager.max_context_tokens).plan_chars
         if len(text) > max_chars:
-            marker = "\n[truncated — call write_handoff again with a shorter handoff]"
+            marker = "\n[truncated — call read_handoff for the full text]"
             text = text[: max_chars - len(marker)] + marker
         return f"\n\n# Handoff\n{text}"
 
