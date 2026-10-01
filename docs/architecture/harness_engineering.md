@@ -259,14 +259,14 @@ MRTR（MCP 2026-07-28、SEP-2322）との対応: 保留の 1 件 ↔ `InputRequi
 | 結果 | モデルに届く Observation |
 |---|---|
 | PreToolUse の拒否 | `{"observation": "blocked_by_hook", "reason": ..., "hook_event": "PreToolUse"}`（ツールは動かない） |
-| PreToolUse の `updatedInput` | `{"observation": "hook_rewrote_input", "original_args": ..., "updated_args": ..., "result": ...}`（書き換えた引数でツールを実行する） |
+| PreToolUse の `updatedInput` | `{"observation": "hook_rewrote_input", "original_args": ..., "updated_args": ..., "result": ...}`（書き換えた引数でツールを実行する。`result` はツールの結果にツール出力の上限をかけたもの） |
 | PostToolUse の拒否 | `{"observation": "blocked_by_hook", "reason": ..., "hook_event": "PostToolUse"}`（ツールの結果は渡さない） |
-| PostToolUse の `updatedToolOutput` | `{"observation": "hook_rewrote_output", "result": ...}`（元の出力は載せない。そのあとツール出力の上限を受ける） |
+| PostToolUse の `updatedToolOutput` | `{"observation": "hook_rewrote_output", "result": ...}`（元の出力は載せない。`result` は書き換え後の出力にツール出力の上限をかけたもの） |
 
 - PreToolUse は実行ガード（反復・回数・時間）のあとに起動する。ガードが止めた呼び出しでは起動しない
 - `updatedInput` は ADK が渡した引数をその場で書き換えるので、ツールは ADK の通常の経路で動く（エラーは `on_tool_error` を通る）。PostToolUse には書き換え後の引数が届く
 - 書き換えた引数は `PermissionPlugin` で評価し直さない（`PermissionPlugin` は書き換えの前に元の引数で評価済み）。hook は運用者の設定で、`agent_config.yaml` の規則と同じく信頼する（Claude Code でも hook の `allow` は権限の確認を飛ばす）。規則で止めたい入力へ書き換える hook を置かない
-- PostToolUse は、ツールが実際に動いた呼び出しだけで起動する（`PermissionPlugin` が拒否・承認待ちにした呼び出しや、ガード・PreToolUse が止めた呼び出しでは起動しない）
+- PostToolUse は、ツールが動いて成功した呼び出しだけで起動する（`PermissionPlugin` が拒否・承認待ちにした呼び出し、ガード・PreToolUse が止めた呼び出し、ツールが例外で終わった呼び出しでは起動しない。Claude Code の PostToolUse と同じく失敗は対象外）
 - **Stop は監査・通知専用で、止められない。** ADK の `after_run_callback` は戻り値が `None` 固定で、Claude Code の Stop hook のように拒否してエージェントを続けさせることができない。拒否やエラーが返っても警告をログに出すだけ。ADK は実行がエラーで終わったときは `after_run_callback` を呼ばないので、Stop も起動しない（全実行の記録には使えない）。Stop は最後のイベントの後、応答のストリームを閉じる前に動くので、遅い hook はその間ストリームを開いたままにする（`timeout` を短くする）
 - 検証: `agent/tests/test_hooks.py`（読み込み・exit 2・JSON の拒否・書き換え・タイムアウト・Claude Code 用スクリプトの互換）、`agent/tests/test_harness.py::TestContextHarnessPluginHooks`（結線、Stop がブロックしないこと）
 
