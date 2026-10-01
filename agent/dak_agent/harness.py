@@ -874,6 +874,13 @@ async def prune_old_tool_results(llm_request, callback_context, protect_tokens: 
 # so the per-invocation counters do not pile up in the session.
 _GUARD_STATE_KEY = "temp:dak_tool_guard"
 
+# What ADK's FunctionTool answers from inside run_async for a tool with
+# require_confirmation: the tool itself did not run.
+_CONFIRMATION_ANSWERS = (
+    {"error": "This tool call requires confirmation, please approve or reject."},
+    {"error": "This tool call is rejected."},
+)
+
 
 def _call_signature(tool_name: str, tool_args: dict) -> str:
     canonical = json.dumps(tool_args, sort_keys=True, ensure_ascii=False, default=str)
@@ -1070,27 +1077,34 @@ class ContextHarnessPlugin(BasePlugin):
                 guard[skipped].remove(call_id)
                 ran = False
         original_args = guard["rewritten_calls"].pop(call_id, None)
-        if tool_name == READ_TOOL_OUTPUT_NAME:
-            return None  # already paged to the budget
+        if result in _CONFIRMATION_ANSWERS:
+            # Left to the agent's own after_tool_callback (_restore_reject_reason runs
+            # only when no plugin answers); the call comes back after the user's answer.
+            return None
+        rewrite = {} if original_args is None else {"original_args": original_args, "updated_args": dict(tool_args)}
+        if tool_name == READ_TOOL_OUTPUT_NAME:  # already paged to the budget; not a call to audit
+            return {"observation": "hook_rewrote_input", **rewrite, "result": result} if rewrite else None
+        if isinstance(result, dict) and (result.get("isError") or result.get("is_error")):
+            ran = False  # an MCP tool reports failure without raising
         output_rewritten = False
         if ran:  # PostToolUse audits a tool that ran and succeeded, not a call something else answered
             async for outcome in self._run_hooks("PostToolUse", tool_name, tool_args, tool_context, result=result):
                 if outcome["decision"] == "deny":
-                    return {"observation": "blocked_by_hook", "reason": outcome["reason"], "hook_event": "PostToolUse"}
+                    return {"observation": "blocked_by_hook", "reason": outcome["reason"], "hook_event": "PostToolUse",
+                            **rewrite}
                 if outcome["updated_output"] is not None:
                     result = outcome["updated_output"]
                     output_rewritten = True
                     break
         budgeted = await self._apply_budget(tool_name, tool_context, result)
-        if not output_rewritten and original_args is None:
+        if not output_rewritten and not rewrite:
             return budgeted
         # The budget sees the tool's own result (MCP shape, media, isError); the wrappers go outside it.
         result = result if budgeted is None else budgeted
         if output_rewritten:  # the original is left out: a rewrite is often a redaction
             result = {"observation": "hook_rewrote_output", "result": result}
-        if original_args is not None:
-            result = {"observation": "hook_rewrote_input", "original_args": original_args,
-                      "updated_args": dict(tool_args), "result": result}
+        if rewrite:
+            result = {"observation": "hook_rewrote_input", **rewrite, "result": result}
         return result
 
     async def on_tool_error_callback(self, *, tool, tool_args, tool_context, error) -> None:

@@ -662,6 +662,63 @@ class TestContextHarnessPluginHooks:
         run_hook.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_post_hook_skipped_for_an_mcp_error_result(self, monkeypatch):
+        # McpTool does not raise on isError, so on_tool_error never sees it.
+        plugin = self._plugin(monkeypatch, {"event": "PostToolUse", "type": "command", "command": "exit 2"})
+        ctx = self._ctx()
+        await plugin.before_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx)
+        failed = {"content": [{"type": "text", "text": "no such file"}], "isError": True}
+        with patch("dak_agent.hooks.run_hook") as run_hook:
+            result = await plugin.after_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx,
+                                                      result=failed)
+        assert result is None
+        run_hook.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rewritten_read_tool_output_is_reported(self, monkeypatch):
+        plugin = self._plugin(monkeypatch, self._echo(
+            "PreToolUse", {"hookSpecificOutput": {"updatedInput": {"artifact_name": "a.txt", "offset": 0}}}))
+        ctx, args = self._ctx(), {"artifact_name": "a.txt", "offset": 500}
+        tool = _tool(harness.READ_TOOL_OUTPUT_NAME)
+        await plugin.before_tool_callback(tool=tool, tool_args=args, tool_context=ctx)
+        page = "x" * 50_000  # read_tool_output pages by itself: the budget stays off
+        result = await plugin.after_tool_callback(tool=tool, tool_args=args, tool_context=ctx, result=page)
+        assert result == {"observation": "hook_rewrote_input",
+                          "original_args": {"artifact_name": "a.txt", "offset": 500},
+                          "updated_args": {"artifact_name": "a.txt", "offset": 0}, "result": page}
+
+    @pytest.mark.asyncio
+    async def test_post_hook_deny_keeps_the_rewrite_record(self, monkeypatch):
+        plugin = self._plugin(monkeypatch,
+                              self._echo("PreToolUse", {"hookSpecificOutput": {"updatedInput": {"command": "ls -la"}}}),
+                              {"event": "PostToolUse", "type": "command", "command": "echo leak >&2; exit 2"})
+        ctx, args = self._ctx(), {"command": "ls"}
+        await plugin.before_tool_callback(tool=_tool("run_command"), tool_args=args, tool_context=ctx)
+        result = await plugin.after_tool_callback(tool=_tool("run_command"), tool_args=args, tool_context=ctx,
+                                                  result="secret")
+        assert result == {"observation": "blocked_by_hook", "reason": "leak", "hook_event": "PostToolUse",
+                          "original_args": {"command": "ls"}, "updated_args": {"command": "ls -la"}}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("answer", [
+        {"error": "This tool call requires confirmation, please approve or reject."},
+        {"error": "This tool call is rejected."},
+    ])
+    async def test_confirmation_answer_is_left_to_the_agent(self, monkeypatch, answer):
+        # ADK's own require_confirmation answers from inside run_async: the tool did not run,
+        # and a wrapper would make ADK skip the agent's _restore_reject_reason.
+        plugin = self._plugin(monkeypatch,
+                              self._echo("PreToolUse", {"hookSpecificOutput": {"updatedInput": {"steps": ["b"]}}}),
+                              {"event": "PostToolUse", "type": "command", "command": "exit 2"})
+        ctx, args = self._ctx(), {"steps": ["a"]}
+        await plugin.before_tool_callback(tool=_tool("planner"), tool_args=args, tool_context=ctx)
+        with patch("dak_agent.hooks.run_hook") as run_hook:
+            result = await plugin.after_tool_callback(tool=_tool("planner"), tool_args=args, tool_context=ctx,
+                                                      result=dict(answer))
+        assert result is None
+        run_hook.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_post_hook_skipped_when_an_earlier_plugin_answered(self, monkeypatch):
         # The PermissionPlugin answered: the tool never ran, so there is nothing to audit.
         plugin = self._plugin(monkeypatch, {"event": "PostToolUse", "type": "command", "command": "exit 2"})
