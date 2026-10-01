@@ -23,7 +23,8 @@ PLAN_KEY = "enforcer_allowed_tools"
 # write_todos/read_plan so the plan's progress can always be recorded and read,
 # read_original_request so the whole request can always be read, and
 # write_handoff/read_handoff so the handoff for a context reset can always be
-# recorded and read.
+# recorded and read, and plan_exit so a narrowed plan cannot keep the agent in
+# Plan mode.
 ALWAYS_ALLOWED: Set[str] = {
     "planner",
     "ask_question",
@@ -40,6 +41,7 @@ ALWAYS_ALLOWED: Set[str] = {
     "read_original_request",
     "write_handoff",
     "read_handoff",
+    "plan_exit",
 }
 
 ENFORCER_INSTRUCTION = '''You are a helpful assistant powered by the Decentralized Agent Kit.
