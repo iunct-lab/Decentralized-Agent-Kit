@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 from .semver import classify_update, combine_bump
 from .risk import HeuristicAssessor, LLMAssessor, assess_risk, combine_risk
@@ -194,20 +195,30 @@ def cmd_compare_models(args: argparse.Namespace) -> int:
         return 2
     # Everything is checked before any model is called: a typo must not throw away a paid comparison.
     try:
-        prices = json.loads(open(args.prices, encoding="utf-8").read()) if args.prices else {}
+        prices = json.loads(Path(args.prices).read_text(encoding="utf-8")) if args.prices else {}
         model_compare.check_prices(prices)
     except (OSError, ValueError) as e:
         print(f"error: --prices を読めない（{e}）。期待形式: {{\"<name>\": {{\"input\": 0.1, \"output\": 0.5}}}}", file=sys.stderr)
         return 2
     try:
-        out = open(args.out, "w", encoding="utf-8") if args.out else sys.stdout
-    except OSError as e:
-        print(f"error: --out に書けない（{e}）", file=sys.stderr)
+        models = model_compare.load_models(args.models)
+        inputs = model_compare.load_inputs()
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"error: --models か固定入力を読めない（{e.__class__.__name__}: {e}）", file=sys.stderr)
         return 2
-    results = model_compare.compare(model_compare.load_models(args.models), cases, model_compare.load_inputs())
-    out.write(model_compare.render_table(results, prices))
-    if out is not sys.stdout:
-        out.close()
+    if args.out and not os.access(os.path.dirname(os.path.abspath(args.out)), os.W_OK):
+        print(f"error: --out に書けない（{args.out}）", file=sys.stderr)
+        return 2
+    table = model_compare.render_table(model_compare.compare(models, cases, inputs), prices)
+    if args.out:
+        try:
+            Path(args.out).write_text(table, encoding="utf-8")
+        except OSError as e:  # keep what was paid for
+            print(f"error: --out に書けなかった（{e}）。表は標準出力に出す", file=sys.stderr)
+            sys.stdout.write(table)
+            return 1
+    else:
+        sys.stdout.write(table)
     return 0
 
 

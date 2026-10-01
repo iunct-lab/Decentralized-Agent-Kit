@@ -225,20 +225,36 @@ def test_the_comparison_lists_every_proposal_not_just_two(inputs):
     assert r.count == 5
 
 
-@pytest.mark.parametrize("args", [["--prices", "missing.json"], ["--prices", "PRICES", "--out", "no-such-dir/compare.md"],
-                                  ["--prices", "BOOL"]])
+@pytest.mark.parametrize("args", [
+    ["--prices", "missing.json"], ["--prices", "PRICES", "--out", "no-such-dir/compare.md"], ["--prices", "BOOL"],
+    ["--models", "BROKEN", "--out", "old.md"], ["--models", "missing.json"],
+])
 def test_bad_options_stop_before_any_model_is_called(tmp_path, monkeypatch, args):
-    models = tmp_path / "models.json"
-    models.write_text(json.dumps([{"name": "fake", "base_url": "http://llm/v1", "model": "m", "api_key_env": ""}]))
+    (tmp_path / "models.json").write_text(json.dumps([{"name": "fake", "base_url": "http://llm/v1", "model": "m", "api_key_env": ""}]))
+    (tmp_path / "BROKEN").write_text('[{"name": "fake"}]')
     (tmp_path / "PRICES").write_text('{"fake": {"input": 0.1, "output": 0.5}}')
     (tmp_path / "BOOL").write_text('{"fake": {"input": true, "output": 0.5}}')
+    (tmp_path / "old.md").write_text("last week's table")
     monkeypatch.chdir(tmp_path)
 
     def post(*a, **kw):
         raise AssertionError("a model was called")
 
     monkeypatch.setattr(llm_client.httpx, "post", post)
-    assert main(["compare-models", "--models", str(models), *args]) == 2
+    if "--models" not in args:
+        args = ["--models", "models.json", *args]
+    assert main(["compare-models", *args]) == 2
+    assert (tmp_path / "old.md").read_text() == "last week's table"
+
+
+def test_a_model_that_cannot_be_set_up_is_recorded_and_the_rest_still_run(monkeypatch):
+    def broken(*a, **kw):
+        raise RuntimeError("profile not found")
+
+    monkeypatch.setattr(model_compare, "make_complete", broken)
+    results = model_compare.compare([ModelSpec("a", "", "bedrock/x", ""), ModelSpec("b", "", "bedrock/y", "")],
+                                    ["triage"], load_inputs())
+    assert [(r.model, r.parsed_ok, r.error) for r in results] == [("a", False, "profile not found"), ("b", False, "profile not found")]
 
 
 def test_model_text_stays_on_its_line():
