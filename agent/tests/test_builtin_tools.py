@@ -148,6 +148,21 @@ class TestBuiltinTools(unittest.TestCase):
                      "write the regression test", "auth.py", "(none)"):
             self.assertIn(item, result)
 
+    def test_write_handoff_rebuilds_the_instruction_and_survives_a_failed_rebuild(self):
+        """Like write_todos: the new handoff reaches the next model call of this
+        invocation; a failed rebuild keeps the saved handoff."""
+        tool_context = MagicMock()
+        tool_context.state = {}
+        refresh = tool_context._invocation_context.agent._apply_session_config
+
+        write_handoff("o", ["a"], [], [], [], [], tool_context)
+        refresh.assert_called_once_with(tool_context)
+
+        refresh.side_effect = RuntimeError("boom")
+        result = write_handoff("p", ["b"], [], [], [], [], tool_context)
+        self.assertEqual(tool_context.state[STATE_HANDOFF]["objective"], "p")
+        self.assertIn("Objective: p", result)
+
     def test_write_handoff_accepts_a_json_string_list(self):
         """Small models often send a nested array as a JSON string (as for write_todos)."""
         tool_context = MagicMock()
