@@ -135,3 +135,37 @@ def test_cli_compare_models_writes_a_table(tmp_path, monkeypatch):
         assert f"| fake | {case} | yes |" in table
     # watch calls the LLM twice (queries + evaluation): its tokens add up
     assert "| fake | watch | yes | 1 |" in table and "| 200 | 20 |" in table
+
+
+def test_a_model_never_gets_the_maintenance_settings(monkeypatch):
+    monkeypatch.setenv("MAINT_LLM_BASE_URL", "http://maintenance/v1")
+    monkeypatch.setenv("MAINT_LLM_API_KEY", "maintenance-key")
+    seen = []
+
+    def post(url, headers, json, timeout):
+        seen.append((url, headers["Authorization"]))
+        return FakeResponse({"choices": [{"message": {"content": TRIAGE}}]})
+
+    monkeypatch.setattr(llm_client.httpx, "post", post)
+    models = [ModelSpec("keyless", "http://local/v1", "m", ""), ModelSpec("no-url", "", "m", "")]
+    results = model_compare.compare(models, ["triage"], load_inputs())
+    assert seen == [("http://local/v1/chat/completions", "Bearer not-needed")]
+    assert results[1].error and not results[1].parsed_ok
+
+
+@pytest.mark.parametrize("case,cap", [("watch", 5), ("charter-review", 3)])
+def test_every_search_result_reaches_the_model(inputs, case, cap):
+    prompts = []
+
+    def complete(prompt):
+        prompts.append(prompt)
+        return '["q"]' if "web search queries" in prompt else "[]"
+
+    run_case(case, complete, inputs)
+    assert len(inputs["search_results"]) > cap
+    assert all(r.url in prompts[-1] or r.title in prompts[-1] for r in inputs["search_results"])
+
+
+def test_an_empty_json_object_is_read_as_json(inputs):
+    r = run_case("charter-review", lambda prompt: "{}", inputs)
+    assert r.parsed_ok and r.count == 0

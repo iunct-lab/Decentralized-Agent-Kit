@@ -65,17 +65,18 @@ def make_complete(timeout: float = 60.0, *, base_url: str | None = None, model: 
                   api_key: str | None = None, on_usage=None):
     """Return a `complete(prompt) -> str`, or None if MAINT_LLM_* is not configured.
 
-    base_url / model / api_key override MAINT_LLM_* (to compare models side by side).
+    base_url / model / api_key, when given (even ""), replace MAINT_LLM_*, so a
+    model compared side by side never gets the maintenance endpoint or key.
     on_usage, if given, is called with {"prompt_tokens", "completion_tokens"} after
     each call whose response reports usage.
     """
-    base_url = base_url or os.getenv("MAINT_LLM_BASE_URL")
-    model = model or os.getenv("MAINT_LLM_MODEL")
+    base_url = os.getenv("MAINT_LLM_BASE_URL") if base_url is None else base_url
+    model = os.getenv("MAINT_LLM_MODEL") if model is None else model
     if model and model.startswith(BEDROCK_PREFIX):
         return _make_bedrock_complete(model[len(BEDROCK_PREFIX):], timeout, on_usage)
     if not base_url or not model:
         return None
-    api_key = api_key or os.getenv("MAINT_LLM_API_KEY", "not-needed")
+    api_key = (os.getenv("MAINT_LLM_API_KEY") if api_key is None else api_key) or "not-needed"
 
     def complete(prompt: str) -> str:
         resp = httpx.post(
