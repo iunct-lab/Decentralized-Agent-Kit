@@ -890,6 +890,7 @@ def _guard_state(state: MutableMapping, invocation_id: str) -> dict:
         "checked_calls": [],
         "blocked_calls": [],
         "rewritten_calls": {},
+        "failed_calls": [],
     })
 
 
@@ -1064,33 +1065,49 @@ class ContextHarnessPlugin(BasePlugin):
             guard["checked_calls"].remove(call_id)
         else:
             _count_call(guard, tool_name, tool_args)
-        if call_id in guard["blocked_calls"]:
-            guard["blocked_calls"].remove(call_id)
-            ran = False
+        for skipped in ("blocked_calls", "failed_calls"):
+            if call_id in guard[skipped]:
+                guard[skipped].remove(call_id)
+                ran = False
         original_args = guard["rewritten_calls"].pop(call_id, None)
         if tool_name == READ_TOOL_OUTPUT_NAME:
             return None  # already paged to the budget
-        rewritten = False
-        if ran:  # PostToolUse audits a tool that ran, not a call something else answered
+        output_rewritten = False
+        if ran:  # PostToolUse audits a tool that ran and succeeded, not a call something else answered
             async for outcome in self._run_hooks("PostToolUse", tool_name, tool_args, tool_context, result=result):
                 if outcome["decision"] == "deny":
                     return {"observation": "blocked_by_hook", "reason": outcome["reason"], "hook_event": "PostToolUse"}
                 if outcome["updated_output"] is not None:
-                    # The original is left out: a rewrite is often a redaction.
-                    result = {"observation": "hook_rewrote_output", "result": outcome["updated_output"]}
-                    rewritten = True
+                    result = outcome["updated_output"]
+                    output_rewritten = True
                     break
+        budgeted = await self._apply_budget(tool_name, tool_context, result)
+        if not output_rewritten and original_args is None:
+            return budgeted
+        # The budget sees the tool's own result (MCP shape, media, isError); the wrappers go outside it.
+        result = result if budgeted is None else budgeted
+        if output_rewritten:  # the original is left out: a rewrite is often a redaction
+            result = {"observation": "hook_rewrote_output", "result": result}
         if original_args is not None:
             result = {"observation": "hook_rewrote_input", "original_args": original_args,
                       "updated_args": dict(tool_args), "result": result}
-            rewritten = True
+        return result
+
+    async def on_tool_error_callback(self, *, tool, tool_args, tool_context, error) -> None:
+        """A tool that raised gets no PostToolUse (the agent's own error handling
+        still answers the call)."""
+        _guard_state(tool_context.state, tool_context.invocation_id)["failed_calls"].append(
+            tool_context.function_call_id)
+        return None
+
+    async def _apply_budget(self, tool_name: str, tool_context, result) -> Optional[dict]:
+        """The tool-output budget: the result to send instead, or None to send it as it is."""
         max_chars = self.settings.tool_output_chars
         text = _result_text(result)
         if text is None:
-            return result if rewritten else None
+            return None
         if len(text) <= max_chars:
-            trimmed = _drop_duplicate_structured_content(result, text)
-            return trimmed if trimmed is not None or not rewritten else result
+            return _drop_duplicate_structured_content(result, text)
 
         artifact = _artifact_name(tool_name, getattr(tool_context, "function_call_id", None))
         try:
