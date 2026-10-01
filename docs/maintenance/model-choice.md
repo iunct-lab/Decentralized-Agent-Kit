@@ -26,15 +26,15 @@
 
 回数（2026-09-01〜2026-10-01 の実績から）:
 
-| ワークフロー | 回数 / 月 | 1 回あたりの LLM 呼び出し | 1 呼び出しの入力の目安 |
-|---|---|---|---|
-| `tech-watch`（毎月 1 日・15 日） | 2 | 2（クエリ生成 1 + 評価 1、`watch.py`） | 生成 2.5k、評価 18k（憲章 + 検索 25 件 × 約 600 字） |
-| `feature-sync`（毎週月曜） | 4.3 | 依存ごとに 1（`feature.py`。`collect-deps --max-items 10` で週 10 件まで。月 47 件あったので上限に当たる） | 11k（憲章 + changelog 8,000 字まで） |
-| `charter-review`（四半期） | 1/3 | 1（`charter.py`。検索 5 クエリ × 3 件） | 12k |
-| `dependency-triage`（Dependabot の PR ごと） | 18 回の実行・47 パッケージ（PR 14 件） | パッケージごとに 1（`risk.py`） | 8.5k（changelog 8,000 字まで） |
+| ワークフロー | 回数 / 月 | 1 回あたりの LLM 呼び出し | 呼び出し / 月 | 1 呼び出しの入力の目安 | 入力 / 月 |
+|---|---|---|---|---|---|
+| `tech-watch`（毎月 1 日・15 日） | 2 | 2（クエリ生成 1 + 評価 1、`watch.py`） | 4 | 生成 2.5k、評価 18k（憲章 + 検索 25 件 × 約 600 字） | 41k |
+| `feature-sync`（毎週月曜） | 4.3 | 依存ごとに 1（`feature.py`。`collect-deps --max-items 10` で週 10 件まで。月 47 件あったので上限に当たる） | 43 | 10.8k（憲章 + changelog 8,000 字まで） | 464k |
+| `charter-review`（四半期） | 1/3 | 1（`charter.py`。検索 5 クエリ × 3 件） | 0.33 | 11.8k | 4k |
+| `dependency-triage`（Dependabot の PR ごと） | 18 回の実行（PR 14 件・47 パッケージ。PR の更新でも走る） | パッケージごとに 1（`risk.py`） | 60（47 × 18 / 14） | 8.5k（changelog 8,000 字まで） | 512k |
 
 - トークン数は 1 字 ≈ 1 トークンで数えた（日本語の多い憲章に合わせた多めの見積もり）。出力は 1 呼び出し 0.3k〜1.5k。
-- 合計: triage を除くと入力 約 0.51M / 出力 約 0.03M、triage を含むと入力 約 1.02M / 出力 約 0.05M（feature-sync と triage が大半）。
+- 合計: triage を除くと入力 約 0.51M（41k + 464k + 4k）/ 出力 約 0.03M、triage を含むと入力 約 1.02M / 出力 約 0.05M（feature-sync と triage が大半）。
 - 実測（`dak-maint compare-models` のトークン数）が出たら #351 で置き換える。
 
 | モデル | triage を除く | triage を含む |
@@ -53,22 +53,28 @@ Gemini の無料枠に収まれば $0 だが、回数制限が未確認なので
 
 鍵の値はファイルにもコマンドの履歴にも残さない（`gh secret set` は値を標準入力から読む）。
 
-1. 今の値を控える: `gh variable get MAINT_LLM_BASE_URL`、`gh variable get MAINT_LLM_MODEL`（2026-10-01 時点は Gemini の OpenAI 互換の URL と `gemini-3.5-flash`）。secret は読み出せないので、元の鍵がどこにあるかを控える。
+1. 今の値を控える: `gh variable get MAINT_LLM_BASE_URL`、`gh variable get MAINT_LLM_MODEL`（2026-10-01 時点は Gemini の OpenAI 互換の URL と `gemini-3.5-flash`）、`gh variable get MAINT_ASSESSOR`（無ければ「無し」と控える。2026-10-01 時点は無し）。secret は読み出せないので、元の鍵がどこにあるかを控える。
 2. Actions の変数と secret を変える:
    ```bash
    gh variable set MAINT_LLM_BASE_URL --body "https://api.openai.com/v1"   # Gemini なら https://generativelanguage.googleapis.com/v1beta/openai
    gh variable set MAINT_LLM_MODEL --body "<model id>"
    gh secret set MAINT_LLM_API_KEY                                         # 値はプロンプトに貼る
    ```
-3. 一度だけ確かめる: `gh workflow run feature-sync.yml`（Web 検索を使わない）を回し、ログに `400`（`temperature` を受け付けないなど）や `401` が無いこと。
+3. 変える前に、手元で同じ URL・モデル・鍵で 1 回だけ呼んで確かめる（数トークン分の費用がかかる。Issue は作らない）。鍵は環境変数から渡し、ファイルに書かない:
+   ```bash
+   curl -sS "$MAINT_LLM_BASE_URL/chat/completions" -H "Authorization: Bearer $MAINT_LLM_API_KEY" -H "Content-Type: application/json" \
+     -d "{\"model\": \"$MAINT_LLM_MODEL\", \"temperature\": 0, \"messages\": [{\"role\": \"user\", \"content\": \"Reply with []\"}]}"
+   ```
+   `choices` が返ること。`400`（`temperature` を受け付けないなど）や `401` なら切り替えない。定期実行のワークフローを手で回すと、LLM を何度も呼び、提案があれば Issue を起票するので、確かめには使わない。
 4. `dependency-triage` でも LLM に判定させるなら、Dependabot 側の secret にも同じ鍵を入れる: `gh secret set MAINT_LLM_API_KEY --app dependabot`。
    - Dependabot の PR で動く `dependency-triage` には、Actions の secret は渡らず、Dependabot の secret が渡る。リポジトリの変数（`vars.*`）は渡る（2026-09-28 の Dependabot の実行のログで `MAINT_LLM_BASE_URL` / `MAINT_LLM_MODEL` に値があった）。変数は Actions と共通なので、Dependabot 側に別に置くものは無い。
    - `dependency-triage.yml` は `vars.MAINT_ASSESSOR` が無ければ、`MAINT_LLM_BASE_URL` と `MAINT_LLM_MODEL` があるだけで LLM で判定する。Dependabot の secret が無いと鍵なしで呼び、失敗してパッケージごとにヒューリスティックに落ちる（同じ実行で 503 とタイムアウトが出ていた）。LLM に判定させないなら `gh variable set MAINT_ASSESSOR --body heuristic` で無駄な呼び出しを止める。
+   - 逆に LLM に判定させるなら、`MAINT_ASSESSOR` が `heuristic` になっていないこと（無いか `llm`）を確かめる。`heuristic` のままだと、Dependabot 側に鍵を入れてもヒューリスティックで判定する。
 5. Ollama にするなら、Actions の runner から届くホストの `http://<host>:11434/v1` と `llama3.1:8b`、`MAINT_LLM_API_KEY` は任意の値。
 
 ## 元に戻す
 
-1 で控えた値を `gh variable set MAINT_LLM_BASE_URL` / `gh variable set MAINT_LLM_MODEL` で戻し、`gh secret set MAINT_LLM_API_KEY` に元の鍵を入れ直す。Dependabot 側に入れたなら `gh secret set MAINT_LLM_API_KEY --app dependabot` も戻すか `gh secret delete MAINT_LLM_API_KEY --app dependabot` で消す。`MAINT_ASSESSOR` を足したなら `gh variable delete MAINT_ASSESSOR`。
+1 で控えた値を `gh variable set MAINT_LLM_BASE_URL` / `gh variable set MAINT_LLM_MODEL` で戻し、`gh secret set MAINT_LLM_API_KEY` に元の鍵を入れ直す。Dependabot 側に入れたなら `gh secret set MAINT_LLM_API_KEY --app dependabot` も戻すか `gh secret delete MAINT_LLM_API_KEY --app dependabot` で消す。`MAINT_ASSESSOR` は 1 で控えた状態に戻す（控えた値があれば `gh variable set MAINT_ASSESSOR --body "<控えた値>"`、無しなら `gh variable delete MAINT_ASSESSOR`）。
 
 ## 結果
 
