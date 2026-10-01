@@ -1135,6 +1135,20 @@ class ContextHarnessPlugin(BasePlugin):
             replacement["hint"] = "Output was too large for the context window; narrow the tool call."
         return replacement
 
+    async def after_run_callback(self, *, invocation_context) -> None:
+        """Stop hooks: audit and notify only. ADK's after_run_callback returns
+        None and cannot keep the agent going, so a deny is logged, not obeyed."""
+        matched = hooks.hooks_for(self._hooks, "Stop", "*")
+        if not matched:
+            return None
+        session_id = getattr(getattr(invocation_context, "session", None), "id", "") or ""
+        payload = hooks.build_payload("Stop", "*", {}, session_id=session_id, tool_use_id="")
+        for hook in matched:
+            outcome = await asyncio.to_thread(hooks.run_hook, hook, payload)
+            if outcome["decision"] in ("deny", "error"):
+                logger.warning("Stop hook %s: %s", outcome["decision"], outcome["reason"])
+        return None
+
     async def before_model_callback(self, *, callback_context, llm_request) -> None:
         settings = self._settings_for(callback_context)
         _record_compactions(callback_context, settings.compaction_warning_count)

@@ -7,6 +7,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -382,3 +383,35 @@ def test_load_hooks_skips_non_http_url(monkeypatch):
         {"event": "PreToolUse", "type": "http", "url": "https://hooks.example/"},
     ]))
     assert hooks.load_hooks() == [HookSpec(event="PreToolUse", type="http", url="https://hooks.example/")]
+
+
+def test_load_hooks_empty_is_fast_noop(monkeypatch):
+    # Unset means no candidates at all, so no hook process is ever started.
+    monkeypatch.delenv("DAK_HOOKS", raising=False)
+    assert hooks.load_hooks() == []
+    assert hooks.hooks_for([], "PreToolUse", "write_file") == []
+
+
+_CLAUDE_CODE_HOOK = Path(__file__).parent / "fixtures" / "precommit_style_hook.py"
+
+
+def _claude_code_hook(monkeypatch):
+    monkeypatch.setenv("DAK_HOOKS", json.dumps(
+        [{"event": "PreToolUse", "type": "command", "command": f"python3 {_CLAUDE_CODE_HOOK}"}]))
+    [spec] = hooks.hooks_for(hooks.load_hooks(), "PreToolUse", "run_command")
+    return spec
+
+
+def test_claude_code_style_pretooluse_script_blocks_matching_command(monkeypatch):
+    payload = hooks.build_payload("PreToolUse", "run_command", {"command": "rm -rf /tmp/x"},
+                                  session_id="s1", tool_use_id="t1")
+    outcome = hooks.run_hook(_claude_code_hook(monkeypatch), payload)
+    assert outcome["decision"] == "deny"
+    assert outcome["reason"] == "destructive command blocked by hook"
+
+
+def test_claude_code_style_pretooluse_script_allows_other_command(monkeypatch):
+    payload = hooks.build_payload("PreToolUse", "run_command", {"command": "git status"},
+                                  session_id="s1", tool_use_id="t1")
+    outcome = hooks.run_hook(_claude_code_hook(monkeypatch), payload)
+    assert outcome == {"decision": "allow", "reason": "", "updated_input": None, "updated_output": None}

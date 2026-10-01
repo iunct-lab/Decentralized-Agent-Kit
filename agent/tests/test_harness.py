@@ -669,6 +669,26 @@ class TestContextHarnessPluginHooks:
                                                   result={"observation": "permission_denied"})
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_after_run_callback_no_hooks_is_noop(self, monkeypatch):
+        plugin = self._plugin(monkeypatch)
+        with patch("dak_agent.hooks.run_hook") as run_hook:
+            assert await plugin.after_run_callback(invocation_context=MagicMock()) is None
+        run_hook.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_after_run_callback_runs_stop_hook_without_blocking(self, monkeypatch, caplog):
+        # ADK's after_run_callback cannot continue or stop the run: a Stop deny is only logged.
+        plugin = self._plugin(monkeypatch, {"event": "Stop", "type": "command", "command": "echo stop >&2; exit 2"})
+        ctx = MagicMock()
+        ctx.session.id = "sess-1"
+        with patch("dak_agent.hooks.run_hook", wraps=harness.hooks.run_hook) as run_hook, caplog.at_level("WARNING"):
+            assert await plugin.after_run_callback(invocation_context=ctx) is None
+        payload = run_hook.call_args.args[1]
+        assert payload["hook_event_name"] == "Stop"
+        assert payload["session_id"] == "sess-1"
+        assert any("Stop hook deny: stop" in r.getMessage() for r in caplog.records)
+
 
 class TestReadToolOutput:
     def _ctx(self, text):
