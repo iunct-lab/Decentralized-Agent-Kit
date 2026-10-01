@@ -16,7 +16,7 @@ from google.genai import types
 from pydantic import ConfigDict, Field, PrivateAttr
 import inspect
 
-from . import builtin_tools, call_config, remote_tools, skill_tools
+from . import builtin_tools, call_config, plan_mode, remote_tools, skill_tools
 from .config import get_litellm_model_name, load_agent_config
 from .errors import PaymentRequiredError
 from .harness import HarnessSettings
@@ -36,6 +36,14 @@ CALLER_MCP_PROBE_TIMEOUT_S = 30.0
 # Per-invocation (ADK drops `temp:` state after the invocation): the tool names
 # each reachable caller MCP server listed on this call, {url: [names]}.
 STATE_CALLER_MCP_TOOLS = "temp:dak_caller_mcp_tools"
+# Appended to every instruction while Plan mode is on (plan_mode.py), so a
+# small model that forgets the system prompt is reminded on each request.
+PLAN_MODE_REMINDER = (
+    "\n\n<system-reminder>You are in Plan mode. Only read-only tools (read_file, grep, list_files, "
+    "search_files, deep_think) are available; write_file/edit_file are denied except under plans/*.md, "
+    "and run_command is denied. Call plan_exit(plan_path=...) to request approval to leave Plan mode "
+    "and execute.</system-reminder>"
+)
 
 
 class AdaptiveAgent(LlmAgent):
@@ -212,7 +220,10 @@ class AdaptiveAgent(LlmAgent):
                     f"\n\n# Tool Enabled: {skill_name}\n"
                     f"You have enabled the raw tool '{skill_name}'. Use it according to its schema."
                 )
-        return instruction + self._tools_error_section(state) + self._verbatim_sections(state)
+        instruction += self._tools_error_section(state) + self._verbatim_sections(state)
+        if plan_mode.is_active(state):
+            instruction += PLAN_MODE_REMINDER
+        return instruction
 
     def _verbatim_sections(self, state: MutableMapping[str, Any]) -> str:
         """The instruction's tail built from text the user or the model wrote
