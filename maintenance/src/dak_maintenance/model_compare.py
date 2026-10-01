@@ -28,7 +28,8 @@ CASES = ["watch", "feature-sync", "charter-review", "triage"]
 FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "model_compare"
 # What changelog.txt is the changelog of.
 TRIAGE_DEP = ("httpx", "0.27.2", "0.28.0")
-_EMPTY_OBJECT = re.compile(r"\{\s*\}")
+# The whole answer is {} (optionally in a code fence).
+_EMPTY_OBJECT = re.compile(r"\s*(?:```(?:json)?\s*)?\{\s*\}\s*(?:```)?\s*")
 
 
 @dataclass
@@ -110,7 +111,7 @@ def run_case(case: str, complete: Callable[[str], str], inputs: dict) -> CaseRes
 
 def _reads_as_json(raw: str) -> bool:
     # extract_json gives {} for "no JSON" too; a literal {} is still JSON.
-    return extract_json(raw) != {} or bool(_EMPTY_OBJECT.search(raw or ""))
+    return extract_json(raw) != {} or bool(_EMPTY_OBJECT.fullmatch(raw or ""))
 
 
 def compare(models: list[ModelSpec], cases: list[str], inputs: dict, timeout: float = 120.0) -> list[CaseResult]:
