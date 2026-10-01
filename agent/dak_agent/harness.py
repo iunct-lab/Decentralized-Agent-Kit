@@ -889,6 +889,7 @@ def _guard_state(state: MutableMapping, invocation_id: str) -> dict:
         "violation_streak": 0,
         "checked_calls": [],
         "blocked_calls": [],
+        "rewritten_calls": {},
     })
 
 
@@ -966,8 +967,8 @@ class ContextHarnessPlugin(BasePlugin):
         guard["checked_calls"].append(tool_context.function_call_id)
         blocked = self._guard_tool_call(guard, tool_name)
         if blocked is None:
-            blocked = await self._run_pre_tool_hooks(tool, tool_name, tool_args, tool_context)
-        if blocked is not None and blocked.get("observation") != "hook_rewrote_input":
+            blocked = await self._run_pre_tool_hooks(guard, tool_name, tool_args, tool_context)
+        if blocked is not None:
             guard["blocked_calls"].append(tool_context.function_call_id)
         return blocked
 
@@ -1021,16 +1022,20 @@ class ContextHarnessPlugin(BasePlugin):
                 continue
             yield outcome
 
-    async def _run_pre_tool_hooks(self, tool, tool_name: str, tool_args, tool_context) -> Optional[dict]:
-        """A deny stops the call. Rewritten arguments run the tool here (ADK has
-        no way to pass changed arguments on), and the observation says so."""
+    async def _run_pre_tool_hooks(self, guard: dict, tool_name: str, tool_args, tool_context) -> Optional[dict]:
+        """A deny stops the call. Rewritten arguments replace ``tool_args`` in
+        place: ADK runs the tool with this same dict, so the call keeps its usual
+        error handling. ``after_tool_callback`` tells the model about the rewrite.
+        The PermissionPlugin ran before this on the original arguments; a hook is
+        the operator's own configuration and is trusted like its rules."""
         async for outcome in self._run_hooks("PreToolUse", tool_name, tool_args, tool_context):
             if outcome["decision"] == "deny":
                 return {"observation": "blocked_by_hook", "reason": outcome["reason"], "hook_event": "PreToolUse"}
             if outcome["updated_input"] is not None:
-                result = await tool.run_async(args=outcome["updated_input"], tool_context=tool_context)
-                return {"observation": "hook_rewrote_input", "original_args": tool_args,
-                        "updated_args": outcome["updated_input"], "result": result}
+                guard["rewritten_calls"][tool_context.function_call_id] = dict(tool_args)
+                tool_args.clear()
+                tool_args.update(outcome["updated_input"])
+                break
         return None
 
     def note_argument_violation(self, tool_context, invocation_id: str) -> bool:
@@ -1062,6 +1067,7 @@ class ContextHarnessPlugin(BasePlugin):
         if call_id in guard["blocked_calls"]:
             guard["blocked_calls"].remove(call_id)
             ran = False
+        original_args = guard["rewritten_calls"].pop(call_id, None)
         if tool_name == READ_TOOL_OUTPUT_NAME:
             return None  # already paged to the budget
         rewritten = False
@@ -1074,6 +1080,10 @@ class ContextHarnessPlugin(BasePlugin):
                     result = {"observation": "hook_rewrote_output", "result": outcome["updated_output"]}
                     rewritten = True
                     break
+        if original_args is not None:
+            result = {"observation": "hook_rewrote_input", "original_args": original_args,
+                      "updated_args": dict(tool_args), "result": result}
+            rewritten = True
         max_chars = self.settings.tool_output_chars
         text = _result_text(result)
         if text is None:
