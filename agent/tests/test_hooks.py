@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import shlex
 import socket
 import threading
 import time
@@ -397,7 +398,7 @@ _CLAUDE_CODE_HOOK = Path(__file__).parent / "fixtures" / "precommit_style_hook.p
 
 def _claude_code_hook(monkeypatch):
     monkeypatch.setenv("DAK_HOOKS", json.dumps(
-        [{"event": "PreToolUse", "type": "command", "command": f"python3 {_CLAUDE_CODE_HOOK}"}]))
+        [{"event": "PreToolUse", "type": "command", "command": f"python3 {shlex.quote(str(_CLAUDE_CODE_HOOK))}"}]))
     [spec] = hooks.hooks_for(hooks.load_hooks(), "PreToolUse", "run_command")
     return spec
 

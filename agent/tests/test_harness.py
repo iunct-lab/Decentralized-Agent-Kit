@@ -689,6 +689,15 @@ class TestContextHarnessPluginHooks:
         assert payload["session_id"] == "sess-1"
         assert any("Stop hook deny: stop" in r.getMessage() for r in caplog.records)
 
+    @pytest.mark.asyncio
+    async def test_stop_hook_ignores_tool_pattern(self, monkeypatch):
+        # Stop has no tool: an `if` copied from a tool hook must not silently drop it.
+        plugin = self._plugin(monkeypatch, {"event": "Stop", "type": "command", "command": "exit 0", "if": "run_*"})
+        with patch("dak_agent.hooks.run_hook", return_value={"decision": "allow", "reason": "",
+                                                             "updated_input": None, "updated_output": None}) as run_hook:
+            await plugin.after_run_callback(invocation_context=MagicMock())
+        run_hook.assert_called_once()
+
 
 class TestReadToolOutput:
     def _ctx(self, text):
