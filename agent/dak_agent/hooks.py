@@ -21,7 +21,6 @@ import logging
 import os
 import signal
 import subprocess
-import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -31,6 +30,8 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 HOOKS_ENV = "DAK_HOOKS"
+# The longest wait every path accepts: a command hook's wait polls in C-int milliseconds (about 24.8 days).
+MAX_TIMEOUT = (2**31 - 1) // 1000
 
 
 @dataclass(frozen=True)
@@ -84,7 +85,7 @@ def _entry_problem(entry: Any) -> str:
         return "an http hook needs an http(s) url"
     timeout = entry.get("timeout", 30.0)
     # Compared, not converted: an integer too large for a float does not raise here. NaN fails both.
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= threading.TIMEOUT_MAX:
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= MAX_TIMEOUT:
         return "timeout must be a positive number a wait accepts"
     return ""
 
