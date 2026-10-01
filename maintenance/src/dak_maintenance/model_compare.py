@@ -139,13 +139,17 @@ def compare(models: list[ModelSpec], cases: list[str], inputs: dict, timeout: fl
                     usage[k] = (usage[k] or 0) + u[k]
 
         # Only the spec's own settings: "" (not None) keeps make_complete off MAINT_LLM_*.
-        complete = make_complete(timeout, base_url=spec.base_url, model=spec.model,
-                                 api_key=os.getenv(spec.api_key_env, "") if spec.api_key_env else "",
-                                 on_usage=on_usage)
+        setup_error = "base_url と model が要る"
+        try:
+            complete = make_complete(timeout, base_url=spec.base_url, model=spec.model,
+                                     api_key=os.getenv(spec.api_key_env, "") if spec.api_key_env else "",
+                                     on_usage=on_usage)
+        except Exception as e:  # e.g. Bedrock without credentials: record it, go on with the next model
+            complete, setup_error = None, _describe(e)
         for case in cases:
             usage.update(prompt_tokens=None, completion_tokens=None)
             if complete is None:
-                r = CaseResult("", case, False, 0, 0.0, None, None, "base_url と model が要る")
+                r = CaseResult("", case, False, 0, 0.0, None, None, setup_error)
             else:
                 r = run_case(case, complete, inputs)
                 r.prompt_tokens, r.completion_tokens = usage["prompt_tokens"], usage["completion_tokens"]
