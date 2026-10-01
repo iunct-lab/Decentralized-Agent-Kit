@@ -44,10 +44,10 @@ uvx pip-licenses==5.5.5 --python .venv/bin/python --with-system --from=all --for
 | パッケージ（版） | コンポーネント | 欄の値 | SPDX |
 |---|---|---|---|
 | `colorama` 0.4.6 | agent, mcp-server, bff, cli | 分類子 `BSD License` | `BSD-3-Clause`（LICENSE.txt） |
-| `pywin32` 311 | agent, mcp-server | メタデータ `PSF` | `PSF-2.0` |
+| `pywin32` 311 | agent, mcp-server | メタデータ `PSF` | `PSF-2.0 AND BSD-3-Clause`（`win32/`・`Pythonwin/`・`com/` の License.txt は BSD 3 条項の文） |
 | `tzdata` 2025.2 | agent | メタデータ `Apache-2.0` | `Apache-2.0` |
 
-CI（Linux）の license ジョブはこの 3 件を見ない。Windows でだけ入る依存が増えたり変わったりしたときは、この表を手で直す。
+CI（Linux）の license ジョブは、このままではこの 3 件を見ない。どう扱うかは利用者の判断待ち（PBI #344）。
 
 ## 道具の比較
 
@@ -172,7 +172,7 @@ LGPL の部分（psycopg2 本体、`libkeyutils`、`libcrypt`）が論点にな�
 - 上の表の「表記だけでは決められない」残りの 9 件（`fastuuid` ほか）: LICENSE ファイルで確かめた SPDX を記録する
 
 許容外か不明の依存が入ったら CI の license ジョブが止まり、例外を足すかどうかを利用者が決める。
-Windows でだけ入る依存（`colorama`, `pywin32`, `tzdata`）は CI に見えないので、棚卸しの表で手で追う。
+Windows でだけ入る依存（`colorama`, `pywin32`, `tzdata`）を CI でどう確かめるかも、利用者の判断待ち（PBI #344）。
 
 ### 決定
 
