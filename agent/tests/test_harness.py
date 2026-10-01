@@ -470,6 +470,137 @@ class TestToolCallGuard:
         assert (s.max_repeated_tool_calls, s.max_invocation_tool_calls, s.max_wall_seconds) == (5, 12, 90.0)
 
 
+class TestContextHarnessPluginHooks:
+    """DAK_HOOKS wired into the tool callbacks (PreToolUse / PostToolUse)."""
+
+    def _plugin(self, monkeypatch, *specs):
+        if specs:
+            monkeypatch.setenv("DAK_HOOKS", json.dumps(list(specs)))
+        else:
+            monkeypatch.delenv("DAK_HOOKS", raising=False)
+        return ContextHarnessPlugin(HarnessSettings(context_window=8192), "test-model")
+
+    def _ctx(self, call_id="call-1"):
+        ctx = MagicMock()
+        ctx.invocation_id = "inv-1"
+        ctx.function_call_id = call_id
+        ctx.state = {}
+        ctx.session.id = "sess-1"
+        ctx.save_artifact = AsyncMock()
+        return ctx
+
+    @staticmethod
+    def _echo(event, output):
+        return {"event": event, "type": "command", "command": f"echo '{json.dumps(output)}'"}
+
+    @pytest.mark.asyncio
+    async def test_before_tool_callback_no_hooks_returns_none(self, monkeypatch):
+        plugin = self._plugin(monkeypatch)
+        with patch("dak_agent.hooks.run_hook") as run_hook:
+            result = await plugin.before_tool_callback(
+                tool=_tool("run_command"), tool_args={"command": "ls"}, tool_context=self._ctx())
+        assert result is None
+        run_hook.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_before_tool_callback_deny_blocks_tool(self, monkeypatch):
+        plugin = self._plugin(monkeypatch, {"event": "PreToolUse", "type": "command", "command": "echo nope >&2; exit 2"})
+        tool = _tool("run_command")
+        tool.run_async = AsyncMock()
+        result = await plugin.before_tool_callback(tool=tool, tool_args={"command": "ls"}, tool_context=self._ctx())
+        assert result == {"observation": "blocked_by_hook", "reason": "nope", "hook_event": "PreToolUse"}
+        tool.run_async.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_before_tool_callback_respects_tool_pattern(self, monkeypatch):
+        plugin = self._plugin(monkeypatch, {"event": "PreToolUse", "type": "command", "command": "exit 2",
+                                            "if": "write_*"})
+        result = await plugin.before_tool_callback(
+            tool=_tool("run_command"), tool_args={"command": "ls"}, tool_context=self._ctx())
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_before_tool_callback_hook_error_lets_tool_run(self, monkeypatch):
+        plugin = self._plugin(monkeypatch, {"event": "PreToolUse", "type": "command", "command": "exit 1"})
+        result = await plugin.before_tool_callback(
+            tool=_tool("run_command"), tool_args={"command": "ls"}, tool_context=self._ctx())
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_before_tool_callback_updated_input_calls_tool_run_async(self, monkeypatch):
+        plugin = self._plugin(monkeypatch, self._echo(
+            "PreToolUse", {"hookSpecificOutput": {"updatedInput": {"command": "ls -la"}}}))
+        tool = _tool("run_command")
+        tool.run_async = AsyncMock(return_value={"stdout": "total 0"})
+        ctx = self._ctx()
+        result = await plugin.before_tool_callback(tool=tool, tool_args={"command": "ls"}, tool_context=ctx)
+        tool.run_async.assert_awaited_once_with(args={"command": "ls -la"}, tool_context=ctx)
+        assert result == {"observation": "hook_rewrote_input", "original_args": {"command": "ls"},
+                          "updated_args": {"command": "ls -la"}, "result": {"stdout": "total 0"}}
+
+    @pytest.mark.asyncio
+    async def test_hook_receives_claude_code_payload(self, monkeypatch):
+        plugin = self._plugin(monkeypatch, {"event": "PreToolUse", "type": "command", "command": "exit 0"})
+        with patch("dak_agent.hooks.run_hook", return_value={"decision": "allow", "reason": "",
+                                                             "updated_input": None, "updated_output": None}) as run_hook:
+            await plugin.before_tool_callback(
+                tool=_tool("run_command"), tool_args={"command": "ls"}, tool_context=self._ctx("call-9"))
+        payload = run_hook.call_args.args[1]
+        assert payload["hook_event_name"] == "PreToolUse"
+        assert payload["session_id"] == "sess-1"
+        assert payload["tool_use_id"] == "call-9"
+        assert payload["tool_input"] == {"command": "ls"}
+
+    @pytest.mark.asyncio
+    async def test_guard_block_skips_hooks(self, monkeypatch):
+        plugin = self._plugin(monkeypatch, {"event": "PreToolUse", "type": "command", "command": "exit 0"},
+                              {"event": "PostToolUse", "type": "command", "command": "exit 0"})
+        plugin.settings = HarnessSettings(context_window=8192, max_invocation_tool_calls=0)
+        ctx = self._ctx()
+        with patch("dak_agent.hooks.run_hook") as run_hook:
+            blocked = await plugin.before_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx)
+            await plugin.after_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx, result=blocked)
+        assert blocked["observation"] == "step_limit_exceeded"
+        run_hook.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_after_tool_callback_post_hook_deny_short_circuits_budget(self, monkeypatch):
+        plugin = self._plugin(monkeypatch, {"event": "PostToolUse", "type": "command", "command": "echo leak >&2; exit 2"})
+        ctx = self._ctx()
+        assert await plugin.before_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx) is None
+        result = await plugin.after_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx,
+                                                  result="x" * 50_000)
+        assert result == {"observation": "blocked_by_hook", "reason": "leak", "hook_event": "PostToolUse"}
+        ctx.save_artifact.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_after_tool_callback_post_hook_rewrite_goes_through_budget(self, monkeypatch):
+        plugin = self._plugin(monkeypatch, self._echo("PostToolUse", {"hookSpecificOutput": {"updatedToolOutput": "y" * 5000}}))
+        ctx = self._ctx()
+        await plugin.before_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx)
+        result = await plugin.after_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx,
+                                                  result="secret")
+        assert result["truncated"] is True
+        assert "secret" not in json.dumps(result)
+
+    @pytest.mark.asyncio
+    async def test_after_tool_callback_post_hook_rewrite_small_output(self, monkeypatch):
+        plugin = self._plugin(monkeypatch, self._echo("PostToolUse", {"hookSpecificOutput": {"updatedToolOutput": "redacted"}}))
+        ctx = self._ctx()
+        await plugin.before_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx)
+        result = await plugin.after_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=ctx,
+                                                  result="secret")
+        assert result == {"observation": "hook_rewrote_output", "result": "redacted"}
+
+    @pytest.mark.asyncio
+    async def test_post_hook_skipped_when_an_earlier_plugin_answered(self, monkeypatch):
+        # The PermissionPlugin answered: the tool never ran, so there is nothing to audit.
+        plugin = self._plugin(monkeypatch, {"event": "PostToolUse", "type": "command", "command": "exit 2"})
+        result = await plugin.after_tool_callback(tool=_tool("run_command"), tool_args={}, tool_context=self._ctx(),
+                                                  result={"observation": "permission_denied"})
+        assert result is None
+
+
 class TestReadToolOutput:
     def _ctx(self, text):
         ctx = MagicMock()
