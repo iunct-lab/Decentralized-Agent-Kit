@@ -179,3 +179,28 @@ def test_broken_json_around_an_empty_object_is_not_parsed_ok(inputs):
 def test_an_empty_object_in_prose_is_read_as_json(inputs):
     r = run_case("charter-review", lambda prompt: "No proposals: {}", inputs)
     assert r.parsed_ok
+
+
+@pytest.mark.parametrize("prices", ['{"fake": {"in": 0.1, "out": 0.5}}', '{"fake": 0.1}', '[]'])
+def test_bad_prices_stop_before_any_model_is_called(tmp_path, monkeypatch, prices):
+    models = tmp_path / "models.json"
+    models.write_text(json.dumps([{"name": "fake", "base_url": "http://llm/v1", "model": "m", "api_key_env": ""}]))
+    p = tmp_path / "prices.json"
+    p.write_text(prices)
+
+    def post(*a, **kw):
+        raise AssertionError("a model was called")
+
+    monkeypatch.setattr(llm_client.httpx, "post", post)
+    assert main(["compare-models", "--models", str(models), "--prices", str(p)]) == 2
+
+
+def test_an_empty_maintenance_key_is_sent_as_before(monkeypatch):
+    monkeypatch.setenv("MAINT_LLM_BASE_URL", "http://llm/v1")
+    monkeypatch.setenv("MAINT_LLM_MODEL", "m")
+    monkeypatch.setenv("MAINT_LLM_API_KEY", "")
+    seen = []
+    monkeypatch.setattr(llm_client.httpx, "post", lambda url, headers, json, timeout: seen.append(headers["Authorization"])
+                        or FakeResponse({"choices": [{"message": {"content": "[]"}}]}))
+    llm_client.make_complete()("hi")
+    assert seen == ["Bearer "]
