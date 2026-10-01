@@ -36,7 +36,7 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
 | 計画 / TODO | `write_todos` | `PlanReActPlanner` / `BuiltInPlanner` | `planner`（確認必須・状態に残らない） |
 | サブエージェント（コンテキスト分離） | `task` ツール | `AgentTool`（子エージェントを独立コンテキストで実行し結果だけ返す） | A2A peer のみ。調査用の分離サブエージェントは無し |
 | スキル（段階的開示） | Skills | `SkillToolset`（list/search/load skill、resource、script） | 独自 `SkillRegistry` + `enable_skill` |
-| ツール失敗からの回復 | リトライ / 自己修正 | `ReflectAndRetryToolPlugin` | `on_tool_error` で観測値化 + §3 の 0（繰り返しのガード）。ReflectAndRetry は不採用（`docs/design/reflect_retry_plugin.md`、#91） |
+| ツール失敗からの回復 | リトライ / 自己修正 | `ReflectAndRetryToolPlugin` | `on_tool_error` で観測値化 + §3 の 0（繰り返しのガード）。未知のツール名は `{"observation": "unknown_tool", "candidates"}`（`difflib` で近い名前を最大 3 つ、#185）。ReflectAndRetry は不採用（`docs/design/reflect_retry_plugin.md`、#91） |
 | プロンプトキャッシュ | Anthropic cache | `ContextCacheConfig`（2.8 で Anthropic のキャッシュブレークポイント対応） | 未使用 |
 | 中断・再開 | チェックポイント | `ResumabilityConfig` | 未使用 |
 | ベンダ製ハーネスの取り込み | — | `google.adk.labs.antigravity.AntigravityAgent`（Antigravity SDK の harness を ADK ノードとして包む。labs 扱い・Gemini 前提） | 不採用（マルチプロバイダ/ローカル LLM という憲章と合わない） |
