@@ -260,3 +260,42 @@ def test_a_model_that_cannot_be_set_up_is_recorded_and_the_rest_still_run(monkey
 def test_model_text_stays_on_its_line():
     r = CaseResult("m", "triage", True, 1, 0.1, None, None, "", ["breaking: line one\nline two"])
     assert "- m / triage: breaking: line one line two" in render_table([r], {})
+
+
+@pytest.mark.parametrize("entry", [{"name": "a", "base_url": None, "model": "m"}, {"name": "a", "model": None},
+                                   {"name": "a", "model": "m", "api_key_env": 1}])
+def test_load_models_takes_only_strings(tmp_path, entry):
+    p = tmp_path / "models.json"
+    p.write_text(json.dumps([entry]))
+    with pytest.raises(ValueError):
+        load_models(str(p))
+
+
+def test_an_unset_key_variable_stops_before_any_model_is_called(tmp_path, monkeypatch):
+    models = tmp_path / "models.json"
+    models.write_text(json.dumps([{"name": "a", "base_url": "http://llm/v1", "model": "m", "api_key_env": "CMP_KEY_TYPO"}]))
+    monkeypatch.delenv("CMP_KEY_TYPO", raising=False)
+    monkeypatch.setattr(llm_client.httpx, "post", lambda *a, **kw: pytest.fail("a model was called"))
+    assert main(["compare-models", "--models", str(models)]) == 2
+
+
+def test_an_unknown_case_stops(tmp_path):
+    assert main(["compare-models", "--models", str(tmp_path / "unused.json"), "--cases", "nope"]) == 2
+
+
+def test_a_failed_out_write_still_prints_the_table(tmp_path, monkeypatch, capsys):
+    models = tmp_path / "models.json"
+    models.write_text(json.dumps([{"name": "a", "base_url": "http://llm/v1", "model": "m", "api_key_env": ""}]))
+    monkeypatch.setattr(llm_client.httpx, "post", lambda url, headers, json, timeout:
+                        FakeResponse({"choices": [{"message": {"content": TRIAGE}}]}))
+    out = tmp_path / "compare.md"
+    real_write = model_compare.Path.write_text
+
+    def fail(self, *a, **kw):
+        if self == out:
+            raise OSError("read-only")
+        return real_write(self, *a, **kw)
+
+    monkeypatch.setattr(model_compare.Path, "write_text", fail)
+    assert main(["compare-models", "--models", str(models), "--cases", "triage", "--out", str(out)]) == 1
+    assert "| a | triage | yes |" in capsys.readouterr().out
