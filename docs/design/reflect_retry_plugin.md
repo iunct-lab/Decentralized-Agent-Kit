@@ -100,9 +100,5 @@ Docker・実 LLM は使っていない（2026-09-30、google-adk 2.8）。
 
 ## 再検討するとき
 
-実 LLM の評価で反省の指示が成功率を上げると分かったら、プラグインではなく、`_on_tool_error` が返す
-Observation に短い指示（何回目か、同じ引数を避けること）を足す形を先に試す。例外で終えず、AP2 の
-分岐も保てる。ReflectAndRetry を使うなら `throw_exception_if_retry_exceeded=False`・
-`TrackingScope.INVOCATION`（ハーネスのカウンタと同じく invocation ごと）で、`PaymentRequiredError` を
-素通しさせるサブクラスにし、`App(plugins=[...])` では `ContextHarnessPlugin` の後に置く（繰り返しの
-ガードが先に止めた呼び出しは実行されず、プラグインはその結果を成功とみなして数え直す）。
+実 LLM の評価（上の「未検証のこと」の 1 つ目）で、反省の指示が成功率を上げると分かったとき。
+組み込み方はそのときに、その評価の結果とあわせて別の Issue で決める。
