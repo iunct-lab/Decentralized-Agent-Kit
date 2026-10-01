@@ -6,6 +6,7 @@ Subcommands:
   feature-sync   依存の新機能取り込み提案 JSON を出力
   collect-deps   マージ済み deps PR の本文（標準入力の JSON）から依存の一覧を出力
   charter-review 憲章の見直し提案 JSON を出力
+  compare-models 固定の入力で複数のモデルに保守のプロンプトを投げ、結果を Markdown の表にする
 
 reasoning 系（watch/feature-sync/charter-review）は LLM 必須。MAINT_LLM_* 未設定なら
 proposals は空を返す（ワークフローは 0 件として扱う）。
@@ -26,6 +27,7 @@ from .llm_client import make_complete
 from .watch import propose_technologies
 from .feature import deps_from_prs, propose_feature_adoptions
 from .charter import review_charter
+from . import model_compare
 
 
 def _bool(s: str) -> bool:
@@ -184,6 +186,23 @@ def cmd_charter_review(args: argparse.Namespace) -> int:
     return _emit_proposals(proposals)
 
 
+def cmd_compare_models(args: argparse.Namespace) -> int:
+    cases = [c.strip() for c in args.cases.split(",") if c.strip()]
+    unknown = [c for c in cases if c not in model_compare.CASES]
+    if unknown:
+        print(f"error: 未知のケース {unknown}（使えるのは {','.join(model_compare.CASES)}）", file=sys.stderr)
+        return 2
+    prices = json.loads(_read(args.prices) or "{}") if args.prices else {}
+    results = model_compare.compare(model_compare.load_models(args.models), cases, model_compare.load_inputs())
+    table = model_compare.render_table(results, prices)
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as f:
+            f.write(table)
+    else:
+        sys.stdout.write(table)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="dak-maint", description="DAK self-maintenance toolkit")
     sub = p.add_subparsers(dest="command", required=True)
@@ -224,6 +243,14 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--quarter", default="")
     c.add_argument("--existing-titles", default=None)
     c.set_defaults(func=cmd_charter_review)
+
+    m = sub.add_parser("compare-models", help="固定の入力で複数のモデルを比べる")
+    m.add_argument("--models", required=True,
+                   help='JSON ファイル: [{"name","base_url","model","api_key_env"}]（鍵は環境変数の名前だけ）')
+    m.add_argument("--prices", default=None, help='JSON ファイル: {"<name>": {"input": 0.1, "output": 0.5}}（1M トークンあたりの USD）')
+    m.add_argument("--cases", default=",".join(model_compare.CASES))
+    m.add_argument("--out", default=None, help="Markdown の出力先（無ければ標準出力）")
+    m.set_defaults(func=cmd_compare_models)
     return p
 
 

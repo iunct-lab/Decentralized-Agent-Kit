@@ -64,6 +64,15 @@ def test_bedrock_model_uses_converse_with_iam_credentials(monkeypatch, fake_boto
     assert "must-not-be-used" not in repr(made) + repr(call)  # IAM (SigV4), not the API key
 
 
+def test_bedrock_reports_usage(monkeypatch, fake_boto3):
+    client, _ = fake_boto3
+    reply = client.converse
+    client.converse = lambda **kw: {**reply(**kw), "usage": {"inputTokens": 7, "outputTokens": 2, "totalTokens": 9}}
+    usage = []
+    llm_client.make_complete(model="bedrock/global.openai.gpt-6-luna", on_usage=usage.append)("hi")
+    assert usage == [{"prompt_tokens": 7, "completion_tokens": 2}]
+
+
 def test_bedrock_region_defaults_to_us_east_1(monkeypatch, fake_boto3):
     _, made = fake_boto3
     monkeypatch.setenv("MAINT_LLM_MODEL", "bedrock/global.openai.gpt-6-luna")
