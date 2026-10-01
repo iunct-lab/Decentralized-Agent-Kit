@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +28,7 @@ CASES = ["watch", "feature-sync", "charter-review", "triage"]
 FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "model_compare"
 # What changelog.txt is the changelog of.
 TRIAGE_DEP = ("httpx", "0.27.2", "0.28.0")
+_EMPTY_OBJECT = re.compile(r"\{\s*\}")
 
 
 @dataclass
@@ -79,7 +81,8 @@ def run_case(case: str, complete: Callable[[str], str], inputs: dict) -> CaseRes
         return raw
 
     def search(query: str, k: int) -> list[SearchResult]:
-        return inputs["search_results"][:k]
+        # Every query gets the whole copy (deduplicated by URL), so every result reaches the model.
+        return inputs["search_results"]
 
     start = time.monotonic()
     titles: list[str] = []
@@ -101,8 +104,13 @@ def run_case(case: str, complete: Callable[[str], str], inputs: dict) -> CaseRes
         if not errors:
             errors.append(str(e))
     latency = time.monotonic() - start
-    parsed_ok = not errors and bool(raws) and all(extract_json(r) != {} for r in raws)
+    parsed_ok = not errors and bool(raws) and all(_reads_as_json(r) for r in raws)
     return CaseResult("", case, parsed_ok, len(titles), latency, None, None, "; ".join(errors), titles)
+
+
+def _reads_as_json(raw: str) -> bool:
+    # extract_json gives {} for "no JSON" too; a literal {} is still JSON.
+    return extract_json(raw) != {} or bool(_EMPTY_OBJECT.search(raw or ""))
 
 
 def compare(models: list[ModelSpec], cases: list[str], inputs: dict, timeout: float = 120.0) -> list[CaseResult]:
@@ -115,8 +123,9 @@ def compare(models: list[ModelSpec], cases: list[str], inputs: dict, timeout: fl
                 if u.get(k) is not None:
                     usage[k] = (usage[k] or 0) + u[k]
 
+        # Only the spec's own settings: "" (not None) keeps make_complete off MAINT_LLM_*.
         complete = make_complete(timeout, base_url=spec.base_url, model=spec.model,
-                                 api_key=os.getenv(spec.api_key_env) if spec.api_key_env else None,
+                                 api_key=os.getenv(spec.api_key_env, "") if spec.api_key_env else "",
                                  on_usage=on_usage)
         for case in cases:
             usage.update(prompt_tokens=None, completion_tokens=None)
