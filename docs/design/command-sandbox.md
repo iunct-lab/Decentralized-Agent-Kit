@@ -60,6 +60,7 @@ srt の設定（`srt-weak.json` は末尾に `"enableWeakerNestedSandbox": true`
 | (c) 独自 seccomp | `seccomp=<独自プロファイル>` | root / 1000 | 動かない: `bwrap: Can't mount proc on /proc: Operation not permitted` |
 | (d) seccomp・AppArmor を外す | `seccomp=unconfined`, `apparmor=unconfined` | root / 1000 | 動かない: 同上 |
 | (e) 既定 + 弱いモード | なし（srt 側で `enableWeakerNestedSandbox: true`） | root / 1000 | 動かない: (a) と同じ |
+| 既定 seccomp + `systempaths` | `systempaths=unconfined` | root / 1000 | 動かない: (a) と同じ（`/proc` のマスクを外しても、seccomp が名前空間の作成を止める） |
 | (c) + `systempaths` | `seccomp=<独自>`, `systempaths=unconfined` | root / 1000 | **動く**。全項目が期待どおり |
 | (c) + 弱いモード | `seccomp=<独自>` + `enableWeakerNestedSandbox` | root / 1000 | **動く**。全項目が期待どおり。ただし `/proc` を共有する（下） |
 | (d) + `systempaths` | `seccomp=unconfined`, `apparmor=unconfined`, `systempaths=unconfined` | root / 1000 | **動く**。全項目が期待どおり |
@@ -84,6 +85,7 @@ srt を通さないで同じ `probe.sh` を流すと、全項目が成功する�
 - `denyRead` に入れたディレクトリは、srt の中では空の tmpfs になる（読み取りは「無い」で失敗する）
 - 通信は、srt がネットワーク名前空間を外し、ホスト側（srt の外）のプロキシだけを通す。プロキシを無視するプログラムは名前解決もできずに失敗する
 - AppArmor はこのホストに無いので、`apparmor=unconfined` は結果に影響していない
+- `allowWrite` に無いパスは srt の中では読み取り専用になる。**`run_command` は今 `cwd` を指定せずに実行するので、作業ディレクトリは mcp-server の `WORKDIR` の `/app`**（`main.py` の `subprocess.run(..., shell=True)`）。srt で包むと、相対パスに書くコマンド（`echo x > out.txt` など）は `Read-only file system` で失敗するようになる。#294 で、有効時の作業ディレクトリを `/projects` にするか、`/app` を `allowWrite` に足すかを決める（`/app` には mcp-server 自身のコードと `.venv` があるので、足すとコマンドがサーバのコードを書き換えられる）
 
 ### 弱いモード（`enableWeakerNestedSandbox`）で何が弱くなるか
 
@@ -142,7 +144,7 @@ srt の README のとおり、Linux では包んだプロセスのネットワ�
 
 | 候補 | 下げるもの | srt の枠の強さ | 主なリスク |
 |------|------|------|------|
-| **1. (c) + `systempaths=unconfined`、非 root（推す）** | seccomp の 13 syscall、コンテナの `/proc` のマスクと読み取り専用 | 強い（srt の中は自分の `/proc` だけ） | mcp-server のプロセス（srt の外）から `/proc/kcore`・`/proc/sys` などマスクされていたパスが見える。非 root なら root の持つ `/proc/sys` などには書けない。名前空間を作れることでカーネルの攻撃面が増える |
+| **1. (c) + `systempaths=unconfined`、非 root（推す）** | seccomp の 13 syscall、コンテナの `/proc` のマスクと読み取り専用 | 強い（srt の中は自分の `/proc` だけ） コンテナ全体で `/proc` のマスクと読み取り専用が外れる。srt の枠の外に残る mcp-server のファイル系ツール（`read_file` など）からも、マスクされていたパスを開ける（下の注意）。名前空間を作れることで、カーネルの攻撃面が増える |
 | 2. (c) + 弱いモード | seccomp の 13 syscall | 弱い（srt の中からコンテナの他のプロセスとコマンドラインが見える） | srt の README が「かなり弱まる」と書くモード。コンテナの `/proc` のマスクは残る |
 | 3. (d) + `systempaths` か弱いモード | seccomp と AppArmor を全部 | 1 か 2 と同じ | seccomp の制限が全部外れる。1・2 より広く下げる理由が見当たらない |
 | 4. 見送る | — | — | `run_command` は今のまま（OS のレベルでは止めない）。#294 / #295 はやらない |
@@ -151,6 +153,8 @@ srt の README のとおり、Linux では包んだプロセスのネットワ�
 
 候補 1 の注意:
 
+- **srt の外のファイル系ツールから見える `/proc`**: `read_file` などは mcp-server のプロセスの中で動き、srt で包まれない（4 節）。非 root（1000:1000）で確かめた結果、既定の Docker では `/proc/kcore`・`/proc/timer_list` は `/dev/null` で覆われていて中身は空、`/proc/sys` は読み取り専用。`systempaths=unconfined` にすると、どちらも覆いが外れるが、ファイルの権限（root だけが読める・書ける）で `Permission denied` になった（`/proc/kcore`・`/proc/timer_list`・`/proc/sched_debug` の読み取り、`/proc/sys/kernel/hostname` への書き込み）。root で動かすと、この権限の壁は無くなる
 - **root で動かさない**。rootful の Docker ではコンテナの root はホストの root と同じ uid で、`systempaths=unconfined` で読み取り専用が外れた `/proc/sys`・`/proc/sysrq-trigger` などに書ける余地が増える。rootful では試していない
 - 非 root にすると、`/projects` にマウントしたホストのファイルに書けるかが uid の対応で変わる。rootful の Docker では compose の `user:` にホストの利用者の uid:gid を入れる。rootless の Docker では、コンテナの uid 1000 はホストの別の uid（subuid）になるので、ホストの利用者のファイルには書けない（試験では書き捨ての dir を `chmod 777` にして確かめた）。#295 でどう扱うかを決める
+- 非 root にすると、mcp-server 自身も非 root で起動することになる。1000:1000 で `uv run python -c "print(1)"` が `/app` で動くこと（root の持つ `/app/.venv` を読むだけで、書き込みは要らない）は確かめた。サーバそのものを非 root で起動して agent から呼べるかは #295 で確かめる
 - イメージに足すもの（+451 MB）は、既定のイメージには入れず、ビルド引数で有効にしたときだけ入れる（PBI #292 の決定ログのとおり）
