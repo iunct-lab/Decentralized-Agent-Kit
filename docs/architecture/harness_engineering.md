@@ -228,6 +228,46 @@ MRTR（MCP 2026-07-28、SEP-2322）との対応: 保留の 1 件 ↔ `InputRequi
 
 確認を求めるのは、`PermissionPlugin` の規則が `ask` になる MCP のツール（既定の MCP サーバの書き込み・コマンドなど。`agent/dak_agent/permission.py` の `DEFAULT_RULES`）と、`DAK_PLANNER_REQUIRE_CONFIRMATION=true` のときの `planner`。どちらも同じ `adk_request_confirmation` の形なので、一覧と reply は区別しない。拒否は `PermissionPlugin` も ADK と同じ固定文言で返すので、理由は同じ `_restore_reject_reason` でモデルに届く。
 
+### hooks（PreToolUse / PostToolUse / Stop、#107）
+
+運用者がコードを触らずに、ツール呼び出しを監査・拒否・書き換えできる口。既定は無し（`DAK_HOOKS` を設定したときだけ起動する）。
+実装は `agent/dak_agent/hooks.py`（読み込みと実行）と `ContextHarnessPlugin`（結線）。
+
+`DAK_HOOKS` は JSON の配列（TOML は読まない）。1 件の形:
+
+| キー | 必須 | 意味 |
+|---|---|---|
+| `event` | ○ | `PreToolUse` / `PostToolUse` / `Stop` |
+| `type` | ○ | `command`（シェルで実行）/ `http`（POST） |
+| `command` / `url` | type に応じて ○ | 実行するコマンド / 送り先の URL |
+| `timeout` | | 秒（正の数、既定 30）。過ぎたらエラー扱いで、command はプロセスグループごと止める |
+| `if` | | ツール名の glob（例 `run_*`）。無ければ全ツール |
+
+```json
+[{"event": "PreToolUse", "type": "command", "command": "python3 /opt/hooks/no_rm.py", "if": "run_command"}]
+```
+
+不正な要素は警告して捨てる（ほかの要素は効く）。同じイベントの hook は書いた順に 1 本ずつ実行し、最初に拒否か書き換えを返した hook で決まる。
+
+入出力は Claude Code の hooks と同じ契約なので、Claude Code 用に書いた hook をそのまま使える
+（`agent/tests/fixtures/precommit_style_hook.py` で固定）。
+
+- 入力（command は stdin、http は POST 本文の JSON）: `hook_event_name`・`session_id`・`cwd`・`permission_mode`・`tool_name`・`tool_input`・`tool_use_id`。PostToolUse には `tool_response` も付く
+- 出力: command の exit 2 は拒否（stderr が理由）。exit 0 なら stdout の `hookSpecificOutput`（`permissionDecision`・`permissionDecisionReason`・`updatedInput`・`updatedToolOutput`）を読む。トップレベルの `{"decision": "block", "reason": ...}` も拒否として読む。http は 2xx の本文を同じ規則で読む。そのほかの exit コード・接続失敗・タイムアウトは警告を出して次の hook へ進む（ツールは止めない）
+- `permissionDecision: "ask"` は拒否にする（hook の呼び出しの中で利用者に聞く手段が無いため）
+
+| 結果 | モデルに届く Observation |
+|---|---|
+| PreToolUse の拒否 | `{"observation": "blocked_by_hook", "reason": ..., "hook_event": "PreToolUse"}`（ツールは動かない） |
+| PreToolUse の `updatedInput` | `{"observation": "hook_rewrote_input", "original_args": ..., "updated_args": ..., "result": ...}`（書き換えた引数でツールを実行する） |
+| PostToolUse の拒否 | `{"observation": "blocked_by_hook", "reason": ..., "hook_event": "PostToolUse"}`（ツールの結果は渡さない） |
+| PostToolUse の `updatedToolOutput` | `{"observation": "hook_rewrote_output", "result": ...}`（元の出力は載せない。そのあとツール出力の上限を受ける） |
+
+- PreToolUse は実行ガード（反復・回数・時間）のあとに起動する。ガードが止めた呼び出しでは起動しない
+- PostToolUse は、ツールが実際に動いた呼び出しだけで起動する（`PermissionPlugin` が拒否・承認待ちにした呼び出しや、ガード・PreToolUse が止めた呼び出しでは起動しない）
+- **Stop は監査・通知専用で、止められない。** ADK の `after_run_callback` は戻り値が `None` 固定で、Claude Code の Stop hook のように拒否してエージェントを続けさせることができない。拒否やエラーが返っても警告をログに出すだけ
+- 検証: `agent/tests/test_hooks.py`（読み込み・exit 2・JSON の拒否・書き換え・タイムアウト・Claude Code 用スクリプトの互換）、`agent/tests/test_harness.py::TestContextHarnessPluginHooks`（結線、Stop がブロックしないこと）
+
 ## 4. 残りのギャップとバックログ（優先度順）
 
 各項目は GitHub Issue 化して [DAK Project #7](https://github.com/users/teeppp/projects/7) で管理している。
