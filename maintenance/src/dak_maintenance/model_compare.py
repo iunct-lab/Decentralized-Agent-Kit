@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,8 +27,6 @@ CASES = ["watch", "feature-sync", "charter-review", "triage"]
 FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "model_compare"
 # What changelog.txt is the changelog of.
 TRIAGE_DEP = ("httpx", "0.27.2", "0.28.0")
-# The whole answer is {} (optionally in a code fence).
-_EMPTY_OBJECT = re.compile(r"\s*(?:```(?:json)?\s*)?\{\s*\}\s*(?:```)?\s*")
 
 
 @dataclass
@@ -109,9 +106,12 @@ def run_case(case: str, complete: Callable[[str], str], inputs: dict) -> CaseRes
     return CaseResult("", case, parsed_ok, len(titles), latency, None, None, "; ".join(errors), titles)
 
 
+_NOT_JSON = object()
+
+
 def _reads_as_json(raw: str) -> bool:
-    # extract_json gives {} for "no JSON" too; a literal {} is still JSON.
-    return extract_json(raw) != {} or bool(_EMPTY_OBJECT.fullmatch(raw or ""))
+    # The same rule the pipelines read answers by, told apart from "no JSON" (where they get {}).
+    return extract_json(raw, default=_NOT_JSON) is not _NOT_JSON
 
 
 def compare(models: list[ModelSpec], cases: list[str], inputs: dict, timeout: float = 120.0) -> list[CaseResult]:
