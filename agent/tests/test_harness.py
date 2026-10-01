@@ -1304,6 +1304,7 @@ PLAN = [{"step": "read repo", "status": "done"}, {"step": "write summary", "stat
 def _make_fake_llm(tool_calls: int | list, thoughts: bool = False, plan: bool = False, overflows: int = 0):
     from google.adk.models.base_llm import BaseLlm
     from google.adk.models.llm_response import LlmResponse
+    from google.adk.models.llm_response import LlmResponse
 
     class ScriptedLlm(BaseLlm):
         """In each user turn, calls big_tool `tool_calls` times (a list: per turn, the last
@@ -1644,3 +1645,69 @@ async def test_a_persistent_overflow_fails_with_an_explanation_and_the_session_c
     assert harness.CONTEXT_OVERFLOW_FAILURE_TEXT in finals[0]
     assert finals[1] == "done"
     assert llm.steps == 1  # only the second turn reached the model successfully
+
+
+async def _run_hooked_tool_call(monkeypatch, tool_fn, hook_output: dict):
+    """One real ADK turn: the model calls `shell(command="ls")` once, a
+    PreToolUse hook answers with `hook_output`, and the agent turns tool errors
+    into an observation the way AdaptiveAgent._on_tool_error does. Returns the
+    function response the model got back."""
+    from google.adk.agents import LlmAgent
+    from google.adk.apps import App
+    from google.adk.models.base_llm import BaseLlm
+    from google.adk.models.llm_response import LlmResponse
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.adk.tools import FunctionTool
+
+    seen: list = []
+
+    class OneCallLlm(BaseLlm):
+        async def generate_content_async(self, llm_request, stream=False):
+            responses = [p.function_response for p in llm_request.contents[-1].parts or [] if p.function_response]
+            if responses:
+                seen.append(responses[0].response)
+                yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text="done")]))
+            else:
+                yield LlmResponse(content=types.Content(role="model", parts=[types.Part(
+                    function_call=types.FunctionCall(name="shell", args={"command": "ls"}))]))
+
+    monkeypatch.setenv("DAK_HOOKS", json.dumps(
+        [{"event": "PreToolUse", "type": "command", "command": f"echo '{json.dumps(hook_output)}'"}]))
+    agent = LlmAgent(name="dak_agent", model=OneCallLlm(model="fake"), instruction="Run it.",
+                     tools=[FunctionTool(tool_fn)],
+                     on_tool_error_callback=lambda tool, args, tool_context, error: {"error": str(error)})
+    app = App(name="dak_agent", root_agent=agent,
+              plugins=[ContextHarnessPlugin(HarnessSettings(context_window=8192), "test-model")])
+    sessions = InMemorySessionService()
+    session = await sessions.create_session(app_name="dak_agent", user_id="u")
+    async for _ in Runner(app=app, session_service=sessions).run_async(
+            user_id="u", session_id=session.id, new_message=types.Content(role="user", parts=[types.Part(text="go")])):
+        pass
+    return seen[0]
+
+
+@pytest.mark.asyncio
+async def test_rewritten_input_reaches_the_tool_in_a_real_adk_run(monkeypatch):
+    ran_with: list = []
+
+    def shell(command: str) -> str:
+        ran_with.append(command)
+        return f"ran {command}"
+
+    response = await _run_hooked_tool_call(
+        monkeypatch, shell, {"hookSpecificOutput": {"updatedInput": {"command": "ls -la"}}})
+    assert ran_with == ["ls -la"]
+    assert response == {"observation": "hook_rewrote_input", "original_args": {"command": "ls"},
+                        "updated_args": {"command": "ls -la"}, "result": "ran ls -la"}
+
+
+@pytest.mark.asyncio
+async def test_tool_error_after_a_rewrite_takes_the_usual_error_path(monkeypatch):
+    def shell(command: str) -> str:
+        raise ValueError(f"boom: {command}")
+
+    response = await _run_hooked_tool_call(
+        monkeypatch, shell, {"hookSpecificOutput": {"updatedInput": {"command": "ls -la"}}})
+    assert response["observation"] == "hook_rewrote_input"
+    assert response["result"] == {"error": "boom: ls -la"}
