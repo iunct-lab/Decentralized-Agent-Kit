@@ -3,6 +3,7 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
+from dak_agent import plan_mode
 from dak_agent.builtin_tools import (
     ask_question,
     attempt_answer,
@@ -57,6 +58,20 @@ class TestBuiltinTools(unittest.TestCase):
     def test_planner_without_restriction(self):
         result = planner("My task", ["step one"])
         self.assertNotIn("Ulysses Pact", result)
+
+    def test_planner_enter_plan_mode_sets_state_flag(self):
+        tool_context = MagicMock()
+        tool_context.state = {}
+        result = planner("Investigate", ["read code"], enter_plan_mode=True, tool_context=tool_context)
+        self.assertIs(tool_context.state[plan_mode.PLAN_MODE_KEY], True)
+        self.assertIn("Plan Mode Active", result)
+
+    def test_planner_without_enter_plan_mode_leaves_state_untouched(self):
+        tool_context = MagicMock()
+        tool_context.state = {}
+        result = planner("Investigate", ["read code"], tool_context=tool_context)
+        self.assertEqual(tool_context.state, {})
+        self.assertNotIn("Plan Mode", result)
 
     def test_switch_mode_message(self):
         tool_context = MagicMock()

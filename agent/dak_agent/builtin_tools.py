@@ -10,6 +10,8 @@ from typing import List, Optional
 
 from google.adk.tools import FunctionTool
 
+from . import plan_mode
+
 logger = logging.getLogger(__name__)
 
 # Session-state key holding the agent's plan: [{"step": str, "status": str}].
@@ -58,7 +60,8 @@ def ask_question(questions: list[str], context: str, tool_context) -> str:
     return f"Context: {context}\n\nQuestions for user:\n{questions_str}\n\n(Waiting for user response...)"
 
 
-def planner(task_description: str, plan_steps: list[str], allowed_tools: list[str] = []) -> str:
+def planner(task_description: str, plan_steps: list[str], allowed_tools: list[str] = [],
+            enter_plan_mode: bool = False, tool_context=None) -> str:
     """
     Create a plan and restrict future actions to specific tools (Ulysses Pact).
     Args:
@@ -67,6 +70,8 @@ def planner(task_description: str, plan_steps: list[str], allowed_tools: list[st
         allowed_tools: List of tool names you intend to use (e.g. ["read_file", "run_command"]).
                        'planner', 'ask_question', 'attempt_answer', 'switch_mode', 'write_todos',
                        'read_plan', 'read_original_request', 'write_handoff' and 'read_handoff' are always allowed.
+        enter_plan_mode: True to only investigate and write the plan under plans/*.md before
+                         changing anything (Plan mode).
     """
     plan_str = "\n".join([f"{i + 1}. {step}" for i, step in enumerate(plan_steps)])
 
@@ -75,6 +80,12 @@ def planner(task_description: str, plan_steps: list[str], allowed_tools: list[st
         restriction_msg = (
             f"\n\n[System] Ulysses Pact Active: You are now restricted to using only: "
             f"{', '.join(allowed_tools)}"
+        )
+    if enter_plan_mode and tool_context is not None:
+        plan_mode.enter(tool_context.state)
+        restriction_msg += (
+            "\n\n[System] Plan Mode Active: only read-only tools are available. Mutating tools "
+            "(write_file/edit_file outside plans/*.md, run_command) will be denied until plan_exit is approved."
         )
 
     return f"Plan recorded for '{task_description}':\n{plan_str}{restriction_msg}"

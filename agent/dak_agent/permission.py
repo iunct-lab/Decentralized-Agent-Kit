@@ -233,15 +233,21 @@ class PermissionPlugin(BasePlugin):
                 "rules": [],
                 "hint": "Use a tool in the plan, or call planner to update the plan.",
             }
+        from . import plan_mode  # here: plan_mode builds its rules from this module
+
         action = evaluate(self.rules, source, tool.name, tool_args, always_approvals(state))
+        plan_action = plan_mode.check(state, source, tool.name, tool_args)
+        action = strictest(action, plan_action)  # Plan mode only tightens; an "always" cannot get around it
         if action == "allow":
             return None
         if action == "deny":
             return {
                 "observation": "denied_by_policy",
                 "tool": tool.name,
-                "reason": f"'{tool.name}' is denied by policy for this input.",
-                "rules": matching_rules(self.rules, source, tool.name, tool_args),
+                "reason": (f"'{tool.name}' is not available in Plan mode (only {plan_mode.PLAN_FILE_GLOB} may be"
+                           " written; run_command is denied) until plan_exit is approved."
+                           if plan_action == "deny" else f"'{tool.name}' is denied by policy for this input."),
+                "rules": matching_rules(self.rules + plan_mode.active_rules(state), source, tool.name, tool_args),
                 "hint": "Do not retry the same call. Choose another way, or ask the user to run it themselves.",
             }
         # ask: the same call comes back here with the user's answer.
