@@ -7,7 +7,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dak_agent import builtin_tools, plan_mode
-from dak_agent.adaptive_agent import AdaptiveAgent
+from dak_agent.adaptive_agent import PLAN_MODE_REMINDER, AdaptiveAgent
 from dak_agent.mode_manager import ModeManager, FIRST_TURN_DONE_KEY
 from google.adk.tools import FunctionTool
 
@@ -339,6 +339,43 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
 
         system = requests[-1].config.system_instruction
         self.assertIn("Hello operator.", system)
+        self.assertIn("1. [pending] fill {summary}", system)
+
+    async def test_plan_mode_reminder_and_verbatim_plan_both_reach_the_model(self):
+        """The plan is kept out of `{var}` injection by cutting it off the
+        instruction's end; the reminder must not shift that cut."""
+        from google.adk.apps import App
+        from google.adk.artifacts import InMemoryArtifactService
+        from google.adk.models.base_llm import BaseLlm
+        from google.adk.models.llm_response import LlmResponse
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
+        from google.genai import types
+
+        requests = []
+
+        class RecordingLlm(BaseLlm):
+            async def generate_content_async(self, llm_request, stream=False):
+                requests.append(llm_request)
+                yield LlmResponse(content=types.Content(role="model", parts=[types.Part(text="ok")]))
+
+        agent = AdaptiveAgent(model=RecordingLlm(model="recording"), name="dak_agent", instruction="Base.", tools=[])
+        sessions = InMemorySessionService()
+        session = await sessions.create_session(
+            app_name="dak_agent", user_id="u",
+            state={plan_mode.PLAN_MODE_KEY: True, "dak_todos": [{"step": "fill {summary}", "status": "pending"}]})
+        runner = Runner(app=App(name="dak_agent", root_agent=agent), session_service=sessions,
+                        artifact_service=InMemoryArtifactService())
+
+        with patch("dak_agent.remote_tools.discover_remote_tools", return_value={}):
+            async for _ in runner.run_async(
+                user_id="u", session_id=session.id,
+                new_message=types.Content(role="user", parts=[types.Part(text="hi")]),
+            ):
+                pass
+
+        system = requests[-1].config.system_instruction
+        self.assertIn(PLAN_MODE_REMINDER.strip(), system)
         self.assertIn("1. [pending] fill {summary}", system)
 
     async def test_plan_written_mid_invocation_reaches_the_next_model_call(self):

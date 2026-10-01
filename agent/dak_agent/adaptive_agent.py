@@ -224,10 +224,11 @@ class AdaptiveAgent(LlmAgent):
                     f"\n\n# Tool Enabled: {skill_name}\n"
                     f"You have enabled the raw tool '{skill_name}'. Use it according to its schema."
                 )
-        instruction += self._tools_error_section(state) + self._verbatim_sections(state)
+        instruction += self._tools_error_section(state)
         if plan_mode.is_active(state):
             instruction += PLAN_MODE_REMINDER
-        return instruction
+        # Last: _apply_session_config cuts the verbatim sections off the end.
+        return instruction + self._verbatim_sections(state)
 
     def _verbatim_sections(self, state: MutableMapping[str, Any]) -> str:
         """The instruction's tail built from text the user or the model wrote
