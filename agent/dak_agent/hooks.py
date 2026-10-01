@@ -18,10 +18,10 @@ import fnmatch
 import http.client
 import json
 import logging
-import math
 import os
 import signal
 import subprocess
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -80,15 +80,12 @@ def _entry_problem(entry: Any) -> str:
             return f"{key} must be a string"
     if entry["type"] == "command" and not entry.get("command"):
         return "a command hook needs command"
-    if entry["type"] == "http" and not entry.get("url"):
-        return "an http hook needs url"
+    if entry["type"] == "http" and not entry.get("url", "").lower().startswith(("http://", "https://")):
+        return "an http hook needs an http(s) url"
     timeout = entry.get("timeout", 30.0)
-    try:
-        valid = not isinstance(timeout, bool) and isinstance(timeout, (int, float)) and math.isfinite(float(timeout))
-    except OverflowError:  # an integer too large for a float
-        valid = False
-    if not valid or not timeout > 0:
-        return "timeout must be a positive number"
+    # Compared, not converted: an integer too large for a float does not raise here. NaN fails both.
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= threading.TIMEOUT_MAX:
+        return "timeout must be a positive number a wait accepts"
     return ""
 
 
@@ -117,13 +114,11 @@ def _label(hook: HookSpec) -> str:
     """How a failure names the hook. The reason reaches the model and the session, so it leaves out the
     command line and the URL's credentials, path and query, where a secret may sit."""
     if hook.type == "http":
-        url = urllib.parse.urlsplit(hook.url or "")
-        host = url.hostname or ""
         try:
-            port = f":{url.port}" if url.port else ""
-        except ValueError:  # a port that is not a number
-            port = ""
-        return f"{hook.event} http hook {url.scheme}://{host}{port}"
+            url = urllib.parse.urlsplit(hook.url or "")
+        except ValueError:  # e.g. an unclosed IPv6 bracket
+            return f"{hook.event} http hook"
+        return f"{hook.event} http hook {url.scheme}://{url.netloc.rpartition('@')[2]}"
     return f"{hook.event} {hook.type} hook"
 
 
@@ -187,9 +182,9 @@ def run_command_hook(hook: HookSpec, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def run_http_hook(hook: HookSpec, payload: Dict[str, Any]) -> Dict[str, Any]:
-    req = urllib.request.Request(hook.url or "", data=json.dumps(payload, default=str).encode(),
-                                 headers={"Content-Type": "application/json"}, method="POST")
     try:
+        req = urllib.request.Request(hook.url or "", data=json.dumps(payload, default=str).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=hook.timeout) as resp:
             body = resp.read().decode("utf-8", errors="replace")
     except TimeoutError:

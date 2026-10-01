@@ -316,9 +316,17 @@ def test_run_http_hook_failure_reason_names_only_scheme_and_host(monkeypatch, er
 
 
 def test_run_http_hook_read_timeout_says_timed_out(monkeypatch):
-    def slow(*args, **kwargs):
-        raise TimeoutError("timed out")
-    monkeypatch.setattr(urllib.request, "urlopen", slow)
+    # Connected, then the body does not arrive in time.
+    class SlowBody:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            raise TimeoutError("timed out")
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *args, **kwargs: SlowBody())
     outcome = hooks.run_hook(HookSpec(event="PreToolUse", type="http", url="http://hooks.example/", timeout=1), _payload())
     assert outcome["reason"].startswith("hook timed out after 1s")
 
@@ -340,7 +348,32 @@ def test_run_command_hook_unknown_decision_is_allow_and_logged(caplog):
     assert any("Deny" in r.getMessage() for r in caplog.records)
 
 
-def test_run_http_hook_bad_port_is_error():
-    outcome = hooks.run_hook(HookSpec(event="PreToolUse", type="http", url="http://hooks.example:abc/"), _payload())
+@pytest.mark.parametrize("url", ["http://hooks.example:abc/", "http://[::1/"])
+def test_run_http_hook_url_http_rejects_is_error(url):
+    outcome = hooks.run_hook(HookSpec(event="PreToolUse", type="http", url=url), _payload())
     assert outcome["decision"] == "error"
-    assert "http://hooks.example" in outcome["reason"]
+    assert outcome["reason"].startswith("PreToolUse http hook")
+
+
+def test_run_http_hook_label_keeps_ipv6_brackets(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise urllib.error.URLError(ConnectionRefusedError("refused"))
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    outcome = hooks.run_hook(HookSpec(event="PreToolUse", type="http", url="http://[::1]:8080/x"), _payload())
+    assert "http://[::1]:8080 failed" in outcome["reason"]
+
+
+def test_load_hooks_skips_timeout_beyond_what_a_wait_accepts(monkeypatch):
+    # A finite but huge float would pass and then crash the wait when the hook runs.
+    monkeypatch.setenv("DAK_HOOKS", json.dumps([{"event": "PreToolUse", "type": "command", "command": "exit 0",
+                                                 "timeout": 1e300}]))
+    assert hooks.load_hooks() == []
+
+
+def test_load_hooks_skips_non_http_url(monkeypatch):
+    # A file:// URL would put its path into the failure reason.
+    monkeypatch.setenv("DAK_HOOKS", json.dumps([
+        {"event": "PreToolUse", "type": "http", "url": "file:///etc/s3cret"},
+        {"event": "PreToolUse", "type": "http", "url": "https://hooks.example/"},
+    ]))
+    assert hooks.load_hooks() == [HookSpec(event="PreToolUse", type="http", url="https://hooks.example/")]
