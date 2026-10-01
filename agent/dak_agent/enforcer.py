@@ -21,7 +21,8 @@ PLAN_KEY = "enforcer_allowed_tools"
 # discover and enable capabilities, transfer_to_agent for A2A delegation, and
 # read_tool_output so a truncated result of an allowed tool can be paged,
 # write_todos/read_plan so the plan's progress can always be recorded and read,
-# and read_original_request so the whole request can always be read.
+# read_original_request so the whole request can always be read, and
+# write_handoff so the handoff for a context reset can always be recorded.
 ALWAYS_ALLOWED: Set[str] = {
     "planner",
     "ask_question",
@@ -36,6 +37,7 @@ ALWAYS_ALLOWED: Set[str] = {
     "write_todos",
     "read_plan",
     "read_original_request",
+    "write_handoff",
 }
 
 ENFORCER_INSTRUCTION = '''You are a helpful assistant powered by the Decentralized Agent Kit.

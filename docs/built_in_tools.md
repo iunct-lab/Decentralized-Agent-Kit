@@ -50,6 +50,12 @@ Always available (in every mode), and always allowed by the Ulysses Pact. The pl
 ### `read_original_request`
 *   **Description**: Returns the session's first user message in full (state `dak_original_request`), or `No original request recorded yet.` The system instruction carries it as `# Original Request`, capped like the plan; when cut, it ends with a pointer to this tool. Always available and always allowed by the Ulysses Pact.
 
+### `write_handoff`
+*   **Description**: Records (or replaces) the handoff for resuming a long task after its context is reset (state `dak_handoff`): what someone starting from scratch needs to go on without redoing finished work. Returns the handoff as text under the headings Objective / Done / Decisions / Next steps / Files / Open questions (an empty list shows `(none)`). Always available and always allowed by the Ulysses Pact.
+*   **Arguments**:
+    *   `objective` (str): What the task is for.
+    *   `done`, `decisions`, `next_steps`, `files`, `open_questions` (List[str]): One item per line. A JSON string of a list is read as the list; any other string is one item.
+
 ---
 
 ## 4. Enforcer Mode Tools
