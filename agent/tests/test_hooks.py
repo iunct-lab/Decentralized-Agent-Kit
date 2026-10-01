@@ -365,9 +365,14 @@ def test_run_http_hook_label_keeps_ipv6_brackets(monkeypatch):
 
 def test_load_hooks_skips_timeout_beyond_what_a_wait_accepts(monkeypatch):
     # A finite but huge float would pass and then crash the wait when the hook runs.
+    for too_long in (1e300, hooks.MAX_TIMEOUT + 1):
+        monkeypatch.setenv("DAK_HOOKS", json.dumps([{"event": "PreToolUse", "type": "command", "command": "exit 0",
+                                                     "timeout": too_long}]))
+        assert hooks.load_hooks() == []
     monkeypatch.setenv("DAK_HOOKS", json.dumps([{"event": "PreToolUse", "type": "command", "command": "exit 0",
-                                                 "timeout": 1e300}]))
-    assert hooks.load_hooks() == []
+                                                 "timeout": hooks.MAX_TIMEOUT}]))
+    [hook] = hooks.load_hooks()
+    assert hooks.run_hook(hook, _payload())["decision"] == "allow"
 
 
 def test_load_hooks_skips_non_http_url(monkeypatch):
