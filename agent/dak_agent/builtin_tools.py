@@ -287,6 +287,19 @@ async def switch_mode(tool_context, reason: str = "", new_focus: str = "") -> st
     return f"Mode switch requested: {reason}. New focus: {new_focus}"
 
 
+def plan_exit(plan_path: str, tool_context) -> str:
+    """
+    Ask the user to approve your plan and leave Plan mode. Only after they approve can
+    you change files and run commands; if they reject it you stay in Plan mode.
+    Args:
+        plan_path: The plan file you wrote under plans/ (e.g. "plans/refactor.md").
+    """
+    # Registered with require_confirmation=True: ADK runs this body only after
+    # the user approved, so a rejection leaves the session in Plan mode.
+    plan_mode.exit_(tool_context.state)
+    return f"Plan approved. Exited plan mode; mutating tools are available again. Approved plan: {plan_path}"
+
+
 def planner_requires_confirmation() -> bool:
     """Whether `planner` pauses for human approval (opt-in).
 
@@ -313,6 +326,7 @@ def make_builtin_tools(enforcer_mode: bool = False) -> List[FunctionTool]:
         FunctionTool(read_original_request, require_confirmation=False),
         FunctionTool(write_handoff, require_confirmation=False),
         FunctionTool(read_handoff, require_confirmation=False),
+        FunctionTool(plan_exit, require_confirmation=True),
     ]
     if enforcer_mode:
         tools.append(FunctionTool(attempt_answer, require_confirmation=False))

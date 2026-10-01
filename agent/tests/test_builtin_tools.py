@@ -3,6 +3,8 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
+from google.adk.tools.tool_confirmation import ToolConfirmation
+
 from dak_agent import plan_mode
 from dak_agent.builtin_tools import (
     ask_question,
@@ -28,14 +30,14 @@ class TestBuiltinTools(unittest.TestCase):
         tools = make_builtin_tools(enforcer_mode=False)
         names = [t.name for t in tools]
         self.assertEqual(names, ["planner", "switch_mode", "write_todos", "read_plan", "read_original_request",
-                                 "write_handoff", "read_handoff"])
+                                 "write_handoff", "read_handoff", "plan_exit"])
 
     def test_make_builtin_tools_enforcer(self):
         tools = make_builtin_tools(enforcer_mode=True)
         names = [t.name for t in tools]
         self.assertEqual(
             names, ["planner", "switch_mode", "write_todos", "read_plan", "read_original_request",
-                    "write_handoff", "read_handoff", "attempt_answer", "ask_question"])
+                    "write_handoff", "read_handoff", "plan_exit", "attempt_answer", "ask_question"])
 
     def test_planner_does_not_block_on_confirmation_by_default(self):
         """A confirmation-gated planner stalls /run and A2A runs (no UI to approve)."""
@@ -72,6 +74,30 @@ class TestBuiltinTools(unittest.TestCase):
         result = planner("Investigate", ["read code"], tool_context=tool_context)
         self.assertEqual(tool_context.state, {})
         self.assertNotIn("Plan Mode", result)
+
+    def _plan_exit_run(self, confirmation):
+        tool = next(t for t in make_builtin_tools() if t.name == "plan_exit")
+        tool_context = MagicMock()
+        tool_context.state = {}
+        plan_mode.enter(tool_context.state)
+        tool_context.tool_confirmation = confirmation
+        result = asyncio.run(tool.run_async(args={"plan_path": "plans/x.md"}, tool_context=tool_context))
+        return result, tool_context
+
+    def test_plan_exit_runs_and_exits_plan_mode_when_confirmed(self):
+        result, tool_context = self._plan_exit_run(ToolConfirmation(confirmed=True))
+        self.assertIn("Plan approved", result)
+        self.assertIs(tool_context.state[plan_mode.PLAN_MODE_KEY], False)
+
+    def test_plan_exit_rejected_leaves_plan_mode_active(self):
+        result, tool_context = self._plan_exit_run(ToolConfirmation(confirmed=False))
+        self.assertEqual(result, {"error": "This tool call is rejected."})
+        self.assertIs(tool_context.state[plan_mode.PLAN_MODE_KEY], True)
+
+    def test_plan_exit_without_confirmation_object_requests_confirmation(self):
+        result, tool_context = self._plan_exit_run(None)
+        tool_context.request_confirmation.assert_called_once()
+        self.assertIs(tool_context.state[plan_mode.PLAN_MODE_KEY], True)
 
     def test_switch_mode_message(self):
         tool_context = MagicMock()

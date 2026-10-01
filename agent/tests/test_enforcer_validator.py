@@ -140,7 +140,7 @@ class TestEnforcerValidator(unittest.TestCase):
 
     def test_always_allowed_contains_core_tools(self):
         for name in ("planner", "ask_question", "attempt_answer", "switch_mode",
-                     "list_skills", "enable_skill", "transfer_to_agent", "read_tool_output"):
+                     "list_skills", "enable_skill", "transfer_to_agent", "read_tool_output", "plan_exit"):
             self.assertIn(name, ALWAYS_ALLOWED)
 
 
