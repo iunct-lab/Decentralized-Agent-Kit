@@ -159,7 +159,8 @@ def check_prices(prices) -> None:
     if not isinstance(prices, dict):
         raise ValueError("JSON のオブジェクトではない")
     for name, p in prices.items():
-        if not (isinstance(p, dict) and all(isinstance(p.get(k), (int, float)) for k in ("input", "output"))):
+        if not (isinstance(p, dict) and all(isinstance(p.get(k), (int, float)) and not isinstance(p.get(k), bool)
+                                            for k in ("input", "output"))):
             raise ValueError(f"{name}: input と output の数値が要る")
 
 
@@ -185,5 +186,6 @@ def render_table(results: list[CaseResult], prices: dict) -> str:
                      f"{_cell(r.prompt_tokens)} | {_cell(r.completion_tokens)} | {cost} |")
     lines += ["", "## 出力"]
     for r in results:
-        lines.append(f"- {r.model} / {r.case}: " + ("; ".join(r.titles) or "(なし)") + (f" — error: {r.error}" if r.error else ""))
+        text = "; ".join(r.titles) or "(なし)"
+        lines.append(" ".join(f"- {r.model} / {r.case}: {text}".split()) + (f" — error: {r.error}" if r.error else ""))
     return "\n".join(lines) + "\n"

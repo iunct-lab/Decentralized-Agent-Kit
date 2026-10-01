@@ -192,20 +192,22 @@ def cmd_compare_models(args: argparse.Namespace) -> int:
     if unknown:
         print(f"error: 未知のケース {unknown}（使えるのは {','.join(model_compare.CASES)}）", file=sys.stderr)
         return 2
+    # Everything is checked before any model is called: a typo must not throw away a paid comparison.
     try:
-        prices = json.loads(_read(args.prices) or "{}") if args.prices else {}
+        prices = json.loads(open(args.prices, encoding="utf-8").read()) if args.prices else {}
         model_compare.check_prices(prices)
-    except ValueError as e:
-        # Before any model is called: a typo here must not throw away a paid comparison.
-        print(f"error: --prices の形式が不正（{e}）。期待形式: {{\"<name>\": {{\"input\": 0.1, \"output\": 0.5}}}}", file=sys.stderr)
+    except (OSError, ValueError) as e:
+        print(f"error: --prices を読めない（{e}）。期待形式: {{\"<name>\": {{\"input\": 0.1, \"output\": 0.5}}}}", file=sys.stderr)
+        return 2
+    try:
+        out = open(args.out, "w", encoding="utf-8") if args.out else sys.stdout
+    except OSError as e:
+        print(f"error: --out に書けない（{e}）", file=sys.stderr)
         return 2
     results = model_compare.compare(model_compare.load_models(args.models), cases, model_compare.load_inputs())
-    table = model_compare.render_table(results, prices)
-    if args.out:
-        with open(args.out, "w", encoding="utf-8") as f:
-            f.write(table)
-    else:
-        sys.stdout.write(table)
+    out.write(model_compare.render_table(results, prices))
+    if out is not sys.stdout:
+        out.close()
     return 0
 
 
