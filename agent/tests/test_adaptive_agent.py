@@ -10,6 +10,26 @@ from dak_agent.adaptive_agent import AdaptiveAgent
 from dak_agent.mode_manager import ModeManager, FIRST_TURN_DONE_KEY
 from google.adk.tools import FunctionTool
 
+
+def _scripted_llm(requests, script):
+    """A model that records each request in `requests` and answers with the
+    next step of `script`: a string is a text reply, a (name, args) pair a
+    tool call."""
+    from google.adk.models.base_llm import BaseLlm
+    from google.adk.models.llm_response import LlmResponse
+    from google.genai import types
+
+    class ScriptedLlm(BaseLlm):
+        async def generate_content_async(self, llm_request, stream=False):
+            requests.append(llm_request)
+            step = script[len(requests) - 1]
+            part = types.Part(text=step) if isinstance(step, str) else types.Part(
+                function_call=types.FunctionCall(id=f"fc-{len(requests)}", name=step[0], args=step[1]))
+            yield LlmResponse(content=types.Content(role="model", parts=[part]))
+
+    return ScriptedLlm(model="scripted")
+
+
 class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
@@ -520,6 +540,141 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(llm.summaries_before_request[-1], 1)
         self.assertIn(f"# Original Request\n{request}", llm.system_instructions[-1])
         self.assertEqual(session.state["dak_original_request"], request)
+
+    def test_resolve_session_instruction_includes_handoff_when_present(self):
+        """PBI #114: the handoff is rebuilt from state into every turn's instruction."""
+        agent = AdaptiveAgent(model="test-model", name="test_agent",
+                              instruction="Initial instruction", tools=self.mock_tools)
+        state = {"dak_handoff": {"objective": "Fix the login bug", "done": ["reproduced it"],
+                                 "decisions": ["keep the cookie"], "next_steps": ["add a test"],
+                                 "files": ["auth.py"], "open_questions": []}}
+
+        instruction = agent._resolve_session_instruction(state, {})
+
+        self.assertTrue(instruction.startswith("Initial instruction"))
+        self.assertIn("# Handoff\nObjective: Fix the login bug\nDone:\n- reproduced it", instruction)
+        for item in ("- keep the cookie", "- add a test", "- auth.py", "Open questions:\n- (none)"):
+            self.assertIn(item, instruction)
+
+    def test_resolve_session_instruction_omits_handoff_section_when_absent(self):
+        agent = AdaptiveAgent(model="test-model", name="test_agent",
+                              instruction="Initial instruction", tools=self.mock_tools)
+
+        self.assertNotIn("# Handoff", agent._resolve_session_instruction({}, {}))
+        self.assertNotIn("# Handoff", agent._resolve_session_instruction({"dak_handoff": {}}, {}))
+
+    def test_handoff_section_is_capped_by_the_window(self):
+        agent = AdaptiveAgent(model="test-model", name="test_agent",
+                              instruction="Initial instruction", tools=self.mock_tools)
+        agent._mode_manager.max_context_tokens = 8192  # plan_chars == 1,000
+
+        instruction = agent._resolve_session_instruction(
+            {"dak_handoff": {"objective": "ship", "done": ["z" * 5_000]}}, {})
+
+        section = instruction.split("# Handoff\n", 1)[1]
+        self.assertLessEqual(len(section), 1_000)
+        self.assertTrue(section.startswith("Objective: ship\nDone:\n- zzz"))
+        self.assertIn("write_handoff", section)  # how to make it fit
+
+    async def test_handoff_written_mid_invocation_reaches_the_next_model_call(self):
+        """Like the plan: a handoff written inside a long invocation is in the
+        very next model call (compaction happens inside invocations)."""
+        from google.adk.apps import App
+        from google.adk.artifacts import InMemoryArtifactService
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
+        from google.genai import types
+
+        from dak_agent.builtin_tools import write_handoff
+
+        requests = []
+        handoff = {"objective": "ship", "done": ["read"], "decisions": [], "next_steps": ["write"],
+                   "files": [], "open_questions": []}
+        agent = AdaptiveAgent(model=_scripted_llm(requests, [("write_handoff", handoff), "done"]),
+                              name="dak_agent", instruction="Base.", tools=[FunctionTool(write_handoff)])
+        sessions = InMemorySessionService()
+        session = await sessions.create_session(app_name="dak_agent", user_id="u")
+        runner = Runner(app=App(name="dak_agent", root_agent=agent), session_service=sessions,
+                        artifact_service=InMemoryArtifactService())
+
+        with patch("dak_agent.remote_tools.discover_remote_tools", return_value={}):
+            async for _ in runner.run_async(
+                user_id="u", session_id=session.id,
+                new_message=types.Content(role="user", parts=[types.Part(text="hi")]),
+            ):
+                pass
+
+        self.assertEqual(len(requests), 2)  # one invocation, two model calls
+        self.assertNotIn("# Handoff", requests[0].config.system_instruction)
+        self.assertIn("# Handoff\nObjective: ship", requests[1].config.system_instruction)
+
+    async def test_saved_handoff_reaches_a_resumed_session_in_a_new_process_verbatim(self):
+        """PBI #114 criterion 3: a session resumed by another process (a new
+        agent and Runner over the same session store) gets the saved handoff,
+        and like the plan it skips ADK's `{name}` injection."""
+        from google.adk.apps import App
+        from google.adk.artifacts import InMemoryArtifactService
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
+        from google.genai import types
+
+        from dak_agent.builtin_tools import write_handoff
+
+        sessions = InMemorySessionService()
+        session = await sessions.create_session(app_name="dak_agent", user_id="u", state={"greeting": "operator"})
+        handoff = ("write_handoff", {"objective": "rename {old}", "done": ["read the repo"], "decisions": [],
+                                     "next_steps": ["edit {file}"], "files": [], "open_questions": []})
+
+        for script in ([handoff, "saved"], ["resumed"]):  # each pass is a fresh process
+            requests = []
+            agent = AdaptiveAgent(model=_scripted_llm(requests, script), name="dak_agent",
+                                  instruction="Hello {greeting}.", tools=[FunctionTool(write_handoff)])
+            runner = Runner(app=App(name="dak_agent", root_agent=agent), session_service=sessions,
+                            artifact_service=InMemoryArtifactService())
+            with patch("dak_agent.remote_tools.discover_remote_tools", return_value={}):
+                async for _ in runner.run_async(
+                    user_id="u", session_id=session.id,
+                    new_message=types.Content(role="user", parts=[types.Part(text="go")]),
+                ):
+                    pass
+
+        system = requests[-1].config.system_instruction
+        self.assertIn("Hello operator.", system)
+        self.assertIn("# Handoff\nObjective: rename {old}\nDone:\n- read the repo", system)
+        self.assertIn("Next steps:\n- edit {file}", system)
+
+    async def test_saved_handoff_reaches_a_turn_that_comes_over_a2a(self):
+        """PBI #114 criterion 3: a turn sent over A2A (ADK's A2aAgentExecutor,
+        which the server mounts at /a2a) resumes the A2A context's session and
+        gets its saved handoff."""
+        from a2a.server.agent_execution import RequestContext
+        from a2a.server.events import EventQueue
+        from a2a.types import Message, MessageSendParams, Part, Role, TextPart
+        from google.adk.a2a.executor.a2a_agent_executor import A2aAgentExecutor
+        from google.adk.apps import App
+        from google.adk.artifacts import InMemoryArtifactService
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
+
+        sessions = InMemorySessionService()
+        # The executor maps an A2A context to the session `context_id` of user `A2A_USER_<context_id>`.
+        await sessions.create_session(app_name="dak_agent", user_id="A2A_USER_ctx-1", session_id="ctx-1",
+                                      state={"dak_handoff": {"objective": "ship", "next_steps": ["deploy"]}})
+        requests = []
+        agent = AdaptiveAgent(model=_scripted_llm(requests, ["ok"]), name="dak_agent", instruction="Hi.", tools=[])
+        runner = Runner(app=App(name="dak_agent", root_agent=agent), session_service=sessions,
+                        artifact_service=InMemoryArtifactService())
+        message = Message(message_id="m1", role=Role.user, context_id="ctx-1",
+                          parts=[Part(root=TextPart(text="continue"))])
+
+        with patch("dak_agent.remote_tools.discover_remote_tools", return_value={}):
+            await A2aAgentExecutor(runner=runner).execute(
+                RequestContext(request=MessageSendParams(message=message), task_id="t1", context_id="ctx-1"),
+                EventQueue())
+
+        self.assertEqual(len(requests), 1)
+        self.assertIn("# Handoff\nObjective: ship", requests[0].config.system_instruction)
+        self.assertIn("Next steps:\n- deploy", requests[0].config.system_instruction)
 
     def _tools_agent(self):
         from dak_agent.builtin_tools import switch_mode
