@@ -5,7 +5,9 @@ Three layers, cheapest first:
 0. Tool-call guard (``ContextHarnessPlugin.before_tool_callback``): a tool
    call that repeats the previous one too often, or comes past the
    invocation's tool-call or wall-time limit, is not run; the model gets an
-   observation saying why instead (never an exception).
+   observation saying why instead (never an exception). The PreToolUse hooks
+   of ``DAK_HOOKS`` (``hooks.py``) run after the guard; PostToolUse hooks run
+   in ``after_tool_callback`` before the budget, on calls whose tool ran.
 1. Tool-output budget (``ContextHarnessPlugin.after_tool_callback``): an
    oversized tool result is replaced by a head/tail preview and the full text
    is offloaded to an artifact the agent can page through with
@@ -38,6 +40,7 @@ while a 1M-token Gemini model is left mostly alone.
 Whether to enable ADK's ContextCacheConfig is decided in
 docs/design/prompt_cache_evaluation.md (PBI #94).
 """
+import asyncio
 import hashlib
 import json
 import logging
@@ -57,6 +60,7 @@ from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools import FunctionTool
 from google.genai import types
 
+from . import hooks
 from .config import get_litellm_model_name
 from .mode_manager import ModeManager
 
@@ -884,6 +888,7 @@ def _guard_state(state: MutableMapping, invocation_id: str) -> dict:
         "streak": 0,
         "violation_streak": 0,
         "checked_calls": [],
+        "blocked_calls": [],
     })
 
 
@@ -928,6 +933,7 @@ class ContextHarnessPlugin(BasePlugin):
         self.settings = settings
         self._default_model_name = default_model_name
         self._settings_cache: Dict[str, HarnessSettings] = {default_model_name: settings}
+        self._hooks = hooks.load_hooks()
 
     def _settings_for(self, callback_context) -> HarnessSettings:
         """Settings for the model this call runs on (`dak:model`, else the
@@ -951,15 +957,25 @@ class ContextHarnessPlugin(BasePlugin):
         return settings
 
     async def before_tool_callback(self, *, tool, tool_args, tool_context) -> Optional[dict]:
-        """Stop a runaway tool loop: past the invocation's wall-time or tool-call
-        limit, or when the same call (tool + args) repeats more than
-        ``max_repeated_tool_calls`` times in a row, the tool is not run and the
-        returned dict is the observation the model sees instead."""
-        settings = self.settings
+        """Stop a runaway tool loop (see ``_guard_tool_call``), then run the
+        PreToolUse hooks of DAK_HOOKS. Whatever stops the call is returned as
+        the observation the model sees instead of the tool's result."""
         guard = _guard_state(tool_context.state, tool_context.invocation_id)
         tool_name = getattr(tool, "name", "tool")
         _count_call(guard, tool_name, tool_args)
         guard["checked_calls"].append(tool_context.function_call_id)
+        blocked = self._guard_tool_call(guard, tool_name)
+        if blocked is None:
+            blocked = await self._run_pre_tool_hooks(tool, tool_name, tool_args, tool_context)
+        if blocked is not None and blocked.get("observation") != "hook_rewrote_input":
+            guard["blocked_calls"].append(tool_context.function_call_id)
+        return blocked
+
+    def _guard_tool_call(self, guard: dict, tool_name: str) -> Optional[dict]:
+        """Past the invocation's wall-time or tool-call limit, or when the same
+        call (tool + args) repeats more than ``max_repeated_tool_calls`` times
+        in a row, the tool is not run."""
+        settings = self.settings
 
         elapsed = time.time() - guard["start_ts"]
         if elapsed > settings.max_wall_seconds:
@@ -990,6 +1006,33 @@ class ContextHarnessPlugin(BasePlugin):
             }
         return None
 
+    async def _run_hooks(self, event: str, tool_name: str, tool_args, tool_context, result: Any = None):
+        """Outcomes of the matching hooks, run one at a time off the event loop."""
+        matched = hooks.hooks_for(self._hooks, event, tool_name)
+        if not matched:
+            return
+        session_id = getattr(getattr(tool_context, "session", None), "id", "") or ""
+        payload = hooks.build_payload(event, tool_name, tool_args, session_id=session_id,
+                                      tool_use_id=tool_context.function_call_id or "", result=result)
+        for hook in matched:
+            outcome = await asyncio.to_thread(hooks.run_hook, hook, payload)
+            if outcome["decision"] == "error":
+                logger.warning("%s hook for %s failed: %s", event, tool_name, outcome["reason"])
+                continue
+            yield outcome
+
+    async def _run_pre_tool_hooks(self, tool, tool_name: str, tool_args, tool_context) -> Optional[dict]:
+        """A deny stops the call. Rewritten arguments run the tool here (ADK has
+        no way to pass changed arguments on), and the observation says so."""
+        async for outcome in self._run_hooks("PreToolUse", tool_name, tool_args, tool_context):
+            if outcome["decision"] == "deny":
+                return {"observation": "blocked_by_hook", "reason": outcome["reason"], "hook_event": "PreToolUse"}
+            if outcome["updated_input"] is not None:
+                result = await tool.run_async(args=outcome["updated_input"], tool_context=tool_context)
+                return {"observation": "hook_rewrote_input", "original_args": tool_args,
+                        "updated_args": outcome["updated_input"], "result": result}
+        return None
+
     def note_argument_violation(self, tool_context, invocation_id: str) -> bool:
         """Count a failed call that is not a repeat (e.g. arguments that break
         the tool's schema). True once more than ``max_repeated_tool_calls``
@@ -1010,18 +1053,34 @@ class ContextHarnessPlugin(BasePlugin):
         # every after_tool_callback: count it here so it still breaks a streak
         # and counts toward the limit.
         guard = _guard_state(tool_context.state, tool_context.invocation_id)
-        if tool_context.function_call_id in guard["checked_calls"]:
-            guard["checked_calls"].remove(tool_context.function_call_id)
+        call_id = tool_context.function_call_id
+        ran = call_id in guard["checked_calls"]
+        if ran:
+            guard["checked_calls"].remove(call_id)
         else:
             _count_call(guard, tool_name, tool_args)
+        if call_id in guard["blocked_calls"]:
+            guard["blocked_calls"].remove(call_id)
+            ran = False
         if tool_name == READ_TOOL_OUTPUT_NAME:
             return None  # already paged to the budget
+        rewritten = False
+        if ran:  # PostToolUse audits a tool that ran, not a call something else answered
+            async for outcome in self._run_hooks("PostToolUse", tool_name, tool_args, tool_context, result=result):
+                if outcome["decision"] == "deny":
+                    return {"observation": "blocked_by_hook", "reason": outcome["reason"], "hook_event": "PostToolUse"}
+                if outcome["updated_output"] is not None:
+                    # The original is left out: a rewrite is often a redaction.
+                    result = {"observation": "hook_rewrote_output", "result": outcome["updated_output"]}
+                    rewritten = True
+                    break
         max_chars = self.settings.tool_output_chars
         text = _result_text(result)
         if text is None:
-            return None
+            return result if rewritten else None
         if len(text) <= max_chars:
-            return _drop_duplicate_structured_content(result, text)
+            trimmed = _drop_duplicate_structured_content(result, text)
+            return trimmed if trimmed is not None or not rewritten else result
 
         artifact = _artifact_name(tool_name, getattr(tool_context, "function_call_id", None))
         try:
