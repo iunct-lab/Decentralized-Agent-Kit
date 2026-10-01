@@ -275,3 +275,72 @@ def test_run_command_hook_timeout_when_group_already_gone(monkeypatch):
     outcome = hooks.run_hook(_command("sleep 0.3", timeout=0.1), _payload())
     assert outcome["decision"] == "error"
     assert "timed out" in outcome["reason"]
+
+
+def test_load_hooks_skips_timeout_too_large_for_a_float(monkeypatch, caplog):
+    # A huge integer must be skipped like any bad entry, not raise and lose the valid ones.
+    monkeypatch.setenv("DAK_HOOKS", '[{"event": "PreToolUse", "type": "command", "command": "exit 0", "timeout": '
+                       + "1" * 400 + '}, {"event": "PreToolUse", "type": "command", "command": "exit 0"}]')
+    with caplog.at_level(logging.WARNING, logger="dak_agent.hooks"):
+        assert hooks.load_hooks() == [HookSpec(event="PreToolUse", type="command", command="exit 0")]
+    assert caplog.records
+    monkeypatch.setenv("DAK_HOOKS", '[{"event": "PreToolUse", "type": "command", "command": "exit 0", "timeout": Infinity}]')
+    assert hooks.load_hooks() == []
+
+
+def test_run_command_hook_timeout_reason_omits_command():
+    # The reason reaches the model; a secret on the command line must not.
+    outcome = hooks.run_hook(_command("sleep 5 # token=s3cret", timeout=0.1), _payload())
+    assert outcome["decision"] == "error"
+    assert "s3cret" not in outcome["reason"]
+    assert "PreToolUse command hook" in outcome["reason"]
+
+
+@pytest.mark.parametrize("error", [
+    TimeoutError("timed out"),
+    urllib.error.URLError(socket.timeout("timed out")),
+    urllib.error.URLError(ConnectionRefusedError("refused")),
+    urllib.error.HTTPError("https://user:pw@hooks.example/T0/s3cret", 500, "Server Error", None, None),
+    ValueError("unknown url type: 'user:pw@hooks.example/T0/s3cret'"),
+])
+def test_run_http_hook_failure_reason_names_only_scheme_and_host(monkeypatch, error):
+    def fail(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(urllib.request, "urlopen", fail)
+    hook = HookSpec(event="PreToolUse", type="http", url="https://user:pw@hooks.example/T0/s3cret?k=v", timeout=1)
+    outcome = hooks.run_hook(hook, _payload())
+    assert outcome["decision"] == "error"
+    assert "https://hooks.example" in outcome["reason"]
+    for leaked in ("s3cret", "user", "pw@", "k=v"):
+        assert leaked not in outcome["reason"]
+
+
+def test_run_http_hook_read_timeout_says_timed_out(monkeypatch):
+    def slow(*args, **kwargs):
+        raise TimeoutError("timed out")
+    monkeypatch.setattr(urllib.request, "urlopen", slow)
+    outcome = hooks.run_hook(HookSpec(event="PreToolUse", type="http", url="http://hooks.example/", timeout=1), _payload())
+    assert outcome["reason"].startswith("hook timed out after 1s")
+
+
+def test_run_http_hook_non_2xx_is_error(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise urllib.error.HTTPError("http://hooks.example/", 503, "Unavailable", None, None)
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    outcome = hooks.run_hook(HookSpec(event="PreToolUse", type="http", url="http://hooks.example/"), _payload())
+    assert outcome["decision"] == "error"
+    assert "503" in outcome["reason"]
+
+
+def test_run_command_hook_unknown_decision_is_allow_and_logged(caplog):
+    out = json.dumps({"hookSpecificOutput": {"permissionDecision": "Deny"}})
+    with caplog.at_level(logging.WARNING, logger="dak_agent.hooks"):
+        outcome = hooks.run_hook(_command(f"echo '{out}'"), _payload())
+    assert outcome["decision"] == "allow"
+    assert any("Deny" in r.getMessage() for r in caplog.records)
+
+
+def test_run_http_hook_bad_port_is_error():
+    outcome = hooks.run_hook(HookSpec(event="PreToolUse", type="http", url="http://hooks.example:abc/"), _payload())
+    assert outcome["decision"] == "error"
+    assert "http://hooks.example" in outcome["reason"]
