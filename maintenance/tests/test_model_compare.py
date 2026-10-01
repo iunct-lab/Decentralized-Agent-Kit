@@ -169,3 +169,8 @@ def test_every_search_result_reaches_the_model(inputs, case, cap):
 def test_an_empty_json_object_is_read_as_json(inputs):
     r = run_case("charter-review", lambda prompt: "{}", inputs)
     assert r.parsed_ok and r.count == 0
+
+
+def test_broken_json_around_an_empty_object_is_not_parsed_ok(inputs):
+    r = run_case("charter-review", lambda prompt: '{"title": invalid, "revisions": {}}', inputs)
+    assert not r.parsed_ok
