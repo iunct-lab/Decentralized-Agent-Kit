@@ -25,7 +25,7 @@ uvx pip-licenses==5.5.5 --python .venv/bin/python --with-system --from=all --for
 - **`--from=all` を使い、どの欄を採るかは判定の側（`dak-maint license-check`）で決める**。`--from=mixed` は分類子（`License :: OSI Approved :: BSD License`）があるとメタデータの `License` より分類子を採るので、`Authlib` は `BSD-3-Clause` と書いてあるのに `BSD License` になる。`--from=all` なら 3 つの欄（`License-Expression`, `License-Metadata`, `License-Classifier`）がそろう。採る順は `License-Expression`（PEP 639）→ `License-Metadata`（SPDX にそろえられるとき）→ `License-Classifier`
 - `--from=mixed` も `License-Expression` を拾う（両方を取って突き合わせ、`License-Expression` があるパッケージで食い違いは 0 件だった）
 
-棚卸しは 2026-10-01、Linux（aarch64）で取った。Python は `agent` が 3.12（`requires-python` が `<3.14`）、ほかは 3.14。
+棚卸しは 2026-10-01、Linux（aarch64）で取った。Python は `uv sync` が選んだ版で、`agent` が 3.12（`requires-python` が `<3.14`。Dockerfile も 3.12）、`mcp-server` が 3.10（`.python-version`。3.10 でだけ入る `exceptiongroup` も一覧にある）、`bff` が 3.14（`.python-version`）、`cli` と `maintenance` が 3.14。
 
 ### 件数の突き合わせ
 
@@ -39,7 +39,15 @@ uvx pip-licenses==5.5.5 --python .venv/bin/python --with-system --from=all --for
 | cli | 15 | 18 | `colorama`（win32）。`click` と `markdown-it-py` は Python の版ごとに 2 行ずつ |
 | maintenance | 13 | 14 | `typing-extensions`（`python_full_version < '3.13'`） |
 
-Windows 用の依存は Linux の CI では見えない。DAK のコンテナはどれも Linux なので、対象は Linux で入るものとする。
+`pip-licenses` はインストール済みの環境を読むので、Linux で取ると Windows でだけ入る依存は見えない。`cli` は利用者の端末にも入るので、この 3 件は PyPI と配布物で手で確かめた（どれも許容的）:
+
+| パッケージ（版） | コンポーネント | 欄の値 | SPDX |
+|---|---|---|---|
+| `colorama` 0.4.6 | agent, mcp-server, bff, cli | 分類子 `BSD License` | `BSD-3-Clause`（LICENSE.txt） |
+| `pywin32` 311 | agent, mcp-server | メタデータ `PSF` | `PSF-2.0` |
+| `tzdata` 2025.2 | agent | メタデータ `Apache-2.0` | `Apache-2.0` |
+
+CI（Linux）の license ジョブはこの 3 件を見ない。Windows でだけ入る依存が増えたり変わったりしたときは、この表を手で直す。
 
 ## 道具の比較
 
@@ -120,13 +128,33 @@ Windows 用の依存は Linux の CI では見えない。DAK のコンテナは
 |---|---|---|---|---|
 | `certifi` | `MPL-2.0` | 5 つすべて | 推移的: `httpx` → `httpcore` → `certifi`（ほか `requests`） | 弱いコピーレフト（ファイル単位）。DAK は改変しない。HTTP を使うどのコンポーネントにも入るので、外すのは現実的でない |
 | `tqdm` | `MPL-2.0 AND MIT` | agent | 推移的: `openai` → `tqdm`、`litellm` → `tokenizers` → `huggingface-hub` → `tqdm` | 同上 |
-| `psycopg2-binary` | `LGPL-3.0-or-later`（OpenSSL の例外つき） | agent | **直接**（`agent/pyproject.toml`）。`SESSION_SERVICE_URI` を `postgresql://` で渡したときの SQLAlchemy の既定のドライバ。compose の既定は `postgresql+asyncpg://` | 弱いコピーレフト。wheel は `libpq` / OpenSSL 1.1.1k と 3 / krb5 / cyrus-sasl / OpenLDAP / pcre2 / libxcrypt / keyutils などを同梱する（wheel の `sboms/auditwheel.cdx.json` に名前と版。ライセンスは SBOM に書かれていない） |
+| `psycopg2-binary` | `LGPL-3.0-or-later`（OpenSSL の例外つき） | agent | **直接**（`agent/pyproject.toml`）。`SESSION_SERVICE_URI` を `postgresql://` で渡したときの SQLAlchemy の既定のドライバ。compose の既定は `postgresql+asyncpg://` | 弱いコピーレフト。wheel は共有ライブラリを同梱する（下の表） |
 | `jsonalias` | メタデータ無し（配布元は `MIT`） | agent | 推移的: `solders` → `jsonalias`、`solana` → `solders` | 「不明」で止まる。配布元のライセンスを確かめた上で個別に認めるか |
 | `regex` | `Apache-2.0 AND CNRI-Python` | agent | 推移的（`tiktoken`） | 許容的だが一覧に入れるか |
 | `greenlet` | `MIT AND Python-2.0` | agent | 推移的（`sqlalchemy`） | 同上 |
 | `aiohappyeyeballs`, `typing_extensions` | `PSF-2.0` | agent ほか | 推移的（`aiohttp` ほか） | 同上 |
 | `filelock` | `Unlicense` | agent | 推移的（`huggingface-hub`） | 同上 |
 | `shellingham` | `ISC` | agent, cli | 推移的（agent は `huggingface-hub`、cli は `typer`） | 同上 |
+
+#### `psycopg2-binary` 2.9.13 が同梱する共有ライブラリ
+
+`psycopg2_binary.libs/` にある。wheel の SBOM（`sboms/auditwheel.cdx.json`）は AlmaLinux 8 の RPM から入れたものだけを名前と版で挙げ、ライセンスは書かない。ライセンスは AlmaLinux 8 の spec（`git.almalinux.org/rpms/<名前>` の `c8` 枝）の `License:`、SBOM に無いものは各プロジェクトのライセンス:
+
+| ライブラリ | 出どころ（版） | ライセンス |
+|---|---|---|
+| `libpq` | SBOM に無い（`libpq.so.5.17`、PostgreSQL 17 系） | PostgreSQL License |
+| `libssl` / `libcrypto`（3 系） | SBOM に無い（`.so.3`） | Apache-2.0（OpenSSL 3.0 以降） |
+| `libldap` / `liblber` | SBOM に無い（OpenLDAP） | OLDAP-2.8 |
+| `libcrypto`（1.1.1k） | `openssl-libs` 1.1.1k-17.el8_6 | `OpenSSL and ASL 2.0` |
+| `libkrb5` ほか krb5 | `krb5-libs` 1.18.2-34.el8_10 | `MIT` |
+| `libcom_err` | `libcom_err` 1.45.6-7.el8_10 | `MIT` |
+| `libselinux` | `libselinux` 2.9-11.el8_10 | `Public Domain` |
+| `libkeyutils` | `keyutils-libs` 1.5.10-9.el8 | `GPLv2+ and LGPLv2+`（spec のパッケージ全体の表記） |
+| `libcrypt` | `libxcrypt` 4.1.1-6.el8 | `LGPLv2+ and BSD and Public Domain` |
+| `libpcre2-8` | `pcre2` 10.32-3.el8_6 | `BSD` |
+| `libsasl2` | `cyrus-sasl-lib` 2.1.27-6.el8_5 | `BSD with advertising` |
+
+LGPL の部分（psycopg2 本体、`libkeyutils`、`libcrypt`）が論点になる。DAK はこの wheel を改変せず、コンテナイメージも公開していない（`.github/workflows/` にイメージを push するジョブは無い）。
 
 ## 方針
 
@@ -144,6 +172,7 @@ Windows 用の依存は Linux の CI では見えない。DAK のコンテナは
 - 上の表の「表記だけでは決められない」残りの 9 件（`fastuuid` ほか）: LICENSE ファイルで確かめた SPDX を記録する
 
 許容外か不明の依存が入ったら CI の license ジョブが止まり、例外を足すかどうかを利用者が決める。
+Windows でだけ入る依存（`colorama`, `pywin32`, `tzdata`）は CI に見えないので、棚卸しの表で手で追う。
 
 ### 決定
 
