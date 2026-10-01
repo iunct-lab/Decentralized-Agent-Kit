@@ -36,7 +36,7 @@ BEDROCK_PREFIX = "bedrock/"
 BEDROCK_READ_TIMEOUT_S = 300
 
 
-def _make_bedrock_complete(model_id: str, timeout: float):
+def _make_bedrock_complete(model_id: str, timeout: float, on_usage=None):
     import boto3  # deferred: only the Bedrock path needs it
     from botocore.config import Config
 
@@ -47,6 +47,9 @@ def _make_bedrock_complete(model_id: str, timeout: float):
 
     def complete(prompt: str) -> str:
         resp = client.converse(modelId=model_id, messages=[{"role": "user", "content": [{"text": prompt}]}])
+        usage = resp.get("usage")
+        if on_usage and usage:
+            on_usage({"prompt_tokens": usage.get("inputTokens"), "completion_tokens": usage.get("outputTokens")})
         # Reasoning models also return reasoningContent blocks; the answer is the text.
         text = "".join(block.get("text", "") for block in resp["output"]["message"]["content"])
         stop = resp.get("stopReason")
@@ -58,15 +61,21 @@ def _make_bedrock_complete(model_id: str, timeout: float):
     return complete
 
 
-def make_complete(timeout: float = 60.0):
-    """Return a `complete(prompt) -> str`, or None if MAINT_LLM_* is not configured."""
-    base_url = os.getenv("MAINT_LLM_BASE_URL")
-    model = os.getenv("MAINT_LLM_MODEL")
+def make_complete(timeout: float = 60.0, *, base_url: str | None = None, model: str | None = None,
+                  api_key: str | None = None, on_usage=None):
+    """Return a `complete(prompt) -> str`, or None if MAINT_LLM_* is not configured.
+
+    base_url / model / api_key override MAINT_LLM_* (to compare models side by side).
+    on_usage, if given, is called with {"prompt_tokens", "completion_tokens"} after
+    each call whose response reports usage.
+    """
+    base_url = base_url or os.getenv("MAINT_LLM_BASE_URL")
+    model = model or os.getenv("MAINT_LLM_MODEL")
     if model and model.startswith(BEDROCK_PREFIX):
-        return _make_bedrock_complete(model[len(BEDROCK_PREFIX):], timeout)
+        return _make_bedrock_complete(model[len(BEDROCK_PREFIX):], timeout, on_usage)
     if not base_url or not model:
         return None
-    api_key = os.getenv("MAINT_LLM_API_KEY", "not-needed")
+    api_key = api_key or os.getenv("MAINT_LLM_API_KEY", "not-needed")
 
     def complete(prompt: str) -> str:
         resp = httpx.post(
@@ -80,7 +89,11 @@ def make_complete(timeout: float = 60.0):
             timeout=timeout,
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        data = resp.json()
+        usage = data.get("usage")
+        if on_usage and usage:
+            on_usage({"prompt_tokens": usage.get("prompt_tokens"), "completion_tokens": usage.get("completion_tokens")})
+        return data["choices"][0]["message"]["content"]
 
     return complete
 

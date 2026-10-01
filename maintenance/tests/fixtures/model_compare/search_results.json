@@ -1,0 +1,9 @@
+[
+  {"title": "Specification - Model Context Protocol", "url": "https://modelcontextprotocol.io/specification", "snippet": "The protocol specification for connecting LLM applications to external tools and data sources: base protocol, lifecycle, transports (stdio, Streamable HTTP), authorization, and server features such as tools, resources and prompts."},
+  {"title": "A2A Protocol (GitHub: a2aproject/A2A)", "url": "https://github.com/a2aproject/A2A", "snippet": "An open protocol for communication and interoperability between opaque agentic applications: agent cards for discovery, tasks with streaming updates, and push notifications."},
+  {"title": "Agent Development Kit documentation", "url": "https://google.github.io/adk-docs/", "snippet": "A framework for developing and deploying AI agents: tools, multi-agent systems, sessions and memory, callbacks and plugins, evaluation, and deployment options."},
+  {"title": "LiteLLM (GitHub: BerriAI/litellm)", "url": "https://github.com/BerriAI/litellm", "snippet": "A Python SDK and proxy server to call many LLM APIs in the OpenAI format, with routing, fallbacks, spend tracking and rate limiting across providers."},
+  {"title": "gVisor: application kernel for containers", "url": "https://gvisor.dev/", "snippet": "An application kernel that implements a Linux-like interface in user space, giving containers an extra isolation boundary from the host kernel."},
+  {"title": "Semantic conventions for generative AI systems - OpenTelemetry", "url": "https://opentelemetry.io/docs/specs/semconv/gen-ai/", "snippet": "Attribute and span conventions for recording LLM calls, agent operations and tool executions, including token usage and model names."},
+  {"title": "React Blog", "url": "https://react.dev/blog", "snippet": "Release announcements and updates for the React JavaScript library for building user interfaces."}
+]
