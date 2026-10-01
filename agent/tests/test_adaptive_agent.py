@@ -720,8 +720,18 @@ class TestUnknownToolObservation(unittest.IsolatedAsyncioTestCase):
     def test_on_tool_error_suggests_tools_from_a_toolset(self):
         """A Toolset (the MCP servers) is not a named entry of `agent.tools`; its tools
         reach the candidates through the names ADK resolved and listed in the error."""
-        toolset = MagicMock(spec=["get_tools"])
-        result = self._unknown(self._agent(), "read_fiel", [toolset], available=("list_skills", "read_file"))
+        from google.adk.flows.llm_flows import functions
+        from google.adk.tools.base_tool import BaseTool
+        from google.genai import types
+
+        # The error ADK itself raises, so a rewording of its message fails here.
+        resolved = {n: BaseTool(name=n, description=n) for n in ("list_skills", "read_file")}
+        with self.assertRaises(ValueError) as raised:
+            functions._get_tool(types.FunctionCall(name="read_fiel"), resolved)
+        ctx = MagicMock()
+        ctx._invocation_context.agent.tools = [MagicMock(spec=["get_tools"])]
+        result = self._agent()._on_tool_error(BaseTool(name="read_fiel", description="Tool not found"), {},
+                                              ctx, raised.exception)
         self.assertEqual(result["candidates"], ["read_file"])
 
     def test_on_tool_error_hint_skips_list_skills_when_it_is_not_available(self):
