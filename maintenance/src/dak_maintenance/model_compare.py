@@ -55,8 +55,14 @@ class CaseResult:
 
 
 def load_models(path: str) -> list[ModelSpec]:
-    return [ModelSpec(m["name"], m.get("base_url", ""), m["model"], m.get("api_key_env", ""))
-            for m in json.loads(Path(path).read_text(encoding="utf-8"))]
+    """Only strings: a null would read as "not given" and send the model's key to MAINT_LLM_BASE_URL."""
+    specs = []
+    for m in json.loads(Path(path).read_text(encoding="utf-8")):
+        fields = [m.get("name"), m.get("base_url", ""), m.get("model"), m.get("api_key_env", "")]
+        if not all(isinstance(f, str) for f in fields) or not fields[0] or not fields[2]:
+            raise ValueError(f"name / model は空でない文字列、base_url / api_key_env は文字列: {m}")
+        specs.append(ModelSpec(*fields))
+    return specs
 
 
 def load_inputs(directory: Path = FIXTURES) -> dict:

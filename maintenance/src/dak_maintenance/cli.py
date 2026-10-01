@@ -206,6 +206,10 @@ def cmd_compare_models(args: argparse.Namespace) -> int:
     except (OSError, ValueError, KeyError, TypeError) as e:
         print(f"error: --models か固定入力を読めない（{e.__class__.__name__}: {e}）", file=sys.stderr)
         return 2
+    unset = [m.api_key_env for m in models if m.api_key_env and not os.getenv(m.api_key_env)]
+    if unset:
+        print(f"error: api_key_env の環境変数が無い: {', '.join(unset)}", file=sys.stderr)
+        return 2
     if args.out and not os.access(os.path.dirname(os.path.abspath(args.out)), os.W_OK):
         print(f"error: --out に書けない（{args.out}）", file=sys.stderr)
         return 2
