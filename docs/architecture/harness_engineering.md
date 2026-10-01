@@ -196,6 +196,13 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 - 計画と同じく、利用者が書いた文なので ADK の `{var}` 置換を通さない。長さは計画と同じ上限（`HarnessSettings.plan_chars`）で切り、切ったら `[truncated — call read_original_request for the full text]` を付ける。全文は組み込みツール `read_original_request` が state から返す（`read_plan` と同じく Pact で絞っていても呼べる）。`dak:instruction` を渡した呼び出しには入れない（指示全体を置き換えるため）。
 - 検証: `test_adaptive_agent.py::test_original_request_reaches_later_turns_verbatim`（2 ターン目の指示に 1 ターン目の発話がそのまま入る）。
 
+### 引き継ぎ情報（`write_handoff`、#114）
+
+- 長い作業を文脈のリセット後に続けるための引き継ぎ情報（目的・完了・決定・次の作業・ファイル・未解決事項）を、組み込みツール `write_handoff` が state の `dak_handoff` に置く。計画と同じく、Pact で絞っていても常に呼べる。
+- 指示は計画と同じく state から組み直され、`# Original Request` の後に `# Handoff` として入る。組み直すのは呼び出しの始めと、`write_handoff` の直後。モデルが書いた文なので `{var}` 置換を通さない。長さは計画と同じ上限（`HarnessSettings.plan_chars`）で切り、切ったら短く書き直すよう案内する。`dak:instruction` を渡した呼び出しには入れない。
+- 組み直しは呼び出しごとに state からなので、どこから来た呼び出しかを区別しない。同じセッションを A2A（ADK の `A2aAgentExecutor`。A2A の context がセッションになる）や、再起動した別のプロセスから続けても、保存済みの handoff が入る。
+- 検証: `test_adaptive_agent.py::test_saved_handoff_reaches_a_resumed_session_in_a_new_process_verbatim`、`test_adaptive_agent.py::test_saved_handoff_reaches_a_turn_that_comes_over_a2a`、`test_adaptive_agent.py::test_handoff_written_mid_invocation_reaches_the_next_model_call`。
+
 ### 承認の保留と reply（#100）
 
 承認待ち（ツールの確認）と質問待ち（`ask_question`）を、どのクライアントからでも一覧して答えられる。

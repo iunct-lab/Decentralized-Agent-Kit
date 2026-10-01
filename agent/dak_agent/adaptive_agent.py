@@ -216,9 +216,9 @@ class AdaptiveAgent(LlmAgent):
 
     def _verbatim_sections(self, state: MutableMapping[str, Any]) -> str:
         """The instruction's tail built from text the user or the model wrote
-        (the plan, the original request): sent as is, never through ADK's
-        `{var}` session-state injection."""
-        return self._plan_section(state) + self._original_request_section(state)
+        (the plan, the original request, the handoff): sent as is, never
+        through ADK's `{var}` session-state injection."""
+        return self._plan_section(state) + self._original_request_section(state) + self._handoff_section(state)
 
     @staticmethod
     def _tools_error_section(state: MutableMapping[str, Any]) -> str:
@@ -277,6 +277,20 @@ class AdaptiveAgent(LlmAgent):
             marker = "\n[truncated — call read_original_request for the full text]"
             request = request[: max_chars - len(marker)] + marker
         return f"\n\n# Original Request\n{request}"
+
+    def _handoff_section(self, state: MutableMapping[str, Any]) -> str:
+        """The session's handoff (`write_handoff`), rebuilt from state every
+        turn, so a session resumed after a reset, over A2A or by another
+        process starts from it. Capped like the plan."""
+        handoff = state.get(builtin_tools.STATE_HANDOFF)
+        if not isinstance(handoff, dict) or not handoff:
+            return ""
+        text = builtin_tools.format_handoff(handoff)
+        max_chars = HarnessSettings(context_window=self._mode_manager.max_context_tokens).plan_chars
+        if len(text) > max_chars:
+            marker = "\n[truncated — call write_handoff again with a shorter handoff]"
+            text = text[: max_chars - len(marker)] + marker
+        return f"\n\n# Handoff\n{text}"
 
     @staticmethod
     def _capture_original_request(context: CallbackContext) -> None:
