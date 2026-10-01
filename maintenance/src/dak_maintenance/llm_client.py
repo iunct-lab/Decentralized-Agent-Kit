@@ -76,7 +76,7 @@ def make_complete(timeout: float = 60.0, *, base_url: str | None = None, model: 
         return _make_bedrock_complete(model[len(BEDROCK_PREFIX):], timeout, on_usage)
     if not base_url or not model:
         return None
-    api_key = (os.getenv("MAINT_LLM_API_KEY") if api_key is None else api_key) or "not-needed"
+    api_key = os.getenv("MAINT_LLM_API_KEY", "not-needed") if api_key is None else (api_key or "not-needed")
 
     def complete(prompt: str) -> str:
         resp = httpx.post(

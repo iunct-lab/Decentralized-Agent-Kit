@@ -140,6 +140,15 @@ def compare(models: list[ModelSpec], cases: list[str], inputs: dict, timeout: fl
     return results
 
 
+def check_prices(prices) -> None:
+    """Raise ValueError unless prices is {name: {"input": number, "output": number}}."""
+    if not isinstance(prices, dict):
+        raise ValueError("JSON のオブジェクトではない")
+    for name, p in prices.items():
+        if not (isinstance(p, dict) and all(isinstance(p.get(k), (int, float)) for k in ("input", "output"))):
+            raise ValueError(f"{name}: input と output の数値が要る")
+
+
 def _cell(v) -> str:
     return "—" if v is None else str(v)
 
