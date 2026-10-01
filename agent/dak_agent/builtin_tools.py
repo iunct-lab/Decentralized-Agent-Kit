@@ -19,6 +19,11 @@ STATE_TODOS = "dak_todos"
 TODO_STATUSES = ("pending", "in_progress", "done")
 # The session's first user message, kept verbatim so compaction never loses it.
 STATE_ORIGINAL_REQUEST = "dak_original_request"
+# The agent's handoff for resuming after a context reset: {"objective": str,
+# "done" / "decisions" / "next_steps" / "files" / "open_questions": [str]}.
+STATE_HANDOFF = "dak_handoff"
+HANDOFF_SECTIONS = (("done", "Done"), ("decisions", "Decisions"), ("next_steps", "Next steps"),
+                    ("files", "Files"), ("open_questions", "Open questions"))
 
 
 def attempt_answer(answer: str, confidence: str, sources_used: list[str], tool_context) -> str:
@@ -61,7 +66,7 @@ def planner(task_description: str, plan_steps: list[str], allowed_tools: list[st
         plan_steps: Ordered list of steps to accomplish the task.
         allowed_tools: List of tool names you intend to use (e.g. ["read_file", "run_command"]).
                        'planner', 'ask_question', 'attempt_answer', 'switch_mode', 'write_todos',
-                       'read_plan' and 'read_original_request' are always allowed.
+                       'read_plan', 'read_original_request' and 'write_handoff' are always allowed.
     """
     plan_str = "\n".join([f"{i + 1}. {step}" for i, step in enumerate(plan_steps)])
 
@@ -165,7 +170,7 @@ def _refresh_instruction(tool_context) -> None:
         try:
             refresh(tool_context)
         except Exception as e:  # the plan is saved; it reaches the model from the next turn
-            logger.error(f"Could not rebuild the instruction after write_todos: {e}", exc_info=True)
+            logger.error(f"Could not rebuild the instruction after saving to state: {e}", exc_info=True)
 
 
 def read_plan(tool_context) -> str:
@@ -183,6 +188,63 @@ def read_original_request(tool_context) -> str:
     """
     request = tool_context.state.get(STATE_ORIGINAL_REQUEST)
     return request if isinstance(request, str) and request else "No original request recorded yet."
+
+
+def _as_list(value) -> List[str]:
+    if isinstance(value, str):
+        # Small models often send a nested array as a JSON string.
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            parsed = None
+        if not isinstance(parsed, list):
+            return [value] if value else []
+        value = parsed
+    if not isinstance(value, list):
+        return [] if value is None else [str(value)]
+    return [str(item) for item in value]
+
+
+def format_handoff(handoff) -> str:
+    """The handoff as text under six headings. Tolerates handoff state not
+    written by write_handoff (a client may seed it)."""
+    if not isinstance(handoff, dict) or not handoff:
+        return "No handoff recorded yet."
+    objective = str(handoff.get("objective") or "") or "(none)"
+    lines = [f"Objective: {objective}"]
+    for key, heading in HANDOFF_SECTIONS:
+        items = _as_list(handoff.get(key))
+        lines.append(f"{heading}:")
+        lines.extend(f"- {item}" for item in items or ["(none)"])
+    return "\n".join(lines)
+
+
+def write_handoff(objective: str, done: list[str], decisions: list[str], next_steps: list[str],
+                  files: list[str], open_questions: list[str], tool_context) -> str:
+    """
+    Record (or replace) your handoff: what someone resuming this task from
+    scratch needs to go on without redoing finished work. Call it at
+    milestones of a long task. It stays available after the conversation
+    history is compacted or reset.
+    Args:
+        objective: What the task is for, in one or two sentences.
+        done: What has been finished (and verified).
+        decisions: Decisions made, with the reason when it matters.
+        next_steps: What to do next, in order.
+        files: Files (or other resources) that matter for the next steps.
+        open_questions: What is still unclear or waiting on someone.
+    """
+    handoff = {
+        "objective": str(objective or ""),
+        "done": _as_list(done),
+        "decisions": _as_list(decisions),
+        "next_steps": _as_list(next_steps),
+        "files": _as_list(files),
+        "open_questions": _as_list(open_questions),
+    }
+    tool_context.state[STATE_HANDOFF] = handoff
+    _refresh_instruction(tool_context)
+    return f"Handoff saved:\n{format_handoff(handoff)}"
 
 
 async def switch_mode(tool_context, reason: str = "", new_focus: str = "") -> str:
@@ -230,6 +292,7 @@ def make_builtin_tools(enforcer_mode: bool = False) -> List[FunctionTool]:
         FunctionTool(write_todos, require_confirmation=False),
         FunctionTool(read_plan, require_confirmation=False),
         FunctionTool(read_original_request, require_confirmation=False),
+        FunctionTool(write_handoff, require_confirmation=False),
     ]
     if enforcer_mode:
         tools.append(FunctionTool(attempt_answer, require_confirmation=False))

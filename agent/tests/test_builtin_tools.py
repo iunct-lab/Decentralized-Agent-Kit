@@ -6,14 +6,17 @@ from unittest.mock import MagicMock, patch
 from dak_agent.builtin_tools import (
     ask_question,
     attempt_answer,
+    STATE_HANDOFF,
     STATE_ORIGINAL_REQUEST,
     STATE_TODOS,
+    format_handoff,
     format_todos,
     make_builtin_tools,
     planner,
     read_original_request,
     read_plan,
     switch_mode,
+    write_handoff,
     write_todos,
 )
 
@@ -22,14 +25,15 @@ class TestBuiltinTools(unittest.TestCase):
     def test_make_builtin_tools_default(self):
         tools = make_builtin_tools(enforcer_mode=False)
         names = [t.name for t in tools]
-        self.assertEqual(names, ["planner", "switch_mode", "write_todos", "read_plan", "read_original_request"])
+        self.assertEqual(names, ["planner", "switch_mode", "write_todos", "read_plan", "read_original_request",
+                                 "write_handoff"])
 
     def test_make_builtin_tools_enforcer(self):
         tools = make_builtin_tools(enforcer_mode=True)
         names = [t.name for t in tools]
         self.assertEqual(
             names, ["planner", "switch_mode", "write_todos", "read_plan", "read_original_request",
-                    "attempt_answer", "ask_question"])
+                    "write_handoff", "attempt_answer", "ask_question"])
 
     def test_planner_does_not_block_on_confirmation_by_default(self):
         """A confirmation-gated planner stalls /run and A2A runs (no UI to approve)."""
@@ -114,6 +118,57 @@ class TestBuiltinTools(unittest.TestCase):
         request = "Fix the login bug in {auth}.py\n" + "y" * 20_000
         tool_context.state = {STATE_ORIGINAL_REQUEST: request}
         self.assertEqual(read_original_request(tool_context), request)
+
+    def test_write_handoff_persists_state(self):
+        """PBI #114: the handoff is kept in state, so a reset can resume from it."""
+        tool_context = MagicMock()
+        tool_context.state = {}
+
+        result = write_handoff(
+            objective="Fix the login bug",
+            done=["reproduced the bug"],
+            decisions=["keep the session cookie"],
+            next_steps=["write the regression test"],
+            files=["auth.py"],
+            open_questions=[],
+            tool_context=tool_context,
+        )
+
+        self.assertEqual(tool_context.state[STATE_HANDOFF], {
+            "objective": "Fix the login bug",
+            "done": ["reproduced the bug"],
+            "decisions": ["keep the session cookie"],
+            "next_steps": ["write the regression test"],
+            "files": ["auth.py"],
+            "open_questions": [],
+        })
+        for heading in ("Objective", "Done", "Decisions", "Next steps", "Files", "Open questions"):
+            self.assertIn(heading, result)
+        for item in ("Fix the login bug", "reproduced the bug", "keep the session cookie",
+                     "write the regression test", "auth.py", "(none)"):
+            self.assertIn(item, result)
+
+    def test_write_handoff_accepts_a_json_string_list(self):
+        """Small models often send a nested array as a JSON string (as for write_todos)."""
+        tool_context = MagicMock()
+        tool_context.state = {}
+        write_handoff("o", '["a", "b"]', "c", [], [], [], tool_context)
+        handoff = tool_context.state[STATE_HANDOFF]
+        self.assertEqual(handoff["done"], ["a", "b"])
+        self.assertEqual(handoff["decisions"], ["c"])
+
+    def test_format_handoff_empty_returns_placeholder(self):
+        self.assertEqual(format_handoff({}), "No handoff recorded yet.")
+        self.assertEqual(format_handoff(None), "No handoff recorded yet.")
+
+    def test_make_builtin_tools_includes_write_handoff(self):
+        self.assertIn("write_handoff", [t.name for t in make_builtin_tools()])
+        self.assertIn("write_handoff", [t.name for t in make_builtin_tools(enforcer_mode=True)])
+
+    def test_write_handoff_is_always_allowed_by_the_pact(self):
+        from dak_agent.enforcer import ALWAYS_ALLOWED
+
+        self.assertIn("write_handoff", ALWAYS_ALLOWED)
 
     def test_read_original_request_is_always_allowed_by_the_pact(self):
         from dak_agent.enforcer import ALWAYS_ALLOWED
