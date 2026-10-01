@@ -20,9 +20,15 @@ def active():
     return state
 
 
-@pytest.mark.parametrize("path", ["a.txt", "agent/dak_agent/x.py", "plans/x.txt", "/plans/x.md", "plans/../agent/x.md"])
+@pytest.mark.parametrize("path", ["a.txt", "agent/dak_agent/x.py", "plans/x.txt", "/plans/x.md", "plans/../agent/x.md", "plans/a/../../x.md"])
 def test_write_file_denied_outside_plan_glob(path):
     assert judge(active(), "write_file", {"path": path}) == "deny"
+
+
+@pytest.mark.parametrize("path", ["plans/x.md", "plans/release..draft.md", "plans/sub/x.md"])
+def test_plan_files_are_not_denied(path):
+    for tool in ("write_file", "edit_file"):
+        assert judge(active(), tool, {"path": path}) != "deny"
 
 
 def test_write_file_allowed_for_plan_glob():
