@@ -66,7 +66,7 @@ def planner(task_description: str, plan_steps: list[str], allowed_tools: list[st
         plan_steps: Ordered list of steps to accomplish the task.
         allowed_tools: List of tool names you intend to use (e.g. ["read_file", "run_command"]).
                        'planner', 'ask_question', 'attempt_answer', 'switch_mode', 'write_todos',
-                       'read_plan', 'read_original_request' and 'write_handoff' are always allowed.
+                       'read_plan', 'read_original_request', 'write_handoff' and 'read_handoff' are always allowed.
     """
     plan_str = "\n".join([f"{i + 1}. {step}" for i, step in enumerate(plan_steps)])
 
@@ -247,6 +247,14 @@ def write_handoff(objective: str, done: list[str], decisions: list[str], next_st
     return f"Handoff saved:\n{format_handoff(handoff)}"
 
 
+def read_handoff(tool_context) -> str:
+    """
+    Read your saved handoff in full (the `# Handoff` in your instructions may
+    be cut short).
+    """
+    return format_handoff(tool_context.state.get(STATE_HANDOFF))
+
+
 async def switch_mode(tool_context, reason: str = "", new_focus: str = "") -> str:
     """
     Request a mode switch.
@@ -293,6 +301,7 @@ def make_builtin_tools(enforcer_mode: bool = False) -> List[FunctionTool]:
         FunctionTool(read_plan, require_confirmation=False),
         FunctionTool(read_original_request, require_confirmation=False),
         FunctionTool(write_handoff, require_confirmation=False),
+        FunctionTool(read_handoff, require_confirmation=False),
     ]
     if enforcer_mode:
         tools.append(FunctionTool(attempt_answer, require_confirmation=False))

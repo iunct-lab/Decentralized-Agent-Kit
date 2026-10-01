@@ -13,6 +13,7 @@ from dak_agent.builtin_tools import (
     format_todos,
     make_builtin_tools,
     planner,
+    read_handoff,
     read_original_request,
     read_plan,
     switch_mode,
@@ -26,14 +27,14 @@ class TestBuiltinTools(unittest.TestCase):
         tools = make_builtin_tools(enforcer_mode=False)
         names = [t.name for t in tools]
         self.assertEqual(names, ["planner", "switch_mode", "write_todos", "read_plan", "read_original_request",
-                                 "write_handoff"])
+                                 "write_handoff", "read_handoff"])
 
     def test_make_builtin_tools_enforcer(self):
         tools = make_builtin_tools(enforcer_mode=True)
         names = [t.name for t in tools]
         self.assertEqual(
             names, ["planner", "switch_mode", "write_todos", "read_plan", "read_original_request",
-                    "write_handoff", "attempt_answer", "ask_question"])
+                    "write_handoff", "read_handoff", "attempt_answer", "ask_question"])
 
     def test_planner_does_not_block_on_confirmation_by_default(self):
         """A confirmation-gated planner stalls /run and A2A runs (no UI to approve)."""
@@ -180,10 +181,23 @@ class TestBuiltinTools(unittest.TestCase):
         self.assertIn("write_handoff", [t.name for t in make_builtin_tools()])
         self.assertIn("write_handoff", [t.name for t in make_builtin_tools(enforcer_mode=True)])
 
+    def test_read_handoff_returns_the_whole_saved_handoff(self):
+        """The `# Handoff` in the instruction may be cut; read_handoff is not."""
+        tool_context = MagicMock()
+        tool_context.state = {}
+        self.assertEqual(read_handoff(tool_context), "No handoff recorded yet.")
+
+        write_handoff("ship", ["z" * 5_000], [], ["deploy"], [], ["who signs off?"], tool_context)
+        result = read_handoff(tool_context)
+        self.assertIn("z" * 5_000, result)
+        self.assertIn("Next steps:\n- deploy", result)
+        self.assertIn("Open questions:\n- who signs off?", result)
+
     def test_write_handoff_is_always_allowed_by_the_pact(self):
         from dak_agent.enforcer import ALWAYS_ALLOWED
 
         self.assertIn("write_handoff", ALWAYS_ALLOWED)
+        self.assertIn("read_handoff", ALWAYS_ALLOWED)
 
     def test_read_original_request_is_always_allowed_by_the_pact(self):
         from dak_agent.enforcer import ALWAYS_ALLOWED
