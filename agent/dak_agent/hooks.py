@@ -15,6 +15,7 @@ Every hook's answer becomes one outcome:
 `{"decision": "allow"|"deny"|"error", "reason": str, "updated_input": dict|None, "updated_output": Any|None}`.
 """
 import fnmatch
+import http.client
 import json
 import logging
 import math
@@ -22,6 +23,7 @@ import os
 import signal
 import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -81,7 +83,11 @@ def _entry_problem(entry: Any) -> str:
     if entry["type"] == "http" and not entry.get("url"):
         return "an http hook needs url"
     timeout = entry.get("timeout", 30.0)
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not timeout > 0 or math.isinf(timeout):
+    try:
+        valid = not isinstance(timeout, bool) and isinstance(timeout, (int, float)) and math.isfinite(float(timeout))
+    except OverflowError:  # an integer too large for a float
+        valid = False
+    if not valid or not timeout > 0:
         return "timeout must be a positive number"
     return ""
 
@@ -105,6 +111,20 @@ def build_payload(event: str, tool_name: str, tool_args: Dict[str, Any], *, sess
     if result is not None:
         payload["tool_response"] = result
     return payload
+
+
+def _label(hook: HookSpec) -> str:
+    """How a failure names the hook. The reason reaches the model and the session, so it leaves out the
+    command line and the URL's credentials, path and query, where a secret may sit."""
+    if hook.type == "http":
+        url = urllib.parse.urlsplit(hook.url or "")
+        host = url.hostname or ""
+        try:
+            port = f":{url.port}" if url.port else ""
+        except ValueError:  # a port that is not a number
+            port = ""
+        return f"{hook.event} http hook {url.scheme}://{host}{port}"
+    return f"{hook.event} {hook.type} hook"
 
 
 def _outcome(decision: str, reason: str = "", updated_input: Optional[dict] = None,
@@ -132,6 +152,8 @@ def _decision_from_stdout(text: str) -> Dict[str, Any]:
 def _from_output(output: Dict[str, Any]) -> Dict[str, Any]:
     decision = output.get("permissionDecision")
     reason = str(output.get("permissionDecisionReason") or "")
+    if decision not in (None, "allow", "deny", "ask"):
+        logger.warning("Hook returned unknown permissionDecision %r; treating it as allow.", decision)
     if decision == "ask":
         # Nobody can be asked from inside a hook call here; not running the tool is the safe answer.
         decision, reason = "deny", f"hook asked for confirmation, which DAK hooks do not support: {reason}"
@@ -156,7 +178,7 @@ def run_command_hook(hook: HookSpec, payload: Dict[str, Any]) -> Dict[str, Any]:
         except ProcessLookupError:
             pass
         proc.communicate()
-        return _outcome("error", f"hook timed out after {hook.timeout}s: {hook.command}")
+        return _outcome("error", f"hook timed out after {hook.timeout}s: {_label(hook)}")
     if proc.returncode == 2:
         return _outcome("deny", stderr.strip())
     if proc.returncode != 0:
@@ -171,13 +193,15 @@ def run_http_hook(hook: HookSpec, payload: Dict[str, Any]) -> Dict[str, Any]:
         with urllib.request.urlopen(req, timeout=hook.timeout) as resp:
             body = resp.read().decode("utf-8", errors="replace")
     except TimeoutError:
-        return _outcome("error", f"hook timed out after {hook.timeout}s: {hook.url}")
+        return _outcome("error", f"hook timed out after {hook.timeout}s: {_label(hook)}")
     except urllib.error.URLError as exc:
         if isinstance(exc.reason, TimeoutError):
-            return _outcome("error", f"hook timed out after {hook.timeout}s: {hook.url}")
-        return _outcome("error", f"hook request to {hook.url} failed: {exc}")
-    except (OSError, ValueError) as exc:
-        return _outcome("error", f"hook request to {hook.url} failed: {exc}")
+            return _outcome("error", f"hook timed out after {hook.timeout}s: {_label(hook)}")
+        return _outcome("error", f"{_label(hook)} failed: {exc}")
+    except OSError as exc:
+        return _outcome("error", f"{_label(hook)} failed: {exc}")
+    except (ValueError, http.client.HTTPException) as exc:  # bad URLs; their messages may quote the URL
+        return _outcome("error", f"{_label(hook)} failed: {type(exc).__name__}")
     return _from_output(_decision_from_stdout(body))
 
 
