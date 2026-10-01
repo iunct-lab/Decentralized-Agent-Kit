@@ -17,7 +17,7 @@ from google.genai import types
 from pydantic import ConfigDict, Field, PrivateAttr
 import inspect
 
-from . import builtin_tools, call_config, remote_tools, skill_tools
+from . import builtin_tools, call_config, plan_mode, remote_tools, skill_tools
 from .config import get_litellm_model_name, load_agent_config
 from .errors import PaymentRequiredError
 from .harness import HarnessSettings
@@ -40,6 +40,14 @@ STATE_CALLER_MCP_TOOLS = "temp:dak_caller_mcp_tools"
 # What DAK asks the model when its reply failed `dak:output_schema` / `dak:inspection`.
 INSPECTION_RETRY_PROMPT = ("Your previous response failed validation.\nValidation errors:\n{errors}\n\n"
                            "Produce a corrected response only, in the exact format required.")
+# Appended to every instruction while Plan mode is on (plan_mode.py), so a
+# small model that forgets the system prompt is reminded on each request.
+PLAN_MODE_REMINDER = (
+    "\n\n<system-reminder>You are in Plan mode. Only read-only tools (read_file, grep, list_files, "
+    "search_files, deep_think) are available; write_file/edit_file are denied except under plans/*.md, "
+    "and run_command is denied. Call plan_exit(plan_path=...) to request approval to leave Plan mode "
+    "and execute.</system-reminder>"
+)
 
 
 class AdaptiveAgent(LlmAgent):
@@ -216,7 +224,10 @@ class AdaptiveAgent(LlmAgent):
                     f"\n\n# Tool Enabled: {skill_name}\n"
                     f"You have enabled the raw tool '{skill_name}'. Use it according to its schema."
                 )
-        return instruction + self._tools_error_section(state) + self._verbatim_sections(state)
+        instruction += self._tools_error_section(state) + self._verbatim_sections(state)
+        if plan_mode.is_active(state):
+            instruction += PLAN_MODE_REMINDER
+        return instruction
 
     def _verbatim_sections(self, state: MutableMapping[str, Any]) -> str:
         """The instruction's tail built from text the user or the model wrote
