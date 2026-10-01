@@ -886,11 +886,10 @@ def _is_confirmation_answer(tool_context, result: Any) -> bool:
     """ADK's confirmation answered the call (pending or rejected), not the tool."""
     if result not in _CONFIRMATION_ANSWERS:
         return False
-    confirmation = getattr(tool_context, "tool_confirmation", None)
+    confirmation = tool_context.tool_confirmation
     if confirmation is not None and not confirmation.confirmed:
         return True
-    requested = getattr(getattr(tool_context, "actions", None), "requested_tool_confirmations", None) or {}
-    return tool_context.function_call_id in requested
+    return tool_context.function_call_id in tool_context.actions.requested_tool_confirmations
 
 
 def _call_signature(tool_name: str, tool_args: dict) -> str:
