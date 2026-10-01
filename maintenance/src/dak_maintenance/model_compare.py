@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+import httpx
+
 from .jsonutil import extract_json
 from .search import SearchResult
 from .watch import propose_technologies
@@ -27,6 +29,8 @@ CASES = ["watch", "feature-sync", "charter-review", "triage"]
 FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "model_compare"
 # What changelog.txt is the changelog of.
 TRIAGE_DEP = ("httpx", "0.27.2", "0.28.0")
+# The workflows keep 2 proposals; the comparison keeps all, so an off-scope one is not hidden.
+MAX_ITEMS = 50
 
 
 @dataclass
@@ -64,6 +68,14 @@ def load_inputs(directory: Path = FIXTURES) -> dict:
     }
 
 
+def _describe(e: Exception) -> str:
+    """One line, with what the API said (a 400's body tells "temperature not supported" from a wrong model id)."""
+    text = str(e)
+    if isinstance(e, httpx.HTTPStatusError):
+        text = f"{e.response.status_code}: {e.response.text[:500]}"
+    return " ".join(text.split())
+
+
 def run_case(case: str, complete: Callable[[str], str], inputs: dict) -> CaseResult:
     """Run one case. parsed_ok: every LLM answer was JSON and no call failed."""
     raws: list[str] = []
@@ -73,7 +85,7 @@ def run_case(case: str, complete: Callable[[str], str], inputs: dict) -> CaseRes
         try:
             raw = complete(prompt)
         except Exception as e:  # e.g. a 400 for an unsupported temperature: record it, go on
-            errors.append(str(e))
+            errors.append(_describe(e))
             raise
         raws.append(raw)
         return raw
@@ -86,10 +98,12 @@ def run_case(case: str, complete: Callable[[str], str], inputs: dict) -> CaseRes
     titles: list[str] = []
     try:
         if case == "watch":
-            titles = [p.title for p in propose_technologies(inputs["charter"], recording, search=search)]
+            titles = [p.title for p in propose_technologies(inputs["charter"], recording, search=search,
+                                                             max_items=MAX_ITEMS)]
         elif case == "feature-sync":
             titles = [p.title for p in propose_feature_adoptions(
-                inputs["deps"], recording, charter=inputs["charter"], get_changelog_fn=lambda *a: "")]
+                inputs["deps"], recording, charter=inputs["charter"], get_changelog_fn=lambda *a: "",
+                max_items=MAX_ITEMS)]
         elif case == "charter-review":
             titles = [p.title for p in review_charter(inputs["charter"], recording, search=search)]
         elif case == "triage":
@@ -100,7 +114,7 @@ def run_case(case: str, complete: Callable[[str], str], inputs: dict) -> CaseRes
             raise ValueError(f"unknown case: {case}")
     except Exception as e:
         if not errors:
-            errors.append(str(e))
+            errors.append(_describe(e))
     latency = time.monotonic() - start
     parsed_ok = not errors and bool(raws) and all(_reads_as_json(r) for r in raws)
     return CaseResult("", case, parsed_ok, len(titles), latency, None, None, "; ".join(errors), titles)
