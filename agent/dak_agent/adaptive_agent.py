@@ -4,6 +4,7 @@ import difflib
 import json
 import logging
 import os
+import re
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Tuple
 
 from google.adk.agents import LlmAgent
@@ -536,9 +537,16 @@ class AdaptiveAgent(LlmAgent):
             live_tools = tool_context._invocation_context.agent.tools
             names = [n for n in (getattr(t, "name", None) or getattr(t, "__name__", None) for t in live_tools)
                      if isinstance(n, str)]
+            # Tools inside a Toolset (MCP) are only known by the names ADK resolved and lists in the error.
+            listed = re.search(r"^Available tools: (.*)$", str(error), re.MULTILINE)
+            if listed:
+                names += [n for n in listed.group(1).split(", ") if n and n not in names]
             matches = difflib.get_close_matches(tool_name, names, n=3, cutoff=0.4)
-            hint = ("Call one of the candidates, or list_skills to see everything available." if matches
-                    else "Call list_skills to see the available tools.")
+            if "list_skills" in names:
+                hint = ("Call one of the candidates, or list_skills to see everything available." if matches
+                        else "Call list_skills to see the available tools.")
+            else:
+                hint = "Call one of the candidates." if matches else "Call one of the tools you were given."
             logger.warning(f"Unknown tool called: {tool_name} (candidates: {matches})")
             return {"observation": "unknown_tool", "tool": tool_name, "candidates": matches, "hint": hint}
 

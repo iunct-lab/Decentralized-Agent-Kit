@@ -688,11 +688,12 @@ class TestUnknownToolObservation(unittest.IsolatedAsyncioTestCase):
     def _agent(self):
         return AdaptiveAgent(model="test-model", name="test_agent", instruction="i", tools=[])
 
-    def _unknown(self, agent, name, live_tools):
+    def _unknown(self, agent, name, live_tools, available=("list_skills",)):
+        """`available` is what ADK lists in its error: every resolved tool name, Toolsets included."""
         from google.adk.tools.base_tool import BaseTool
         ctx = MagicMock()
         ctx._invocation_context.agent.tools = live_tools
-        error = ValueError(f"Tool '{name}' not found.\nAvailable tools: ...")
+        error = ValueError(f"Tool '{name}' not found.\nAvailable tools: {', '.join(available)}\n\nPossible causes: ...")
         return agent._on_tool_error(BaseTool(name=name, description="Tool not found"), {}, ctx, error)
 
     def test_on_tool_error_suggests_close_tool_names_for_unknown_tool(self):
@@ -715,6 +716,18 @@ class TestUnknownToolObservation(unittest.IsolatedAsyncioTestCase):
         result = self._unknown(self._agent(), "zzzzzz", [FunctionTool(read_file)])
         self.assertEqual(result["candidates"], [])
         self.assertEqual(result["hint"], "Call list_skills to see the available tools.")
+
+    def test_on_tool_error_suggests_tools_from_a_toolset(self):
+        """A Toolset (the MCP servers) is not a named entry of `agent.tools`; its tools
+        reach the candidates through the names ADK resolved and listed in the error."""
+        toolset = MagicMock(spec=["get_tools"])
+        result = self._unknown(self._agent(), "read_fiel", [toolset], available=("list_skills", "read_file"))
+        self.assertEqual(result["candidates"], ["read_file"])
+
+    def test_on_tool_error_hint_skips_list_skills_when_it_is_not_available(self):
+        """`dak:tools` can leave list_skills out; the hint must not send the model to it."""
+        result = self._unknown(self._agent(), "zzzzzz", [], available=("read_file",))
+        self.assertNotIn("list_skills", result["hint"])
 
     def test_on_tool_error_other_errors_unaffected(self):
         tool = MagicMock()
