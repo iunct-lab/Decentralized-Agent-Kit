@@ -882,6 +882,17 @@ _CONFIRMATION_ANSWERS = (
 )
 
 
+def _is_confirmation_answer(tool_context, result: Any) -> bool:
+    """ADK's confirmation answered the call (pending or rejected), not the tool."""
+    if result not in _CONFIRMATION_ANSWERS:
+        return False
+    confirmation = getattr(tool_context, "tool_confirmation", None)
+    if confirmation is not None and not confirmation.confirmed:
+        return True
+    requested = getattr(getattr(tool_context, "actions", None), "requested_tool_confirmations", None) or {}
+    return tool_context.function_call_id in requested
+
+
 def _call_signature(tool_name: str, tool_args: dict) -> str:
     canonical = json.dumps(tool_args, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256((tool_name + canonical).encode()).hexdigest()
@@ -1077,14 +1088,14 @@ class ContextHarnessPlugin(BasePlugin):
                 guard[skipped].remove(call_id)
                 ran = False
         original_args = guard["rewritten_calls"].pop(call_id, None)
-        if result in _CONFIRMATION_ANSWERS:
+        if _is_confirmation_answer(tool_context, result):
             # Left to the agent's own after_tool_callback (_restore_reject_reason runs
             # only when no plugin answers); the call comes back after the user's answer.
             return None
         rewrite = {} if original_args is None else {"original_args": original_args, "updated_args": dict(tool_args)}
         if tool_name == READ_TOOL_OUTPUT_NAME:  # already paged to the budget; not a call to audit
             return {"observation": "hook_rewrote_input", **rewrite, "result": result} if rewrite else None
-        if isinstance(result, dict) and (result.get("isError") or result.get("is_error")):
+        if isinstance(result, dict) and (result.get("isError") is True or result.get("is_error") is True):
             ran = False  # an MCP tool reports failure without raising
         output_rewritten = False
         if ran:  # PostToolUse audits a tool that ran and succeeded, not a call something else answered
