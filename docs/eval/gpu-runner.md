@@ -37,7 +37,7 @@ CPU 推論が遅いので `DAK_AGENT_RUN_TIMEOUT=600`、スモークの `timeout
 | 観点 | (a) self-hosted runner | (b) 推論 API へのトンネル |
 |---|---|---|
 | GPU サーバで他人のコードが動く可能性 | ある。ワークフローの定義は PR 側のものが使われるので、`runs-on: [self-hosted, gpu]` を書いた PR を出せる。承認の設定と人の目だけが止める | 無い。GPU サーバで動くのは推論サーバだけ。届くのは推論のリクエスト（プロンプト）だけ |
-| 漏れたときの影響 | runner のユーザーの権限すべて。Docker を使えるなら root 相当（下の脅威の表） | 推論サーバを他人に使われる（GPU の時間を取られる）。サーバの他のポートとホストには届かない（ACL で推論ポートだけを許す） |
+| 漏れたときの影響 | runner のユーザーの権限すべて。Docker を使えるなら root 相当（下の脅威の表） | 推論サーバの HTTP API 全体を他人に使われる。GPU の時間を取られるほか、Ollama ならモデルの削除・pull の API（`/api/delete` など）にも届く。サーバの他のポートとホストには届かない（ACL で推論ポートだけを許す） |
 | 要る secret | なし（`GITHUB_TOKEN` だけ） | Tailscale の認証。推奨は workload identity federation で、置くのは `TS_OAUTH_CLIENT_ID` と `TS_AUDIENCE`（長期の秘密ではない）。OAuth client なら `TS_OAUTH_SECRET` も |
 | 利用者の設定作業 | runner の登録（専用ユーザー・使い捨て）、Docker（rootless か VM）、推論サーバの常駐、fork の PR の承認設定、30 日以内の runner の更新 | GPU サーバに Tailscale を入れる、tailnet の ACL（runner のタグから推論ポートだけ）、federated identity の作成、推論サーバの常駐 |
 | 速度 | 推論もスタックも手元。CPU ランナーの起動と Ollama の pull が無くなる | 推論は GPU。スタックの起動は今どおり無料ランナー（数分）。Ollama の install と pull（約 4.9GB）は無くなる |
@@ -63,8 +63,11 @@ Cloudflare Tunnel など他の製品は確かめていない（未確認）。
 | runner を他のリポジトリから使われる | Organization の runner group で、このリポジトリだけに使わせる。group の既定では public リポジトリは使えないので、明示して許す。追加の group は GitHub Team プランから。この Organization のプランと group は読めなかった（未確認） | 利用者（Organization の設定） |
 | runner の版が古いまま | 新しい版が出てから 30 日以内に更新しないと、ジョブが割り当てられなくなる。自動更新を止めない | 利用者（運用） |
 
-方式 (b) の場合の対策は 2 つ: tailnet の ACL で runner のタグから推論ポートだけを許す、federated identity を
-このリポジトリの `schedule` / `workflow_dispatch` の実行だけが使えるように絞る（fork の PR には `id-token: write` が渡らない）。
+方式 (b) の場合の対策は 3 つ: tailnet の ACL で runner のタグから推論ポートだけを許す、federated identity を
+このリポジトリの `schedule` / `workflow_dispatch` の実行だけが使えるように絞る（fork の PR には `id-token: write` が渡らない）、
+推論以外の API を出さない。ACL はポートまでしか絞れないので、Ollama（モデルの削除・pull を受ける）は使わず llama-server にし、
+管理系を開ける起動オプション（`--props` など）を付けない。それでも推論以外の API（`/slots` など）は残るので、もっと絞るなら
+推論のパス（`/v1/chat/completions`・`/health`）だけを通すリバースプロキシを前に置く。
 #341 のチェックはどちらの方式でも入れる。
 
 ## 4. 空き確認の条件
@@ -73,7 +76,7 @@ GPU サーバは共有マシンで、使う前に空きを確かめる運用が�
 
 | 確認 | コマンド | 閾値（案） |
 |---|---|---|
-| GPU の空きメモリ | `nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits` | 8192 MiB 以上（`llama3.1:8b` の Q4 は約 4.9GB。KV キャッシュの余裕を足す）。推論サーバがモデルを常駐させているなら、代わりに `utilization.gpu` が 50% 未満 |
+| GPU の空きメモリ | `nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits` | 8192 MiB 以上（`llama3.1:8b` の Q4 は約 4.9GB。KV キャッシュの余裕を足す）。推論サーバがモデルを常駐させているなら、モデルの分はもう引かれているので 2048 MiB 以上（KV キャッシュと生成の余裕） |
 | ホストの負荷 | `uptime` の 1 分平均を `nproc` で割った値 | 0.5 未満 |
 | 推論サーバ | llama-server は `curl -sf http://<推論サーバ>/health`（読み込み中は 503）、Ollama は `/api/version` | 200 が返る |
 
