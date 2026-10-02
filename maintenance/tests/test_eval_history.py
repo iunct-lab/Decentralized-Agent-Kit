@@ -1,6 +1,8 @@
 import datetime
 import json
 
+import pytest
+
 from dak_maintenance.cli import main
 from dak_maintenance.eval_history import check_budget, count_runs, make_record, summarize_junit
 
@@ -81,3 +83,14 @@ def test_record_cli_appends_one_line(tmp_path, monkeypatch):
     assert json.loads(lines[1])["runner"] == "github-hosted"
     assert out.read_text() == "pass_rate=0.75\n"
     assert summary.read_text() == "### Nightly eval (bedrock/us.openai.gpt-5.6-luna)\n\n- pass_rate: **0.75** (3/4, skipped 0)\n"
+
+
+@pytest.mark.parametrize("argv", [
+    ["eval-budget", "--provider", "bedrock", "--limit", "4"],
+    ["eval-record", "--junit", "x.xml", "--model", "m"],
+])
+def test_history_path_is_required(argv):
+    # 既定の相対パスにすると、maintenance/ から実行したとき別の履歴を数えて上限を素通りする
+    with pytest.raises(SystemExit) as exc:
+        main(argv)
+    assert exc.value.code == 2
