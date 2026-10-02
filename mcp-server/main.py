@@ -1,13 +1,16 @@
+import asyncio
 import contextlib
 import os
 import re
 import subprocess
 import glob
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.routing import Mount
 import uvicorn
+
+from sandbox import SANDBOX_TTL_SECONDS, SandboxManager
 
 # DNS rebinding protection: since mcp 1.23 FastMCP auto-enables it for its
 # default host (127.0.0.1) and then accepts only localhost Host headers, which
@@ -70,6 +73,42 @@ def _cap_entries(entries: list, hint: str, limit: int = MAX_LIST_ENTRIES) -> str
     return f"{shown}\n\n[truncated: {len(entries) - limit} more entries. {hint}]"
 
 
+# Per-session isolation (docs/design/session-sandbox.md). SANDBOX_MODE=off, the
+# default, keeps every tool on the shared /projects exactly as before; an
+# unknown SANDBOX_MODE stops the server here.
+_sandbox = SandboxManager()
+
+
+def _session(ctx: Context | None) -> tuple[str, dict]:
+    """The caller's session key (the agent's X-DAK-Session-Key, #19) and its environment."""
+    request = ctx.request_context.request if ctx is not None else None
+    key = request.headers.get("x-dak-session-key", "default") if request is not None else "default"
+    return key, _sandbox.ensure_session(key)
+
+
+def _session_path(ctx: Context | None, path: str) -> str:
+    """Where a file tool's path points for this session; raises ValueError outside it."""
+    if _sandbox.mode == "docker":
+        # The workspace lives only inside the container; never fall back to this server's
+        # files, and do not start a container for a call that is refused anyway.
+        raise ValueError("file tools are not available in SANDBOX_MODE=docker yet (docs/design/session-sandbox.md)")
+    _, entry = _session(ctx)
+    if entry["workdir"] is None:
+        return path
+    root = os.path.realpath(entry["workdir"])
+    resolved = os.path.realpath(os.path.join(root, path))
+    if resolved != root and not resolved.startswith(root + os.sep):
+        raise ValueError(f"{path} is outside the session workspace")
+    return resolved
+
+
+def _shown(path: str, base: str, found: str) -> str:
+    """A path found under `base` (the resolved `path`), shown as the caller wrote it."""
+    if base == path:  # off: nothing was resolved, keep the output as before
+        return found
+    return path if found == base else os.path.join(path, os.path.relpath(found, base))
+
+
 @mcp.tool()
 async def deep_think(thought: str) -> str:
     """
@@ -80,7 +119,7 @@ async def deep_think(thought: str) -> str:
     return thought
 
 @mcp.tool()
-async def read_file(path: str, offset: int = 0, limit: int = 0) -> str:
+async def read_file(path: str, offset: int = 0, limit: int = 0, ctx: Context | None = None) -> str:
     """
     Read the content of a file. For large files, read a range of lines.
     Args:
@@ -89,7 +128,7 @@ async def read_file(path: str, offset: int = 0, limit: int = 0) -> str:
         limit: Maximum number of lines to return (default: 0 = to the end of the file).
     """
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(_session_path(ctx, path), "r", encoding="utf-8") as f:
             content = f.read()
     except Exception as e:
         return f"Error reading file: {e}"
@@ -105,7 +144,7 @@ async def read_file(path: str, offset: int = 0, limit: int = 0) -> str:
     )
 
 @mcp.tool()
-async def write_file(path: str, content: str) -> str:
+async def write_file(path: str, content: str, ctx: Context | None = None) -> str:
     """
     Write content to a file. Overwrites existing content.
     Args:
@@ -113,42 +152,49 @@ async def write_file(path: str, content: str) -> str:
         content: The content to write.
     """
     try:
+        target = _session_path(ctx, path)
         # Ensure directory exists
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
             f.write(content)
         return f"Successfully wrote to {path}"
     except Exception as e:
         return f"Error writing file: {e}"
 
 @mcp.tool()
-async def list_files(path: str = ".") -> str:
+async def list_files(path: str = ".", ctx: Context | None = None) -> str:
     """
     List files and directories in a given path.
     Args:
         path: The directory path to list (default: current directory).
     """
     try:
-        items = sorted(os.listdir(path))
+        items = sorted(os.listdir(_session_path(ctx, path)))
         return _cap_entries(items, "List a subdirectory or use search_files with a pattern.")
     except Exception as e:
         return f"Error listing files: {e}"
 
 @mcp.tool()
-async def run_command(command: str) -> str:
+async def run_command(command: str, ctx: Context | None = None) -> str:
     """
     Execute a shell command.
     Args:
         command: The command to execute.
     """
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
+        key, entry = _session(ctx)
+        if entry["mode"] == "docker":
+            result = _sandbox.exec_in_session(key, ["sh", "-c", command])
+        else:
+            # off: cwd=None, the shared /projects as before; inproc: the session directory.
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=entry["workdir"],
+            )
         # Cap each stream on its own: capping the concatenation would drop the
         # stderr of a command that wrote a lot to stdout before failing.
         hint = "Narrow the command output (e.g. pipe through head, tail or grep)."
@@ -162,7 +208,7 @@ async def run_command(command: str) -> str:
         return f"Error executing command: {e}"
 
 @mcp.tool()
-async def search_files(pattern: str, path: str = ".") -> str:
+async def search_files(pattern: str, path: str = ".", ctx: Context | None = None) -> str:
     """
     Search for files matching a glob pattern.
     Args:
@@ -170,17 +216,19 @@ async def search_files(pattern: str, path: str = ".") -> str:
         path: The root path to search in.
     """
     try:
+        base = _session_path(ctx, path)
         matches = []
-        for root, _, files in os.walk(path):
+        for root, _, files in os.walk(base):
             for file in files:
                 if glob.fnmatch.fnmatch(file, pattern):
-                    matches.append(os.path.join(root, file))
+                    matches.append(_shown(path, base, os.path.join(root, file)))
         return _cap_entries(matches, "Use a more specific pattern or path.")
     except Exception as e:
         return f"Error searching files: {e}"
 
 @mcp.tool()
-async def grep(pattern: str, path: str = ".", glob_pattern: str = "*", ignore_case: bool = False) -> str:
+async def grep(pattern: str, path: str = ".", glob_pattern: str = "*", ignore_case: bool = False,
+               ctx: Context | None = None) -> str:
     """
     Search file contents for lines matching a regular expression.
     Args:
@@ -194,11 +242,12 @@ async def grep(pattern: str, path: str = ".", glob_pattern: str = "*", ignore_ca
         regex = re.compile(pattern, flags)
         matches = []
         hint = "Narrow the search (a more specific pattern, path or glob_pattern)."
-        if os.path.isfile(path):
-            files = [path]
+        base = _session_path(ctx, path)
+        if os.path.isfile(base):
+            files = [base]
         else:
             files = []
-            for root, _, file_names in os.walk(path):
+            for root, _, file_names in os.walk(base):
                 for name in file_names:
                     if glob.fnmatch.fnmatch(name, glob_pattern):
                         files.append(os.path.join(root, name))
@@ -207,7 +256,7 @@ async def grep(pattern: str, path: str = ".", glob_pattern: str = "*", ignore_ca
                 with open(file, "r", encoding="utf-8", errors="replace") as f:
                     for line_no, line in enumerate(f, start=1):
                         if regex.search(line):
-                            matches.append(f"{file}:{line_no}: {line.rstrip()}")
+                            matches.append(f"{_shown(path, base, file)}:{line_no}: {line.rstrip()}")
                             if len(matches) >= MAX_GREP_MATCHES:
                                 break
             except Exception:
@@ -226,7 +275,8 @@ async def grep(pattern: str, path: str = ".", glob_pattern: str = "*", ignore_ca
         return f"Error searching content: {e}"
 
 @mcp.tool()
-async def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
+async def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False,
+                    ctx: Context | None = None) -> str:
     """
     Replace an exact string in a file.
     Args:
@@ -237,7 +287,8 @@ async def edit_file(path: str, old_string: str, new_string: str, replace_all: bo
                      occurrence must be unique or the edit is refused.
     """
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        target = _session_path(ctx, path)
+        with open(target, "r", encoding="utf-8") as f:
             content = f.read()
     except Exception as e:
         return f"Error reading file: {e}"
@@ -251,7 +302,7 @@ async def edit_file(path: str, old_string: str, new_string: str, replace_all: bo
         )
     new_content = content.replace(old_string, new_string)
     try:
-        with open(path, "w", encoding="utf-8") as f:
+        with open(target, "w", encoding="utf-8") as f:
             f.write(new_content)
     except Exception as e:
         return f"Error writing file: {e}"
@@ -272,10 +323,27 @@ async def lifespan(app: Starlette):
     except Exception as e:
         print(f"Error changing directory: {e}")
 
-    async with contextlib.AsyncExitStack() as stack:
-        # Initialize the FastMCP session manager
-        await stack.enter_async_context(mcp.session_manager.run())
-        yield
+    # Sessions are destroyed after SANDBOX_TTL_SECONDS without a call, and all of
+    # them when the server stops. Tool bodies are synchronous and block the event
+    # loop, so the reaper never runs in the middle of a call.
+    async def reap_loop():
+        while True:
+            await asyncio.sleep(min(SANDBOX_TTL_SECONDS, 60))
+            try:
+                _sandbox.reap_expired()
+            except Exception as e:  # a failed removal must not end the loop
+                print(f"Warning: sandbox reap failed: {e}")
+
+    _sandbox.sweep()
+    reaper = asyncio.create_task(reap_loop())
+    try:
+        async with contextlib.AsyncExitStack() as stack:
+            # Initialize the FastMCP session manager
+            await stack.enter_async_context(mcp.session_manager.run())
+            yield
+    finally:
+        reaper.cancel()
+        _sandbox.destroy_all()
 
 # Mount the StreamableHTTP server to a Starlette app
 app = Starlette(
