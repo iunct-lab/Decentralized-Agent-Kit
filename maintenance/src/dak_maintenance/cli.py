@@ -312,14 +312,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     r = sub.add_parser("eval-record", help="nightly-eval の結果を history.jsonl に 1 行追記する")
     r.add_argument("--junit", required=True)
-    r.add_argument("--history", default="docs/eval/history.jsonl")
+    r.add_argument("--history", required=True, help="docs/eval/history.jsonl のパス")
     r.add_argument("--model", required=True)
     r.add_argument("--provider", default="ollama")
     r.add_argument("--runner", default="github-hosted")
     r.set_defaults(func=cmd_eval_record)
 
     b = sub.add_parser("eval-budget", help="今月の実行回数を数えて上限を判定する")
-    b.add_argument("--history", default="docs/eval/history.jsonl")
+    b.add_argument("--history", required=True, help="docs/eval/history.jsonl のパス")
     b.add_argument("--provider", required=True)
     b.add_argument("--limit", type=_non_negative_int, required=True)
     b.set_defaults(func=cmd_eval_budget)
