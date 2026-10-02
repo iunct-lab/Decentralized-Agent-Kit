@@ -36,7 +36,7 @@ CPU 推論が遅いので `DAK_AGENT_RUN_TIMEOUT=600`、スモークの `timeout
 
 | 観点 | (a) self-hosted runner | (b) 推論 API へのトンネル |
 |---|---|---|
-| GPU サーバで他人のコードが動く可能性 | ある。ワークフローの定義は PR 側のものが使われるので、`runs-on: [self-hosted, gpu]` を書いた PR を出せる。承認の設定と人の目だけが止める | 無い。GPU サーバで動くのは推論サーバだけ。届くのは推論のリクエスト（プロンプト）だけ |
+| GPU サーバで他人のコードが動く可能性 | ある。ワークフローの定義は PR 側のものが使われるので、`runs-on: [self-hosted, gpu]` を書いた PR を出せる。承認の設定と人の目だけが止める | 無い。GPU サーバで動くのは推論サーバだけ。届くのは推論サーバの HTTP API へのリクエストだけ（次の行） |
 | 漏れたときの影響 | runner のユーザーの権限すべて。Docker を使えるなら root 相当（下の脅威の表） | 推論サーバの HTTP API 全体を他人に使われる。GPU の時間を取られるほか、Ollama ならモデルの削除・pull の API（`/api/delete` など）にも届く。サーバの他のポートとホストには届かない（ACL で推論ポートだけを許す） |
 | 要る secret | なし（`GITHUB_TOKEN` だけ） | Tailscale の認証。推奨は workload identity federation で、置くのは `TS_OAUTH_CLIENT_ID` と `TS_AUDIENCE`（長期の秘密ではない）。OAuth client なら `TS_OAUTH_SECRET` も |
 | 利用者の設定作業 | runner の登録（専用ユーザー・使い捨て）、Docker（rootless か VM）、推論サーバの常駐、fork の PR の承認設定、30 日以内の runner の更新 | GPU サーバに Tailscale を入れる、tailnet の ACL（runner のタグから推論ポートだけ）、federated identity の作成、推論サーバの常駐 |
@@ -47,7 +47,7 @@ CPU 推論が遅いので `DAK_AGENT_RUN_TIMEOUT=600`、スモークの `timeout
 | 今の Task との関係 | #342・#343 をそのまま進める | #341 はそのまま使う。#342・#343 を書き直す |
 
 推奨: **(b)**。公開リポジトリで (a) を安全にするには、下の表の対策をすべて揃える必要があり、それでも承認の設定ひとつを間違えると GPU サーバ上で他人のコードが動く。
-(b) は漏れても推論を使われるだけで、目的 A・C の速度はほぼ同じに得られる。(b) の弱みは Tailscale という外部サービスへの依存と、無料枠の非商用の条件。
+(b) は漏れても推論サーバの API を使われるだけ（管理系の API は下の対策で出さない）で、目的 A・C の速度はほぼ同じに得られる。(b) の弱みは Tailscale という外部サービスへの依存と、無料枠の非商用の条件。
 Cloudflare Tunnel など他の製品は確かめていない（未確認）。
 
 ## 3. 脅威と対策（方式 (a) の場合）
@@ -67,7 +67,7 @@ Cloudflare Tunnel など他の製品は確かめていない（未確認）。
 このリポジトリの `schedule` / `workflow_dispatch` の実行だけが使えるように絞る（fork の PR には `id-token: write` が渡らない）、
 推論以外の API を出さない。ACL はポートまでしか絞れないので、Ollama（モデルの削除・pull を受ける）は使わず llama-server にし、
 管理系を開ける起動オプション（`--props` など）を付けない。それでも推論以外の API（`/slots` など）は残るので、もっと絞るなら
-推論のパス（`/v1/chat/completions`・`/health`）だけを通すリバースプロキシを前に置く。
+スモークが使うパス（`/v1/chat/completions`・`/v1/models`・`/health`。`scripts/smoke_llamacpp.sh` がモデル名を `/v1/models` で読む）だけを通すリバースプロキシを前に置く。
 #341 のチェックはどちらの方式でも入れる。
 
 ## 4. 空き確認の条件
