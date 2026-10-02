@@ -30,7 +30,7 @@ Bedrock のクラウドモデルで回すときの費用・認証（GitHub OIDC�
 - `runner`: 実行環境（GitHub のランナーなら `github-hosted`）
 
 行は `dak-maint eval-record`（`maintenance/`）が JUnit XML から書く。経路ごとの今月の実行回数は
-`dak-maint eval-budget --provider <経路> --limit <回数>` が数え、上限に達していれば `allowed=false` と理由を出す。
+`dak-maint eval-budget --history ../docs/eval/history.jsonl --provider <経路> --limit <回数>`（`maintenance/` で実行）が数え、上限に達していれば `allowed=false` と理由を出す。
 
 pass_rate の推移を見て、モデル更新やプロンプト改善の効果を追跡する。
 
