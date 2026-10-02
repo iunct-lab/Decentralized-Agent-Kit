@@ -131,10 +131,14 @@ def test_accept_runs_the_tool(server_url):
 
 
 def test_decline_does_not_run_the_tool(server_url):
+    seen = []
+
     async def decline(context, params):
+        seen.append(params.message)
         return ElicitResult(action="decline")
 
     assert _text(_call_probe(server_url, decline)) == "not executed: decline"
+    assert seen == [QUESTION]
 
 
 def test_callback_gets_no_tool_context(server_url):
@@ -156,12 +160,18 @@ def test_callback_gets_no_tool_context(server_url):
 def test_open_call_is_bounded_by_sse_read_timeout(server_url):
     """While the callback waits (e.g. for a person), the tool call stays open; ADK's
     sse_read_timeout (default 300 s) ends it."""
+    entered = []
+
     async def slow(context, params):
-        await asyncio.sleep(3)
+        entered.append(time.monotonic())
+        await asyncio.sleep(5)
         return ElicitResult(action="accept", content={"proceed": True})
 
+    started = time.monotonic()
     response = _call_probe(server_url, slow, sse_read_timeout=1.0)
-    assert "Timed out" in response["error"]
+    assert len(entered) == 1
+    assert "Waited 1.0 seconds" in response["error"]
+    assert time.monotonic() - started < 5  # ended by the timeout, not by the answer
 
 
 def test_json_response_server_cannot_elicit(json_response_url):
