@@ -17,6 +17,7 @@ from dak_agent.harness import (
     fit_request_to_budget,
     is_context_overflow_error,
     make_compaction_config,
+    build_reset_compaction,
     make_read_tool_output_tool,
 )
 
@@ -293,6 +294,21 @@ class TestBudgetedEventSummarizer:
     async def test_empty(self):
         summarizer = BudgetedEventSummarizer(_summarizer_llm([]), self.settings)
         assert await summarizer.maybe_summarize_events(events=[]) is None
+
+
+def test_build_reset_compaction_covers_full_range():
+    """PBI #114 AC2: the reset covers every given event and keeps only the
+    original request and the handoff."""
+    events = [_event("user", text="ログを読んで", ts=1.5), _event("dak_agent", text="読んだ", ts=4.0)]
+
+    compaction = build_reset_compaction(events, "Objective: inspect logs", "ログを読んで")
+
+    assert compaction.start_timestamp == 1.5
+    assert compaction.end_timestamp == 4.0
+    assert compaction.compacted_content.role == "model"
+    assert compaction.compacted_content.parts[0].text == "User request: ログを読んで\n\nObjective: inspect logs"
+    empty = build_reset_compaction([], "h", "r")
+    assert (empty.start_timestamp, empty.end_timestamp) == (0.0, 0.0)
 
 
 class TestToolOutputBudget:
@@ -1493,6 +1509,8 @@ def _make_fake_llm(tool_calls: int | list, thoughts: bool = False, plan: bool = 
         pruned_requests: int = 0
         overflows_left: int = overflows
         request_tokens: list = []
+        request_texts: list = []
+        request_tool_results: list = []
         system_instructions: list = []
         summaries_before_request: list = []
         summary_tokens: list = []
@@ -1514,6 +1532,9 @@ def _make_fake_llm(tool_calls: int | list, thoughts: bool = False, plan: bool = 
                     usage_metadata=usage)
                 return
             self.request_tokens.append(tokens)
+            self.request_texts.append(text)
+            self.request_tool_results.append(
+                sum(1 for c in llm_request.contents for p in c.parts or [] if p.function_response))
             self.system_instructions.append(llm_request.config.system_instruction or "")
             self.summaries_before_request.append(self.summaries)
             if not any(c.role == "user" and any(p.text for p in c.parts or []) for c in llm_request.contents):
@@ -1765,6 +1786,60 @@ async def test_tool_loop_stops_at_step_limit_without_raising():
                  for p in e.content.parts or [] if p.function_response]
     assert len(responses) == limit + 3
     assert "step_limit_exceeded" in str(responses[-1].response)
+
+
+@pytest.mark.asyncio
+async def test_reset_compaction_lets_the_scripted_task_complete_from_handoff_alone():
+    """PBI #114 AC2: after a reset compaction over the whole history, the next
+    turn's request is made of the original request and the handoff only (no
+    earlier tool results), and the scripted task still completes."""
+    from google.adk.agents import LlmAgent
+    from google.adk.apps import App
+    from google.adk.events.event import Event
+    from google.adk.events.event_actions import EventActions
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.adk.tools import FunctionTool
+
+    from dak_agent.builtin_tools import format_handoff
+
+    llm = _make_fake_llm(tool_calls=[2, 0])
+    settings = HarnessSettings(context_window=WINDOW)
+    agent = LlmAgent(name="dak_agent", model=llm, instruction="Inspect the logs.", tools=[FunctionTool(big_tool)])
+    app = App(name="dak_agent", root_agent=agent, plugins=[ContextHarnessPlugin(settings, "test-model")])
+    sessions = InMemorySessionService()
+    runner = Runner(app=app, session_service=sessions)
+    session = await sessions.create_session(app_name="dak_agent", user_id="u")
+
+    async def turn(message):
+        final_text = None
+        async for event in runner.run_async(
+            user_id="u", session_id=session.id,
+            new_message=types.Content(role="user", parts=[types.Part(text=message)]),
+        ):
+            for part in (event.content.parts if event.content else None) or []:
+                if part.text and not part.thought:
+                    final_text = part.text
+        return final_text
+
+    request = "ログを全部読んで要約して"
+    assert await turn(request) == "done"
+    first_turn_tokens = max(llm.request_tokens)
+    handoff = format_handoff({"objective": "inspect logs", "done": ["read pages 1-2"],
+                              "next_steps": ["write the summary"]})
+    session = await sessions.get_session(app_name="dak_agent", user_id="u", session_id=session.id)
+    await sessions.append_event(session=session, event=Event(
+        author="user", invocation_id=Event.new_id(),
+        actions=EventActions(compaction=build_reset_compaction(session.events, handoff, request))))
+
+    reset_at = len(llm.request_texts)
+    assert await turn("続けて") == "done"
+
+    after = llm.request_texts[reset_at:]
+    assert after and all(f"User request: {request}" in t and "read pages 1-2" in t for t in after)
+    assert max(llm.request_tool_results[:reset_at]) == 2
+    assert llm.request_tool_results[reset_at:] == [0] * len(after)  # the tool results are gone
+    assert max(llm.request_tokens[reset_at:]) < first_turn_tokens // 4
 
 
 async def _run_turns(overflows: int, messages: list[str]):

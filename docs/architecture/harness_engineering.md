@@ -201,7 +201,8 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 - 長い作業を文脈のリセット後に続けるための引き継ぎ情報（目的・完了・決定・次の作業・ファイル・未解決事項）を、組み込みツール `write_handoff` が state の `dak_handoff` に置く。
 - 指示は計画と同じく state から組み直され、`# Original Request` の後に `# Handoff` として入る。組み直すのは呼び出しの始めと、`write_handoff` の直後。モデルが書いた文なので `{var}` 置換を通さない。長さは計画と同じ上限（`HarnessSettings.plan_chars`）で切り、切ったら `[truncated — call read_handoff for the full text]` を付ける。全文は組み込みツール `read_handoff` が state から返す（`write_handoff` と `read_handoff` は Pact で絞っていても呼べる）。`dak:instruction` を渡した呼び出しには入れない。
 - 組み直しは呼び出しごとに state からなので、どこから来た呼び出しかを区別しない。同じセッションを A2A（ADK の `A2aAgentExecutor`。A2A の context がセッションになる）や、再起動した別のプロセスから続けても、保存済みの handoff が入る。
-- 検証: `test_adaptive_agent.py::test_saved_handoff_reaches_a_resumed_session_in_a_new_process_verbatim`、`test_adaptive_agent.py::test_saved_handoff_reaches_a_turn_that_comes_over_a2a`、`test_adaptive_agent.py::test_handoff_written_mid_invocation_reaches_the_next_model_call`。
+- リセットの材料は `harness.build_reset_compaction(events, handoff_text, original_request_text)`。渡したイベントの範囲全体を覆う ADK の `EventCompaction` を返し、中身は `User request: <元の依頼>` と handoff の文だけ。これを `actions.compaction` に持つイベントをセッションに足すと、以降のリクエストはその範囲の生の履歴（ツールの結果も）の代わりにこの 2 つから組まれる。新しいリセットの仕組みは作らず、自動の圧縮と同じ ADK の圧縮イベントを使う。呼び出す口（`new_context` ツール）は #113。
+- 検証: `test_adaptive_agent.py::test_saved_handoff_reaches_a_resumed_session_in_a_new_process_verbatim`、`test_adaptive_agent.py::test_saved_handoff_reaches_a_turn_that_comes_over_a2a`、`test_adaptive_agent.py::test_handoff_written_mid_invocation_reaches_the_next_model_call`、`test_harness.py::test_reset_compaction_lets_the_scripted_task_complete_from_handoff_alone`、`test_harness.py::test_build_reset_compaction_covers_full_range`。
 
 ### 承認の保留と reply（#100）
 
