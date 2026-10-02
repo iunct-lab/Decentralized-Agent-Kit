@@ -8,8 +8,9 @@ PBI #301（元要望 #44・#48・#54）。利用者が自分の鍵で署名し�
 
 ### Verifiable Intent（VI）v0.1
 
-- 版: 各文書の見出しは `Version: 0.1-draft`、`Status: Draft`、`Date: 2026-02-18`。リポジトリのタグ `v0.1.0`、ライセンス Apache-2.0
-  （GitHub のリポジトリ情報と `pyproject.toml`）。文書の本文にはライセンスの記載が無い
+- 版: 規範の文書（`README.md`・`constraints.md`・`credential-format.md`・`security-model.md`）の見出しは `Version: 0.1-draft`、`Status: Draft`、
+  `Date: 2026-02-18`（`design-rationale.md` は参考の文書で、版の見出しが無い）。リポジトリのタグ `v0.1.0`、ライセンス Apache-2.0
+  （GitHub API のリポジトリ情報と、タグの `pyproject.toml` の `license`）。仕様の文書の本文にはライセンスの記載が無い
 - 3 層の SD-JWT の委譲チェーン（`spec/credential-format.md` §2〜§5）:
 
 | 層 | 署名する人 | 中身 | 寿命（推奨） |
@@ -37,6 +38,11 @@ PBI #301（元要望 #44・#48・#54）。利用者が自分の鍵で署名し�
 | `payment.reference` | `{conditional_transaction_id}`（checkout の mandate との結び付け） | 拒否（未対応） |
 | `mandate.checkout.allowed_merchant` / `mandate.checkout.line_items` | 加盟店・品目の allowlist | 拒否（未対応。DAK に checkout が無い） |
 
+- **自律モードの支払いの mandate には `payment.reference` が必須**: 「Autonomous payment mandate MUST include a `payment.reference` constraint」
+  （`credential-format.md` §4.5.3）。checkout の mandate（`mandate.checkout.open`）と対にし、対の無い mandate は拒否する（同 §8.2）。
+  つまり VI に準拠した自律モードの L2 は、必ず checkout の mandate と `payment.reference` を含む
+- **選択的開示**: `payment.amount` などは制約ごと開示するか隠すか（`constraints.md` §6.2 の「property」）。`allowed_payees` の各項目は入れ子の
+  disclosure（`{"...": "<hash>"}`）にできる。仕様では、検証者に開示されなかった項目は失敗にならず、開示された項目が無ければその制約の判定を飛ばす（§4.3 の手順 3 と注）
 - **未知の制約**: 「strictness のモードにかかわらず、未知の制約を含む open な mandate は拒否しなければならない」（`constraints.md` §5.4）。
   独自の制約の名前は URN か逆ドメイン（§6.1）
 - AP2・ACP・UCP との対応は「専用の統合ガイドに書く」とあり（`spec/README.md` §9.3）、仕様本体には無い。統合ガイドの中身は**未確認**
@@ -64,7 +70,8 @@ PBI #301（元要望 #44・#48・#54）。利用者が自分の鍵で署名し�
 | https://github.com/agent-intent/verifiable-intent の `spec/README.md`・`constraints.md`・`credential-format.md`・`security-model.md`・`design-rationale.md`、`pyproject.toml` | タグ `v0.1.0`。2026-10-02 確認 |
 | https://verifiableintent.dev | 2026-09-24 確認（PBI #301 の背景） |
 | https://github.com/google-agentic-commerce/AP2 の `docs/ap2/specification.md`・`payment_mandate.md`・`checkout_mandate.md`・`agent_authorization.md` | タグ `v0.2.0`（2026-04-28）。2026-10-02 確認 |
-| https://pypi.org/pypi/verifiable-intent/json | 404。2026-10-02 確認 |
+| https://pypi.org/pypi/verifiable-intent/json | `curl` の応答が 404。2026-10-02 確認 |
+| GitHub API（`repos/agent-intent/verifiable-intent`、`repos/google-agentic-commerce/AP2` と `/releases`）、`verifiable-intent` のタグ `v0.1.0` の `pyproject.toml` | ライセンス・リリース日・依存・`Development Status`。2026-10-02 確認 |
 
 ## DAK の「AP2」と Google の AP2
 
@@ -86,8 +93,9 @@ PBI #301（元要望 #44・#48・#54）。利用者が自分の鍵で署名し�
 | 層 | **L2 だけ**。L1 と L3 は検証しない | L1 は発行者（銀行など）が要り、DAK には居ない。L3 はエージェントが自分の鍵で署名する層で、署名する主体も検証する相手（決済ネットワーク）も DAK の中にいる。今の目的（範囲外の送金を止める）には L2 の制約で足りる。広げるなら別 PBI |
 | 信頼の起点 | 環境変数 `DAK_PAYMENT_INTENT_TRUSTED_JWKS`（利用者の**公開鍵**の JWKS）。秘密鍵はリポジトリにも env の例にも置かない | L1 の `cnf.jwk` の代わり。配置する人が利用者の公開鍵を明示的に信頼する |
 | モード | 自律モードの L2（`vct: mandate.payment.open`）。`cnf`（エージェントの鍵）は読まない | DAK ではエージェントが金額と宛先を決めるので、確定値の即時モードより制約の自律モードが合う。L3 を使わないので `cnf` は使い道が無い |
-| 署名 | ES256 だけ。`alg` はヘッダを見ずに固定する | 仕様どおり |
-| disclosure | `_sd_alg` は `sha-256` だけ。`delegate_payload` が参照する disclosure の SHA-256 が一致すること | 改ざんの検出 |
+| 署名 | ヘッダの `alg` が `ES256` でなければ拒否し、検証も ES256（P-256）に固定する（ヘッダの値で方式を選ばない） | 仕様どおり（`security-model.md` §4.5、§5.1） |
+| disclosure | `_sd_alg` は `sha-256` だけ。`delegate_payload` から入れ子（`allowed_payees` の項目など）までたどり、すべての `{"...": "<hash>"}` に SHA-256 が一致する disclosure があること。解けない参照が 1 つでも残れば拒否。どの参照からも使われない disclosure も拒否 | 改ざんと隠蔽の検出。入れ子の disclosure を差し替えても外側の署名とハッシュは変わらないので、入れ子まで照合しないと宛先を差し替えられる。隠した制約を「無いもの」として通すと、金額の上限を隠した意図で上限を超えられる |
+| 開示 | 意図はすべての disclosure を付けて渡す（DAK の検証者は利用者の意図の全体を見る）。上の「解けない参照は拒否」により、隠した制約・宛先は通らない | 仕様は開示されなかった宛先を失敗にしないが、DAK では検証者が 1 人なので隠す理由が無い |
 | 時刻 | `exp` と `iat` を時計のずれ 300 秒で判定。寿命の上限（30 日）は強制しない | 仕様の推奨値。上限は SHOULD なので、まずは期限切れだけ止める |
 | 実施する制約 | `payment.amount`、`payment.allowed_payee` | 元要望（#48「金額上限、宛先制限など」）の 2 つ |
 | それ以外の制約 | すべて拒否（理由「未対応の制約」） | 仕様の MUST（未知の制約の拒否）を、未対応の登録済みの制約にも広げる。止めずに通すと、利用者が付けた制約が黙って無視される |
@@ -99,6 +107,10 @@ PBI #301（元要望 #44・#48・#54）。利用者が自分の鍵で署名し�
 - **宛先の照合は `id` だけ**: 仕様は `id` が無い項目を `name` と `website` で照合するが、SOL の送金先は base58 のアドレスしか無いので、
   `id`（アドレス）の完全一致だけを見る。`id` の無い項目は一致しないものとして扱い、項目が空なら拒否する
 - **L1 との結び付け（`sd_hash`）を見ない**: L1 を扱わないため。信頼は上の JWKS で置き換える
+- **checkout の mandate と `payment.reference` を要求しない（DAK のプロファイル）**: DAK には checkout が無く、L3 も使わないので、対にする相手が無い。
+  DAK が受け付けるのは「支払いの mandate 1 つだけの L2」で、`payment.reference` を含む意図は「未対応の制約」で拒否する。
+  そのため **VI に準拠した自律モードの意図（必ず `payment.reference` を含む）はそのままでは通らない**。VI の発行のツールで作った意図を使い回せないのが、この案の相互運用の代償
+- **開示の扱いが仕様より厳しい**: 解けない disclosure の参照を拒否する（上の「開示」）。仕様は開示されなかった宛先を失敗にしない
 - **登録済みの制約にも対応しないものがある**: 仕様は「すべてに対応しなければならない」。DAK は対応しないものを拒否するので、安全側にずれる（通る送金が減るだけ）
 
 ## ライブラリ: 参照実装か、自前か
@@ -119,9 +131,11 @@ SD-JWT の disclosure の扱いは自分で書くことになり、`alg` を固�
 
 ## 送金を止める場所（#304 への申し送り）
 
-PBI #301 の決定ログは ADK の `before_tool_callback` を `AdaptiveAgent` に渡す案だが、今の agent にはツールの前段がプラグインとして既にある
-（`PermissionPlugin`、`agent/dak_agent/permission.py`。`ContextHarnessPlugin`、`agent/dak_agent/harness.py`）。どちらに置くか（エージェントの
-コールバックか、プラグインか）と呼ぶ順番は #304 で決め、Task と PBI の決定ログに書く。どちらでも、意図の検証は「止めるだけ」で、承認を代わりに出さない。
+PBI #301 の決定ログどおり、ADK の `before_tool_callback` を `AdaptiveAgent` に渡す。この PBI を書いた後に、ツールの前段のプラグイン
+（`PermissionPlugin`、`agent/dak_agent/permission.py`。`ContextHarnessPlugin`、`agent/dak_agent/harness.py`）が入った。ADK はプラグインの
+コールバックをエージェントのコールバックより先に呼ぶ見込みなので（#304 で確かめる）、確認を待つ・拒否するプラグインの判定が先、意図の検証が後になる。
+#304 はこの順番を確かめてテストとコードのコメントに書く。置き場所を変える必要が出たら、#304 と PBI の決定ログに書いてから変える。
+意図の検証は「止めるだけ」で、承認を代わりに出さない。
 
 ## 採用するなら
 
