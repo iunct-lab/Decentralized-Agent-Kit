@@ -16,7 +16,7 @@ DAK の「実モデル」品質を継続的に測るための仕組み（要件6
 補助: 同じスモークを安価なクラウドモデルで手動実行することもできる
 （`./scripts/smoke_cloud_llm.sh`、既定 `openai/gpt-5.6-luna`、1 回数セント程度）。
 ローカルの GPU/メモリが塞がっている時や、プロバイダ採用前の品質確認に使う。
-Bedrock のクラウドモデルで回すときの費用・認証（GitHub OIDC）・頻度の比較は `cloud-eval.md`。
+Bedrock のクラウドモデルで回すときの費用・認証（GitHub OIDC）・頻度の比較は [cloud-eval.md](cloud-eval.md)。
 
 ## history.jsonl
 

@@ -37,7 +37,7 @@ Bedrock 上のクラウドモデルで手動実行するときの費用・認証
 | GPT-5.6 Luna（Bedrock、Global CRIS） | `bedrock/global.openai.gpt-5.6-luna`（同上） | $0.20 / $1.20 | $0.0046 | 同上（2026-10-02 確認） |
 | Claude Haiku 4.5（Bedrock） | `bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0` | 未確認（二次資料では $1.00 / $5.00） | 未確認（二次資料の値なら $0.022） | [モデルカード](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-4-5.html)は価格を [Bedrock の価格ページ](https://aws.amazon.com/bedrock/pricing/) に送るが、そのページで値を確かめられなかった（2026-10-02） |
 | Nova Micro（Bedrock） | `bedrock/us.amazon.nova-micro-v1:0` | 未確認（二次資料では $0.035 / $0.14） | 未確認（二次資料の値なら $0.0008） | [モデルカード](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-micro.html)に価格は無く、[価格ページ](https://aws.amazon.com/bedrock/pricing/)でも確かめられなかった（2026-10-02） |
-| GPT-5.6 Luna（OpenAI 直、比較用） | `openai/gpt-5.6-luna` | 未確認（$0.20 / $1.20 と推定） | 未確認（推定の値なら $0.0046） | Bedrock のモデルカードの「In-Region は OpenAI の価格に 10% を足したもの」から逆算。OpenAI の価格ページは開いていない（2026-10-02） |
+| GPT-5.6 Luna（OpenAI 直、比較用） | `openai/gpt-5.6-luna` | $0.20 / $1.20 | $0.0046 | [OpenAI の価格ページ](https://developers.openai.com/api/docs/pricing)（Standard、短いコンテキスト。2026-10-02 確認） |
 
 モデルごとの注意（いずれもモデルカード、2026-10-02 確認）:
 
@@ -56,15 +56,15 @@ LiteLLM でこの名前の形が通るかは未検証で、1 回目の実行で�
 
 | 方式 | GitHub に置くもの | 有効期限 | 向き不向き |
 |---|---|---|---|
-| **GitHub OIDC → STS AssumeRole**（SigV4） | ロールの ARN とリージョン（変数。秘密ではない） | ジョブごとに発行。`role-duration-seconds`（既定 3600 秒）とロールの最大セッション時間（既定 1 時間）の短い方 | CI 向き。長期の秘密が無く、信頼ポリシーでリポジトリと environment に絞れる。`aws-actions/configure-aws-credentials`（最新 v6.3.0、2026-09-15）が `AWS_ACCESS_KEY_ID` などを環境変数に入れ、コンテナへは `docker-compose.cloud-llm.yml` が渡す |
+| **GitHub OIDC → STS AssumeRole**（SigV4） | ロールの ARN とリージョン（変数。秘密ではない） | ジョブごとに発行。長さは `role-duration-seconds`（既定 3600 秒）。ロールの最大セッション時間（既定 1 時間）を超える値を頼むと、STS は短くせずに拒否する | CI 向き。長期の秘密が無く、信頼ポリシーでリポジトリと environment に絞れる。`aws-actions/configure-aws-credentials`（最新 v6.3.0、2026-09-15）が `AWS_ACCESS_KEY_ID` などを環境変数に入れ、コンテナへは `docker-compose.cloud-llm.yml` が渡す |
 | **Bedrock API キー（長期）** | `AWS_BEARER_TOKEN_BEDROCK`（secret） | 作成時に指定（無期限も可） | 公式は「探索用に限る」ことを強く推奨し、本番では短期の認証情報に切り替えるよう書いている。漏れたときの影響が大きく、CI には向かない |
 | **Bedrock API キー（短期）** | 毎回発行し直す必要がある | 最長 12 時間 | 発行に AWS の認証情報が要り、それを CI でどう得るかの問題が残る。結局 OIDC が要る |
 
 出典: [Bedrock API キー](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-how.html)（2026-09-24 確認）。
 
-**OIDC を使う**。セッション時間とタイムアウトの関係: Bedrock で回すジョブは `timeout-minutes: 50` にする予定（#337）。
-Ollama の CPU 推論では 4 件で約 25 分かかったが、クラウドモデルは 1 回の応答が数秒なので、1 時間のセッションで足りる。
-ロールの最大セッション時間を延ばす必要はない。
+**OIDC を使う**。セッション時間とタイムアウトの関係: スモークの手順は今の夜間のジョブと同じ `timeout-minutes: 45`、Bedrock で回すジョブ全体は起動と片づけを含めて `timeout-minutes: 50` にする予定（#337）。
+どちらも 1 時間の中に収まるので、`role-duration-seconds` は 3600 のままでよく、ロールの最大セッション時間を延ばす必要はない（3600 を超える値を頼むなら、先にロールの最大セッション時間を延ばす）。
+Ollama の CPU 推論では 4 件で約 25 分かかったが、クラウドモデルは 1 回の応答が数秒なので、実際はもっと短い。
 
 ### IAM の雛形
 
