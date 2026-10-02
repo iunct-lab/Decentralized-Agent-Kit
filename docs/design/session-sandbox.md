@@ -68,7 +68,7 @@ Docker を使わず、mcp-server のプロセスの中でセッションごと�
    - 設定: `SANDBOX_MODE`（既定 `off`）、`SANDBOX_IMAGE`（既定 `python:3.12-slim`）、`SANDBOX_TTL_SECONDS`（既定 `900`）、`SANDBOX_CPUS`（既定 `1`）、`SANDBOX_MEMORY`（既定 `512m`）、`SANDBOX_PIDS_LIMIT`（既定 `128`）
    - `ensure_session(session_key)` で遅延生成し、同じキーは使い回す。`destroy_session(session_key)` で破棄（`docker rm -f` / `shutil.rmtree`）。`reap_expired(now)` で最後の利用から TTL を過ぎたものを破棄する。サーバの停止時に残りを全部破棄する `destroy_all()` も持つ（止めたサーバのコンテナを残さない）
    - 強制終了（OOM・SIGKILL）で `destroy_all()` が走らなかったコンテナは、メモリの表に無いので TTL でも消えず、同じキーの次の `docker run --name` が「名前が使われている」で失敗する。`docker` モードのコンテナには `--label dak.sandbox=1` を付け、起動時に `sweep()`（`docker ps -aq --filter label=dak.sandbox=1` の全部を `docker rm -f`）で消す。同じ Docker デーモンを `docker` モードの mcp-server 2 つで共有すると、後から起動した方が先の方のコンテナを消す。共有しないこととする
-   - `subprocess.run` は差し替えられるようにし、単体テストは組み立てたコマンドと状態の遷移だけを見る（実際のコンテナは #285）
+   - `subprocess.run` は差し替えられるようにし、単体テストは組み立てたコマンドと状態の遷移だけを見る（実際のコンテナは #446）
    - 許可・拒否の判断は持たない
 2. **配線（`mcp-server/main.py`、#284）**
    - ツール関数に `ctx: Context | None = None` を足し、`X-DAK-Session-Key` を読む（無ければ `default`。ヘッダを送らない相手どうしは同じ隔離を共有する）
@@ -82,8 +82,8 @@ Docker を使わず、mcp-server のプロセスの中でセッションごと�
    - ソケットのマウントは基本の `docker-compose.yml` に入れず、opt-in の上書きファイル（`docker-compose.sandbox.yml`。`SANDBOX_MODE=docker` とソケットを一緒に設定する）に置く。基本の構成でソケットが見えることは無い
    - mcp-server は、ソケット（`/var/run/docker.sock`）が見えるのに `SANDBOX_MODE` が `docker` でなければ起動を拒む（上の「リスク」: 隔離の外の `run_command` がホストの root 相当になる組み合わせを作らない）
    - `docker` モードのファイル系ツールを `docker exec` で動かす Task を切る
-   - #285 の `docker` モードの実機検証（2 セッションの不可視、ネットワーク遮断、`docker inspect` の `NanoCpus` / `Memory` / `PidsLimit`、TTL 後の `docker ps`）を行う
-4. **検証（#285）**: `inproc` の不可視と破棄は `cd mcp-server && uv run pytest -q` で確かめる（Docker 不要）。`docker` モードは Docker のデーモンに届く実機でだけ確かめられ、明示の環境変数（`DAK_SANDBOX_DOCKER_TESTS=1`）が無ければ `pytest.mark.skipif` で飛ばす（承認のあとにコードを直さずに回せるように。理由の文に「未承認なら回さない」と書く）。`tests/integration/` が通っても `docker` モードを確かめたことにはならない（`permission-boundary.md` の「#20 への制約」）
+   - `docker` モードの実機検証（#446。#285 の手順 3〜5 を分けたもの）（2 セッションの不可視、ネットワーク遮断、`docker inspect` の `NanoCpus` / `Memory` / `PidsLimit`、TTL 後の `docker ps`）を行う
+4. **検証（#285 / #446）**: `inproc` の不可視と破棄は（#285） `cd mcp-server && uv run pytest -q` で確かめる（Docker 不要）。`docker` モードは Docker のデーモンに届く実機でだけ確かめられ、明示の環境変数（`DAK_SANDBOX_DOCKER_TESTS=1`）が無ければ `pytest.mark.skipif` で飛ばす（承認のあとにコードを直さずに回せるように。理由の文に「未承認なら回さない」と書く）。`tests/integration/` が通っても `docker` モードを確かめたことにはならない（`permission-boundary.md` の「#20 への制約」）
 
 ## 利用者の判断（#20 の `## 判断待ち`）
 
@@ -95,8 +95,11 @@ Docker を使わず、mcp-server のプロセスの中でセッションごと�
 
 どれを選んでも、#283 と #284 のうち `off` / `inproc` の部分は同じなので、回答を待たずに進める（#20 の決定ログ 2026-09-30）。
 
+## 確かめたこと
+
+- 2026-09-30: `SANDBOX_MODE=inproc` の mcp-server を uvicorn で起動し、`X-DAK-Session-Key` の異なる 2 つの MCP クライアント（`mcp` の `streamablehttp_client`）から呼んだ。ヘッダは `ctx.request_context.request.headers` で取れ、互いのファイルは見えず、`../` は拒まれ、TTL のあと作業ディレクトリは消えた（#284 の PR #444）。inproc の不可視と破棄は `mcp-server/tests/` の単体テストでも確かめる（#285）
+
 ## 未検証事項
 
-- `ctx.request_context.request.headers` で `X-DAK-Session-Key` が取れることはコードから読んだもので、実機では確かめていない（#284 の手順 1）
-- `docker` モードの隔離（上のフラグが実際に効くこと、TTL の破棄）は動かしていない（#285、承認後）
+- `docker` モードの隔離（上のフラグが実際に効くこと、TTL の破棄）は動かしていない（#446、承認後）
 - rootless の Docker では、ソケットに触れて得られるのはそのデーモンを動かすユーザの権限で、上の「リスク」（ホストの root 相当）より小さい。一方で `--cpus` / `--pids-limit` は cgroup v2 の委譲が無いと効かない。どちらも実機で確かめていない

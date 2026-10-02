@@ -1,7 +1,9 @@
 import importlib
 import os
+import shutil
 import subprocess
 import sys
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -164,6 +166,37 @@ class TestSandboxManager(unittest.TestCase):
             manager.exec_in_session("s1", ["ls"])
         self.assertEqual(run.call_args.args[0], ["ls"])
         self.assertEqual(run.call_args.kwargs["cwd"], "/tmp/dak-sandbox-x")
+
+    def test_two_session_keys_get_different_inproc_workdirs(self):
+        # Real mkdtemp/rmtree: no Docker needed.
+        manager = SandboxManager(mode="inproc")
+        try:
+            first = manager.ensure_session("alice:s1")["workdir"]
+            second = manager.ensure_session("bob:s2")["workdir"]
+            self.assertNotEqual(first, second)
+            self.assertTrue(os.path.isdir(first) and os.path.isdir(second))
+        finally:
+            manager.destroy_all()
+
+    def test_inproc_workdir_is_removed_on_destroy(self):
+        manager = SandboxManager(mode="inproc")
+        workdir = manager.ensure_session("s1")["workdir"]
+        try:
+            with open(os.path.join(workdir, "left.txt"), "w") as f:
+                f.write("x")
+            manager.destroy_session("s1")
+            self.assertFalse(os.path.exists(workdir))
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+
+    def test_inproc_workdir_is_removed_after_the_ttl(self):
+        manager = SandboxManager(mode="inproc", ttl_seconds=10)
+        workdir = manager.ensure_session("s1")["workdir"]
+        try:
+            self.assertEqual(manager.reap_expired(now=time.monotonic() + 11), ["s1"])
+            self.assertFalse(os.path.exists(workdir))
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
 
     def test_destroy_all_removes_every_session(self):
         run = MagicMock()

@@ -266,6 +266,21 @@ class TestSessionSandboxRouting(unittest.IsolatedAsyncioTestCase):
             finally:
                 sandbox.destroy_all()
 
+    async def test_write_file_uses_session_workdir_when_ctx_present(self):
+        with patch.object(main, "_sandbox", SandboxManager(mode="inproc")) as sandbox:
+            try:
+                await main.write_file("sub/note.txt", "from s1", ctx=_ctx("s1"))
+                workdir = sandbox.ensure_session("s1")["workdir"]
+                with open(os.path.join(workdir, "sub", "note.txt")) as f:
+                    self.assertEqual(f.read(), "from s1")
+                # Another session sees none of it, through any file tool.
+                self.assertIn("No such file", await main.read_file("sub/note.txt", ctx=_ctx("s2")))
+                self.assertEqual(await main.list_files(".", ctx=_ctx("s2")), "")
+                self.assertEqual(await main.search_files("*.txt", ".", ctx=_ctx("s2")), "")
+                self.assertEqual(await main.grep("from", ".", ctx=_ctx("s2")), "No matches found.")
+            finally:
+                sandbox.destroy_all()
+
     async def test_docker_run_command_executes_in_the_session_container(self):
         run = MagicMock()
         run.return_value = MagicMock(returncode=0, stdout="hi\n", stderr="")
