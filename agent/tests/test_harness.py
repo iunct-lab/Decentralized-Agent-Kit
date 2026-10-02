@@ -1492,7 +1492,8 @@ THOUGHT_FRAGMENTS = ["考える。"] * 850
 PLAN = [{"step": "read repo", "status": "done"}, {"step": "write summary", "status": "pending"}]
 
 
-def _make_fake_llm(tool_calls: int | list, thoughts: bool = False, plan: bool = False, overflows: int = 0):
+def _make_fake_llm(tool_calls: int | list, thoughts: bool = False, plan: bool = False, overflows: int = 0,
+                   finish_when: str | None = None):
     from google.adk.models.base_llm import BaseLlm
     from google.adk.models.llm_response import LlmResponse
 
@@ -1502,7 +1503,9 @@ def _make_fake_llm(tool_calls: int | list, thoughts: bool = False, plan: bool = 
         not cut the loop short), then answers. Records request sizes
         and how many requests carried a pruned tool result.
         With `plan`, the first step records a plan with write_todos. The first
-        `overflows` requests are rejected as too large whatever their size."""
+        `overflows` requests are rejected as too large whatever their size.
+        With `finish_when`, it answers "done" only when the request carries that
+        text, and "unfinished" otherwise."""
         steps: int = 0
         turn: int = 0
         turn_steps: int = 0
@@ -1558,8 +1561,10 @@ def _make_fake_llm(tool_calls: int | list, thoughts: bool = False, plan: bool = 
             elif self.turn_steps <= self.calls_this_turn() + int(plan):
                 part = types.Part(function_call=types.FunctionCall(
                     id=f"fc-{self.steps}", name="big_tool", args={"page": self.steps}))
-            else:
+            elif finish_when is None or finish_when in text:
                 part = types.Part(text="done")
+            else:
+                part = types.Part(text="unfinished")
             parts = [types.Part(text=f, thought=True) for f in THOUGHT_FRAGMENTS] + [part] if thoughts else [part]
             yield LlmResponse(content=types.Content(role="model", parts=parts), usage_metadata=usage)
 
@@ -1790,9 +1795,10 @@ async def test_tool_loop_stops_at_step_limit_without_raising():
 
 @pytest.mark.asyncio
 async def test_reset_compaction_lets_the_scripted_task_complete_from_handoff_alone():
-    """PBI #114 AC2: after a reset compaction over the whole history, the next
-    turn's request is made of the original request and the handoff only (no
-    earlier tool results), and the scripted task still completes."""
+    """PBI #114 AC2: the task is reset halfway (pages read, summary not
+    written). The next turn's request is made of the original request and the
+    handoff only (no earlier tool results), and the task completes only because
+    the handoff carries the remaining step."""
     from google.adk.agents import LlmAgent
     from google.adk.apps import App
     from google.adk.events.event import Event
@@ -1803,7 +1809,7 @@ async def test_reset_compaction_lets_the_scripted_task_complete_from_handoff_alo
 
     from dak_agent.builtin_tools import format_handoff
 
-    llm = _make_fake_llm(tool_calls=[2, 0])
+    llm = _make_fake_llm(tool_calls=[2, 0], finish_when="write the summary")
     settings = HarnessSettings(context_window=WINDOW)
     agent = LlmAgent(name="dak_agent", model=llm, instruction="Inspect the logs.", tools=[FunctionTool(big_tool)])
     app = App(name="dak_agent", root_agent=agent, plugins=[ContextHarnessPlugin(settings, "test-model")])
@@ -1823,7 +1829,7 @@ async def test_reset_compaction_lets_the_scripted_task_complete_from_handoff_alo
         return final_text
 
     request = "ログを全部読んで要約して"
-    assert await turn(request) == "done"
+    assert await turn(request) == "unfinished"
     first_turn_tokens = max(llm.request_tokens)
     handoff = format_handoff({"objective": "inspect logs", "done": ["read pages 1-2"],
                               "next_steps": ["write the summary"]})
