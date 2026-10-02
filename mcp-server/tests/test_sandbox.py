@@ -147,6 +147,24 @@ class TestSandboxManager(unittest.TestCase):
         self.assertEqual(run.call_count, 2)
         self.assertIn("timed out", warn.call_args.args[0])  # the operator gets a signal
 
+    def test_exec_in_session_runs_inside_the_container_with_a_time_limit(self):
+        run = MagicMock()
+        manager = SandboxManager(mode="docker", run=run)
+        name = manager.ensure_session("s1")["container_name"]
+        manager.exec_in_session("s1", ["sh", "-c", "ls"])
+        cmd = run.call_args.args[0]
+        # timeout inside the container: killing the docker CLI alone leaves the process running.
+        self.assertEqual(cmd, ["docker", "exec", "-w", "/workspace", name, "timeout", "60", "sh", "-c", "ls"])
+        self.assertIn("timeout", run.call_args.kwargs)
+
+    def test_exec_in_session_inproc_uses_the_workdir(self):
+        run = MagicMock()
+        with patch("sandbox.tempfile.mkdtemp", return_value="/tmp/dak-sandbox-x"):
+            manager = SandboxManager(mode="inproc", run=run)
+            manager.exec_in_session("s1", ["ls"])
+        self.assertEqual(run.call_args.args[0], ["ls"])
+        self.assertEqual(run.call_args.kwargs["cwd"], "/tmp/dak-sandbox-x")
+
     def test_destroy_all_removes_every_session(self):
         run = MagicMock()
         manager = SandboxManager(mode="docker", run=run)

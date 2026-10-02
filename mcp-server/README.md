@@ -92,6 +92,26 @@ The server is configured in `main.py`:
 - **Transport**: `streamable-http`
 - **Session Mode**: Stateful (for clean session lifecycle)
 
+### Per-session isolation (`SANDBOX_MODE`)
+
+The file tools and `run_command` can run in an environment of their own for each
+user session, keyed by the agent's `X-DAK-Session-Key` header (calls without it
+share the session `default`). Design: `docs/design/session-sandbox.md`.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SANDBOX_MODE` | `off` | `off`: no isolation, every tool uses the shared `/projects` as before. `inproc`: a temporary directory per session; file-tool paths outside it are refused. Not a security boundary: `run_command` starts there but can reach anything. `docker`: a disposable container per session; `run_command` runs inside it (file tools are not available in this mode yet). An unknown value stops the server. |
+| `SANDBOX_IMAGE` | `python:3.12-slim` | Image of the `docker` mode containers |
+| `SANDBOX_TTL_SECONDS` | `900` | A session unused this long is destroyed; all are destroyed when the server stops |
+| `SANDBOX_CPUS` | `1` | `docker run --cpus` |
+| `SANDBOX_MEMORY` | `512m` | `docker run --memory` |
+| `SANDBOX_PIDS_LIMIT` | `128` | `docker run --pids-limit` |
+
+`docker` mode needs a Docker daemon the server can reach. `docker-compose.yml`
+does not mount the host's Docker socket into this container: whoever controls
+that socket controls the host, so mounting it waits for an explicit decision
+(PBI #20).
+
 ## Dependencies
 
 Managed via `uv` and defined in `pyproject.toml`:
