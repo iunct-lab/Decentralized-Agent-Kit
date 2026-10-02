@@ -483,6 +483,18 @@ class BudgetedEventSummarizer(LlmEventSummarizer):
             events, types.Content(role="model", parts=[types.Part(text=excerpt)]), None)
 
 
+def build_reset_compaction(events: list[Event], handoff_text: str, original_request_text: str) -> EventCompaction:
+    """A compaction covering all of `events` that keeps only the original
+    request and the handoff: append it in an event's `actions.compaction` and
+    later requests resume from those two instead of the raw history."""
+    return EventCompaction(
+        start_timestamp=events[0].timestamp if events else 0.0,
+        end_timestamp=events[-1].timestamp if events else 0.0,
+        compacted_content=types.Content(role="model", parts=[types.Part(
+            text=f"User request: {original_request_text}\n\n{handoff_text}")]),
+    )
+
+
 def make_compaction_config(settings: HarnessSettings, llm: Any = None) -> EventsCompactionConfig:
     """ADK events compaction: token-threshold (in-invocation) + sliding window.
 
