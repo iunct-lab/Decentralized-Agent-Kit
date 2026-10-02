@@ -29,6 +29,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: astral-sh/setup-uv@v7
+
       - name: Cache Ollama models
         uses: actions/cache@v6
         with:
@@ -61,8 +63,6 @@ jobs:
             sleep 15
           done
 
-      - uses: astral-sh/setup-uv@v7
-
       - name: Start stack against host Ollama
         env:
           LOCAL_MODEL_NAME: ollama_chat/${{ env.MODEL }}
@@ -94,33 +94,11 @@ jobs:
 
       - name: Summarize and append history
         if: always()
+        working-directory: maintenance
         run: |
-          python3 - <<'PY'
-          import datetime, json, os, xml.etree.ElementTree as ET
-          path = "tests/integration/eval-report.xml"
-          total = failures = errors = skipped = 0
-          if os.path.exists(path):
-              root = ET.parse(path).getroot()
-              suites = root.findall("testsuite") or [root]
-              for s in suites:
-                  total += int(s.get("tests", 0)); failures += int(s.get("failures", 0))
-                  errors += int(s.get("errors", 0)); skipped += int(s.get("skipped", 0))
-          passed = total - failures - errors - skipped
-          rate = round(passed / total, 3) if total else 0.0
-          rec = {
-              "date": datetime.date.today().isoformat(),
-              "model": os.environ["MODEL"],
-              "total": total, "passed": passed, "failed": failures + errors,
-              "skipped": skipped, "pass_rate": rate,
-          }
-          os.makedirs("docs/eval", exist_ok=True)
-          with open("docs/eval/history.jsonl", "a", encoding="utf-8") as f:
-              f.write(json.dumps(rec) + "\n")
-          summary = f"### Nightly eval ({rec['model']})\n\n- pass_rate: **{rate}** ({passed}/{total}, skipped {skipped})\n"
-          with open(os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null"), "a") as f:
-              f.write(summary)
-          print(summary)
-          PY
+          uv sync
+          uv run dak-maint eval-record --junit ../tests/integration/eval-report.xml \
+            --history ../docs/eval/history.jsonl --model "$MODEL"
 
       - name: Commit history (soft-fail if main protected)
         if: always()
