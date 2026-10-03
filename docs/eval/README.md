@@ -23,8 +23,14 @@ Bedrock のクラウドモデルで回すときの費用・認証（GitHub OIDC�
 1 行 1 実行の JSON Lines:
 
 ```json
-{"date": "2026-07-04", "model": "llama3.2:3b", "total": 4, "passed": 3, "failed": 1, "skipped": 0, "pass_rate": 0.75}
+{"date": "2026-10-02", "model": "llama3.1:8b", "total": 4, "passed": 3, "failed": 1, "skipped": 0, "pass_rate": 0.75, "provider": "ollama", "runner": "github-hosted"}
 ```
+
+- `provider`: どの経路で回したか（`ollama` / `bedrock`）。この項目の無い古い行は `ollama` とみなす
+- `runner`: 実行環境（GitHub のランナーなら `github-hosted`）
+
+行は `dak-maint eval-record`（`maintenance/`）が JUnit XML から書く。経路ごとの今月の実行回数は
+`dak-maint eval-budget --history ../docs/eval/history.jsonl --provider <経路> --limit <回数>`（`maintenance/` で実行）が数え、上限に達していれば `allowed=false` と理由を出す。
 
 pass_rate の推移を見て、モデル更新やプロンプト改善の効果を追跡する。
 

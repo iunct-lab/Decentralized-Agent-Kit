@@ -7,6 +7,8 @@ Subcommands:
   collect-deps   マージ済み deps PR の本文（標準入力の JSON）から依存の一覧を出力
   charter-review 憲章の見直し提案 JSON を出力
   compare-models 固定の入力で複数のモデルに保守のプロンプトを投げ、結果を Markdown の表にする
+  eval-record    nightly-eval の JUnit XML を docs/eval/history.jsonl に 1 行追記する
+  eval-budget    経路ごとの今月の実行回数を数え、上限に達していれば allowed=false を出す
 
 reasoning 系（watch/feature-sync/charter-review）は LLM 必須。MAINT_LLM_* 未設定なら
 proposals は空を返す（ワークフローは 0 件として扱う）。
@@ -15,6 +17,7 @@ proposals は空を返す（ワークフローは 0 件として扱う）。
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import sys
@@ -28,7 +31,7 @@ from .llm_client import make_complete
 from .watch import propose_technologies
 from .feature import deps_from_prs, propose_feature_adoptions
 from .charter import review_charter
-from . import model_compare
+from . import eval_history, model_compare
 
 
 def _bool(s: str) -> bool:
@@ -226,6 +229,38 @@ def cmd_compare_models(args: argparse.Namespace) -> int:
     return 0
 
 
+def _append(env: str, text: str) -> None:
+    path = os.getenv(env)
+    if path:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(text)
+
+
+def cmd_eval_record(args: argparse.Namespace) -> int:
+    summary = eval_history.summarize_junit(args.junit)
+    rec = eval_history.make_record(summary, model=args.model, provider=args.provider,
+                                   runner=args.runner, today=datetime.date.today())
+    os.makedirs(os.path.dirname(os.path.abspath(args.history)), exist_ok=True)
+    with open(args.history, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec) + "\n")
+    text = (f"### Nightly eval ({rec['model']})\n\n- pass_rate: **{rec['pass_rate']}** "
+            f"({rec['passed']}/{rec['total']}, skipped {rec['skipped']})\n")
+    _append("GITHUB_OUTPUT", f"pass_rate={rec['pass_rate']}\n")
+    _append("GITHUB_STEP_SUMMARY", text)
+    print(text)
+    return 0
+
+
+def cmd_eval_budget(args: argparse.Namespace) -> int:
+    count = eval_history.count_runs(args.history, provider=args.provider,
+                                    year_month=datetime.date.today().strftime("%Y-%m"))
+    allowed, reason = eval_history.check_budget(count, args.limit, provider=args.provider)
+    _append("GITHUB_OUTPUT", f"allowed={str(allowed).lower()}\nreason={reason}\n")
+    _append("GITHUB_STEP_SUMMARY", f"- {reason}\n")
+    print(json.dumps({"allowed": allowed, "count": count, "limit": args.limit, "reason": reason}, ensure_ascii=False))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="dak-maint", description="DAK self-maintenance toolkit")
     sub = p.add_subparsers(dest="command", required=True)
@@ -274,6 +309,20 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--cases", default=",".join(model_compare.CASES))
     m.add_argument("--out", default=None, help="Markdown の出力先（無ければ標準出力）")
     m.set_defaults(func=cmd_compare_models)
+
+    r = sub.add_parser("eval-record", help="nightly-eval の結果を history.jsonl に 1 行追記する")
+    r.add_argument("--junit", required=True)
+    r.add_argument("--history", required=True, help="docs/eval/history.jsonl のパス")
+    r.add_argument("--model", required=True)
+    r.add_argument("--provider", default="ollama")
+    r.add_argument("--runner", default="github-hosted")
+    r.set_defaults(func=cmd_eval_record)
+
+    b = sub.add_parser("eval-budget", help="今月の実行回数を数えて上限を判定する")
+    b.add_argument("--history", required=True, help="docs/eval/history.jsonl のパス")
+    b.add_argument("--provider", required=True)
+    b.add_argument("--limit", type=_non_negative_int, required=True)
+    b.set_defaults(func=cmd_eval_budget)
     return p
 
 

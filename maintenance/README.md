@@ -10,7 +10,8 @@ DAK が自分自身を保守するためのツールキット（要件2/3のド�
 - `search` — Web 検索（**Tavily API**。LLM とは分離。規約遵守のためスクレイピングはしない）
 - `watch` / `feature` / `charter` — tech-watch / feature-sync / charter-review の提案パイプライン
 - `model_compare` — 固定の入力（`tests/fixtures/model_compare/`）で複数のモデルに保守のプロンプトを投げて比べる
-- `cli` — `dak-maint {triage,watch,feature-sync,collect-deps,charter-review,compare-models}`（ワークフローから呼ぶ。`collect-deps` は `gh pr list --json body` の出力を標準入力で受け、feature-sync に渡す依存の一覧を出す）
+- `eval_history` — nightly-eval の結果の記録（`docs/eval/history.jsonl`）と、経路ごとの月の実行回数の上限（`docs/eval/README.md`）
+- `cli` — `dak-maint {triage,watch,feature-sync,collect-deps,charter-review,compare-models,eval-record,eval-budget}`（ワークフローから呼ぶ。`collect-deps` は `gh pr list --json body` の出力を標準入力で受け、feature-sync に渡す依存の一覧を出す）
 
 同じロジックは `agent/skills/dependency-maintenance/` の DAK スキルからも利用でき、
 DAK 自エージェントが対話的にトリアージを実行できる。
