@@ -38,6 +38,7 @@
 | `dak:instruction` | 文字列。そのセッションのシステムプロンプトになる（既定の指示・モード指示・スキルの追記を置き換える） | `AGENT_INSTRUCTION`（とモード・スキル）のまま |
 | `dak:output_schema` | JSON Schema（dict、Draft 2020-12）。LLM のリクエストに構造化出力の指定（`response_schema`、`response_mime_type=application/json`）が入り、最終応答はこのスキーマで検証される | 指定なし。今までどおりの自由形式の応答 |
 | `dak:tools` | ツール名のリスト（または `{"names": [...]}`）。その呼び出しで使うツールを、組み込みのツールと既定の MCP のツールから名前で選ぶ。`[]` ならツールなし（LLM のリクエストにツールの定義が 1 つも載らない）。`{"mcp_servers": [{"url": "...", "type": "http"\|"sse"}], "names"?: [...]}` なら、呼び出し元の MCP のツールだけを使い（確認待ちなし）、既定のツールは使わない。スキル・モードによる組み立てより優先する | スキル・モードによる今までどおりの組み立て |
+| `dak:inspection` | 最終応答にかける検査。`{"json_schema"?: {...}, "http"?: {"url", "timeout_seconds"?}, "mcp"?: {"url", "tool", "timeout_seconds"?}}`。落ちた応答はエラーを添えて作り直させる（下の「検査と作り直し」） | 検査なし |
 | `dak:model` | LiteLLM のモデル ID（例: `bedrock/openai.gpt-5.6-luna`、`openai/gpt-5.6-luna`）。その呼び出しの LLM リクエストだけがこのモデルに向かう。運用者が `DAK_ALLOWED_MODELS` で許可したものだけ使える | `MODEL_NAME` のまま |
 
 - `dak:instruction` の文字列はそのまま LLM に届く。ADK の `{名前}` 差し込み（セッション state の値で置き換える機能）は通さないので、`{date}` のような文字を含めてよい
@@ -100,14 +101,27 @@
 - A2A の metadata で渡した値は、その呼び出しだけに効く（state には書かれない）
 - 両方にあるときは、セッション state の値が勝つ（state > A2A metadata > `custom_metadata`）。1 つのセッションで 2 つの経路を混ぜないこと
 
-## 応答がスキーマに合わないとき
+## 検査と作り直し（`dak:output_schema` / `dak:inspection`）
 
-最終応答（ツール呼び出しを含まないテキスト）が `dak:output_schema` に合わなければ、DAK はその応答を次の JSON に差し替えて返す。
-再試行はしない（検査と再試行は #140 の範囲）。
+最終応答（ツール呼び出しを含まないテキスト）が `dak:output_schema` か `dak:inspection` に落ちたら、DAK はこのターンの利用者の入力・落ちた応答・検査のエラーを渡して、モデルに応答を作り直させる（ツールは渡さない）。通った応答を返す。1 回目で通れば LLM の呼び出しは 1 回のまま。
+
+- 試行は最初の応答を含めて最大 `max_llm_calls`（`dak:max_llm_calls` と運用者の `DAK_MAX_LLM_CALLS` の小さい方）、どちらも無ければ 3 回
+- `dak:inspection` の検査は、応答を JSON として読んでから順にかけ、エラーをつなげる
+  - `json_schema`: JSON Schema（`dak:output_schema` と同じ検証。構造化出力の指定はしない）
+  - `http`: 呼び出し元のエンドポイントに応答を JSON で POST する。答えは `{"valid": true}` か `{"valid": false, "errors": [{"path": "...", "message": "..."}]}`。2xx 以外・接続できない・JSON でない答えは、検査に落ちた扱い
+  - `mcp`: 呼び出し元の MCP サーバ（streamable HTTP）のツール `tool` を `{"data": <応答>}` で 1 回呼ぶ。ツールのテキストの答えは `http` と同じ形
+  - `timeout_seconds` は 1 回の検査の上限（既定 10、最大 60）
+- 検査そのものが動かなかったとき（エンドポイントに繋がらない・時間切れ・答えが読めない・MCP のツールのエラー）は、作り直しても直らないので作り直さず、そのエラーで失敗を返す。そのエラーには `"unavailable": true` が付く
+- `http` / `mcp` の URL は、運用者が環境変数 `DAK_ALLOWED_INSPECTION_URLS`（カンマ区切りの URL、完全一致）で許可したものだけ。未設定なら検査エンドポイントは使えない（agent コンテナから呼び出し元の選んだ URL へリクエストさせないため。`DAK_ALLOWED_MCP_URLS` と同じ理由）。リダイレクトは追わない
+- 許可されない URL・形の誤り・正しくない検査のスキーマは、LLM を呼ぶ前に `{"error": "inspection_url_not_allowed" | "invalid_inspection", ...}` を返して止まる
+
+上限まで落ち続けたら、最後の応答を次の JSON に差し替えて返す。`error` は `dak:inspection` があれば `inspection_failed`、`dak:output_schema` だけなら `output_schema_validation_failed`。
 
 ```json
 {
   "error": "output_schema_validation_failed",
+  "attempts": 3,
+  "last_response": "{\"note\": \"missing date\"}",
   "issues": [
     {"path": "date", "message": "'date' is a required property"},
     {"path": "summary/count", "message": "'three' is not of type 'integer'"}
@@ -124,6 +138,7 @@
 ## 検証しているテスト
 
 - `agent/tests/test_call_scoped_instruction.py` — 指示がそのセッションのシステムプロンプトだけになる。並行する別セッションは既定のまま
-- `agent/tests/test_call_scoped_output_schema.py` — リクエストに構造化出力の指定が入る。合わない応答が構造化された失敗になる
-- `tests/integration/test_call_config_flow.py` — 実際の構成（agent コンテナ → LiteLLM → fake-LLM）で同じことを確かめる
+- `agent/tests/test_call_scoped_output_schema.py` — リクエストに構造化出力の指定が入る。落ちた応答が作り直され、上限で構造化された失敗になる
+- `agent/tests/test_call_config.py` — `dak:inspection` の形・許可一覧・JSON Schema / HTTP / MCP の検査
+- `tests/integration/test_call_config_flow.py` — 実際の構成（agent コンテナ → LiteLLM → fake-LLM、呼び出し元の検査エンドポイントは `inspect-server`）で同じことを確かめる
 - `tests/integration/test_minimal_overhead.py` — 指示と出力スキーマだけで `dak:tools: []` の呼び出しが、LLM を 1 回・ツール定義なし・直接呼び出しとの差 20 トークン以内で呼ぶ（`serverless.md` §2）
