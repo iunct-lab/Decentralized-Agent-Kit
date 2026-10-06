@@ -20,7 +20,9 @@ def no_remote_mcp_discovery():
         yield
 
 
-def _recording_llm(reply='{"date": "2026-09-22"}'):
+def _recording_llm(reply='{"date": "2026-09-22"}', replies=None):
+    """Answers `replies` in turn (the last one repeats), or always `reply`;
+    an exception in `replies` is raised instead."""
     from google.adk.models._capabilities import LlmCapabilities
     from google.adk.models.base_llm import BaseLlm
     from google.adk.models.llm_response import LlmResponse
@@ -35,8 +37,11 @@ def _recording_llm(reply='{"date": "2026-09-22"}'):
 
         async def generate_content_async(self, llm_request, stream=False):
             requests.append(llm_request)
+            text = replies[min(len(requests), len(replies)) - 1] if replies else reply
+            if isinstance(text, Exception):
+                raise text
             yield LlmResponse(content=types.Content(
-                role="model", parts=[types.Part(text=reply)]))
+                role="model", parts=[types.Part(text=text)]))
 
     return RecordingLlm(model="recording"), requests
 
@@ -99,16 +104,19 @@ async def test_call_output_schema_sets_structured_output_on_that_session_only():
 async def test_reply_not_matching_output_schema_becomes_structured_failure():
     from google.adk.sessions import InMemorySessionService
 
-    llm, _ = _recording_llm(reply='{"note": "missing date"}')
+    llm, requests = _recording_llm(reply='{"note": "missing date"}')
     app = _app(llm)
     sessions = InMemorySessionService()
     session = await sessions.create_session(app_name="dak_agent", user_id="u")
 
     texts = await _run(app, sessions, session.id, state_delta={"dak:output_schema": SCHEMA})
 
+    # Regenerated up to the default limit, then the failure keeps #137's name.
     failure = json.loads(texts[-1])
     assert failure["error"] == "output_schema_validation_failed"
     assert [i["path"] for i in failure["issues"]] == ["date"]
+    assert failure["attempts"] == len(requests) == 3
+    assert failure["last_response"] == '{"note": "missing date"}'
 
 
 @pytest.mark.asyncio
@@ -152,15 +160,83 @@ async def test_empty_output_schema_still_requires_json():
     assert json.loads(texts[-1])["error"] == "output_schema_validation_failed"
 
 
+INSPECTION = {"dak:inspection": {"json_schema": SCHEMA}}
+
+
+async def _inspected_run(replies, state_delta=INSPECTION):
+    from google.adk.sessions import InMemorySessionService
+
+    llm, requests = _recording_llm(replies=replies)
+    app = _app(llm)
+    sessions = InMemorySessionService()
+    session = await sessions.create_session(app_name="dak_agent", user_id="u")
+    return await _run(app, sessions, session.id, state_delta=state_delta), requests
+
+
+def _request_text(request) -> str:
+    return "\n".join(p.text for c in request.contents for p in c.parts or [] if p.text)
+
+
+@pytest.mark.asyncio
+async def test_inspection_passing_on_first_try_calls_the_llm_once():
+    texts, requests = await _inspected_run(['{"date": "2026-09-22"}'])
+
+    assert texts[-1] == '{"date": "2026-09-22"}'
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_inspection_retry_succeeds_on_second_attempt():
+    texts, requests = await _inspected_run(['{"note": "missing date"}', '{"date": "2026-09-22"}'])
+
+    assert texts[-1] == '{"date": "2026-09-22"}'
+    assert len(requests) == 2
+    retry = _request_text(requests[1])
+    # The user's question, the failed reply and the inspection's error.
+    assert "hi" in retry and '{"note": "missing date"}' in retry and "'date' is a required property" in retry
+    assert "Base instruction." in requests[1].config.system_instruction
+
+
+@pytest.mark.asyncio
+async def test_inspection_retry_gives_up_after_limit(monkeypatch):
+    monkeypatch.delenv("DAK_MAX_LLM_CALLS", raising=False)
+    texts, requests = await _inspected_run(['{"note": "missing date"}'], {**INSPECTION, "dak:max_llm_calls": 2})
+
+    failure = json.loads(texts[-1])
+    assert failure["error"] == "inspection_failed"
+    assert failure["attempts"] == len(requests) == 2
+    assert failure["last_response"] == '{"note": "missing date"}'
+    assert [i["path"] for i in failure["issues"]] == ["date"]
+
+
+@pytest.mark.asyncio
+async def test_inspection_retry_fails_closed_when_the_model_call_raises():
+    texts, requests = await _inspected_run(['{"note": "missing date"}', RuntimeError("model down")])
+
+    failure = json.loads(texts[-1])
+    assert failure["error"] == "inspection_failed"
+    assert "model down" in failure["issues"][-1]["message"]
+
+
+@pytest.mark.asyncio
+async def test_inspection_endpoint_not_allowed_is_refused_before_any_llm_call(monkeypatch):
+    monkeypatch.delenv("DAK_ALLOWED_INSPECTION_URLS", raising=False)
+    texts, requests = await _inspected_run(['{"date": "x"}'], {"dak:inspection": {"http": {"url": "http://caller/v"}}})
+
+    assert json.loads(texts[-1])["error"] == "inspection_url_not_allowed"
+    assert requests == []
+
+
 class TestReplyEligibility:
-    """Only a complete, final text reply is validated (`_check_call_output`)."""
+    """Only a complete, final text reply is validated (`_retry_on_inspection_failure`)."""
 
     def _check(self, response, schema=SCHEMA):
+        import asyncio
+
         from dak_agent.adaptive_agent import AdaptiveAgent
 
         agent = AdaptiveAgent(model="test-model", name="dak_agent", instruction="x", tools=[])
-        with patch("dak_agent.call_config.resolve_dak_settings", return_value={"dak:output_schema": schema}):
-            return agent._check_call_output(response, MagicMock())
+        return asyncio.run(agent._retry_on_inspection_failure(response, MagicMock(), {"dak:output_schema": schema}))
 
     @staticmethod
     def _response(*parts, partial=None):

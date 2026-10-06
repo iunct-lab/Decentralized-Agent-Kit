@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Tuple
 from google.adk.agents import LlmAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.lite_llm import LiteLlm
+from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.utils import instructions_utils
 from google.genai import types
@@ -36,6 +37,9 @@ CALLER_MCP_PROBE_TIMEOUT_S = 30.0
 # Per-invocation (ADK drops `temp:` state after the invocation): the tool names
 # each reachable caller MCP server listed on this call, {url: [names]}.
 STATE_CALLER_MCP_TOOLS = "temp:dak_caller_mcp_tools"
+# What DAK asks the model when its reply failed `dak:output_schema` / `dak:inspection`.
+INSPECTION_RETRY_PROMPT = ("Your previous response failed validation.\nValidation errors:\n{errors}\n\n"
+                           "Produce a corrected response only, in the exact format required.")
 
 
 class AdaptiveAgent(LlmAgent):
@@ -452,7 +456,7 @@ class AdaptiveAgent(LlmAgent):
         live = self._live_agent(context)
         call_settings = call_config.resolve_dak_settings(context)
         model_name, model_error = call_config.resolve_model_selection(call_settings, self._base_model_name)
-        tools_error = call_config.validate_call_tools(call_settings)
+        tools_error = call_config.validate_call_tools(call_settings) or call_config.validate_call_inspection(call_settings)
         instruction = self._resolve_session_instruction(state, call_settings)
         verbatim = self._verbatim_sections(state)
         if call_settings.get(call_config.STATE_CALL_INSTRUCTION):
@@ -522,7 +526,7 @@ class AdaptiveAgent(LlmAgent):
             # Still refuse what the operator does not allow (fail closed).
             call_settings = call_config.resolve_dak_settings(callback_context)
             _, error = call_config.resolve_model_selection(call_settings, self._base_model_name)
-            error = error or call_config.validate_call_tools(call_settings)
+            error = error or call_config.validate_call_tools(call_settings) or call_config.validate_call_inspection(call_settings)
             if call_settings.get(call_config.STATE_CALL_TOOLS) is not None:
                 self._live_agent(callback_context).tools = []  # the caller restricted tools: none, not all
         if error:
@@ -604,11 +608,13 @@ class AdaptiveAgent(LlmAgent):
                     logger.info("Enforcer blocked response")
                     return result
 
-            # 2. A final reply to a call with `dak:output_schema` must match it.
-            #    ADK's own check needs `output_key`, which DAK does not use.
-            schema_failure = self._check_call_output(llm_response, callback_context)
-            if schema_failure is not None:
-                return schema_failure
+            # 2. A final reply must pass the call's `dak:output_schema` and
+            #    `dak:inspection`, or is regenerated. ADK's own schema check
+            #    needs `output_key`, which DAK does not use.
+            call_settings = call_config.resolve_dak_settings(callback_context)
+            inspected = await self._retry_on_inspection_failure(llm_response, callback_context, call_settings)
+            if inspected is not None:
+                return inspected
 
             # 3. Mark the session's first turn (ModeManager.should_switch). The
             #    switch itself happens when the switch_mode tool runs
@@ -622,29 +628,75 @@ class AdaptiveAgent(LlmAgent):
             logger.error(f"CRITICAL ERROR in _wrapped_callback: {e}", exc_info=True)
             return None
 
-    def _check_call_output(
-        self, llm_response: LlmResponse, callback_context: CallbackContext
+    async def _retry_on_inspection_failure(
+        self, llm_response: LlmResponse, callback_context: CallbackContext, call_settings: Dict[str, Any]
     ) -> Optional[LlmResponse]:
-        """Validate a final text reply against this call's `dak:output_schema`.
-        Returns a replacement reply carrying the structured failure, or None
-        (no schema, not a final text reply, or the reply is valid)."""
-        schema = call_config.resolve_dak_settings(callback_context).get(call_config.STATE_CALL_OUTPUT_SCHEMA)
+        """Check a final text reply against this call's `dak:output_schema` and
+        `dak:inspection`; regenerate a failing one with the errors attached,
+        up to the turn's `max_llm_calls` attempts in all (else
+        DEFAULT_INSPECTION_RETRIES). Returns None (nothing to check, or the
+        first reply passed), the regenerated reply that passed, or a reply
+        carrying the structured failure."""
+        schema = call_settings.get(call_config.STATE_CALL_OUTPUT_SCHEMA)
+        inspection = call_settings.get(call_config.STATE_CALL_INSPECTION)
         content = llm_response.content
-        if schema is None or llm_response.partial or not content or not content.parts:
+        if (schema is None and inspection is None) or llm_response.partial or not content or not content.parts:
             return None
         if any(getattr(part, "function_call", None) for part in content.parts):
             return None
-        text = "".join(part.text for part in content.parts if part.text and not part.thought)
-        try:
-            _, issues = call_config.validate_call_output(schema, text)
-        except Exception as e:  # fail closed: never let an unchecked reply through
-            logger.error(f"dak:output_schema validation crashed: {e}", exc_info=True)
-            issues = [{"path": "", "message": f"validation error: {e}"}]
-        if not issues:
-            return None
-        logger.info(f"Reply failed dak:output_schema: {issues}")
-        failure = {"error": "output_schema_validation_failed", "issues": issues}
+        max_attempts = call_config.resolve_call_limits(call_settings).max_llm_calls or call_config.DEFAULT_INSPECTION_RETRIES
+        response, attempt = llm_response, 1
+        while True:
+            parts = (response.content.parts if response.content else None) or []
+            text = "".join(part.text for part in parts if part.text and not part.thought)
+            try:
+                # `{}` accepts any JSON value: without a schema, only parse.
+                parsed, issues = call_config.validate_call_output(schema if schema is not None else {}, text)
+                if not issues and inspection is not None:
+                    issues = await call_config.run_inspection(inspection, parsed)
+            except Exception as e:  # fail closed: never let an unchecked reply through
+                logger.error(f"Reply inspection crashed: {e}", exc_info=True)
+                issues = [{"path": "", "message": f"validation error: {e}"}]
+            if not issues:
+                return None if response is llm_response else response
+            logger.info(f"Reply failed inspection (attempt {attempt}/{max_attempts}): {issues}")
+            if attempt >= max_attempts:
+                break
+            try:
+                response = await self._regenerate_reply(callback_context, schema, text, issues)
+            except Exception as e:  # incl. ADK's own LLM call limit: fail closed
+                logger.error(f"Regenerating a reply that failed inspection crashed: {e}", exc_info=True)
+                issues = issues + [{"path": "", "message": f"regeneration failed: {e}"}]
+                break
+            attempt += 1
+        failure = {"error": "inspection_failed" if inspection is not None else "output_schema_validation_failed",
+                   "attempts": attempt, "issues": issues, "last_response": text}
         return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=json.dumps(failure))]))
+
+    async def _regenerate_reply(
+        self, callback_context: CallbackContext, schema: Optional[Dict[str, Any]], text: str, issues: list
+    ) -> LlmResponse:
+        """One more model call, outside ADK's tool loop (no tools): the turn's
+        user message, the failed reply, and its errors."""
+        live = self._live_agent(callback_context)
+        instruction, bypass_state_injection = await live.canonical_instruction(callback_context)
+        if not bypass_state_injection:
+            instruction = await instructions_utils.inject_session_state(instruction, callback_context)
+        prompt = INSPECTION_RETRY_PROMPT.format(errors=json.dumps(issues, ensure_ascii=False))
+        contents = [c for c in (callback_context.user_content,) if c is not None] + [
+            types.Content(role="model", parts=[types.Part(text=text)]),
+            types.Content(role="user", parts=[types.Part(text=prompt)]),
+        ]
+        model = live.canonical_model
+        request = LlmRequest(model=model.model, contents=contents,
+                             config=types.GenerateContentConfig(system_instruction=instruction))
+        if schema is not None:
+            request.set_output_schema(schema)
+        callback_context._invocation_context.increment_llm_call_count()  # a retry is a model call
+        async for response in model.generate_content_async(request, stream=False):
+            if response.content:
+                return response
+        return LlmResponse()  # no reply: inspected (and failed) like any other
 
     async def apply_switch_request(self, tool_context, reason: str, new_focus: str) -> None:
         """Switch modes for a `switch_mode` call. Called by the tool itself
