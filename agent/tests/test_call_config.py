@@ -1,7 +1,10 @@
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
+import mcp
+import mcp.client.streamable_http
 import pytest
 from google.adk.sessions.state import State
 
@@ -403,3 +406,96 @@ async def test_run_inspection_never_calls_a_url_outside_the_allow_list(monkeypat
 
     assert len(errors) == 1 and "inspection_url_not_allowed" in errors[0]["message"]
     post.assert_not_awaited()
+
+
+MCP_URL = "http://caller:9000/mcp"
+
+
+def _fake_mcp(monkeypatch, *, text=None, connect_error=None, is_error=False):
+    """Stand-ins for the mcp client: the session's call_tool answers `text`."""
+    calls = []
+
+    @asynccontextmanager
+    async def client(url, **kwargs):
+        if connect_error:
+            raise connect_error
+        calls.append(("connect", url, kwargs["http_client"].follow_redirects))
+        yield "read", "write", lambda: None
+
+    class Session:
+        def __init__(self, read, write):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def initialize(self):
+            calls.append(("initialize",))
+
+        async def call_tool(self, name, arguments):
+            calls.append(("call_tool", name, arguments))
+            return SimpleNamespace(content=[SimpleNamespace(text=text)] if text is not None else [], isError=is_error)
+
+    monkeypatch.setattr(mcp.client.streamable_http, "streamable_http_client", client)
+    monkeypatch.setattr(mcp, "ClientSession", Session)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_run_inspection_mcp_reports_errors(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", MCP_URL)
+    calls = _fake_mcp(monkeypatch, text='{"valid": false, "errors": [{"path": "date", "message": "missing"}]}')
+
+    errors = await call_config.run_inspection({"mcp": {"url": MCP_URL, "tool": "check_plan"}}, {"note": "x"})
+
+    assert errors == [{"path": "date", "message": "missing"}]
+    # No redirects: an allowed URL must not lead the agent to another host.
+    assert calls == [("connect", MCP_URL, False), ("initialize",), ("call_tool", "check_plan", {"data": {"note": "x"}})]
+
+
+@pytest.mark.asyncio
+async def test_run_inspection_mcp_accepts_valid_and_reports_bad_replies(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", MCP_URL)
+    spec = {"mcp": {"url": MCP_URL, "tool": "check_plan"}}
+    for text, expected in (('{"valid": true}', None), ('{"valid": false}', "reported invalid, no errors given"),
+                           (None, "returned no content"), ("fine", "returned non-JSON")):
+        _fake_mcp(monkeypatch, text=text)
+        errors = await call_config.run_inspection(spec, {})
+        if expected is None:
+            assert errors == []
+        else:
+            assert len(errors) == 1 and expected in errors[0]["message"], errors
+
+
+@pytest.mark.asyncio
+async def test_run_inspection_mcp_reports_connection_failure(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", MCP_URL)
+    _fake_mcp(monkeypatch, connect_error=httpx.ConnectError("refused"))
+
+    errors = await call_config.run_inspection({"mcp": {"url": MCP_URL, "tool": "check_plan"}}, {})
+
+    assert len(errors) == 1 and "inspection MCP call failed" in errors[0]["message"]
+
+
+@pytest.mark.asyncio
+async def test_run_inspection_mcp_reports_tool_error(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", MCP_URL)
+    _fake_mcp(monkeypatch, text="Unknown tool: check_plan", is_error=True)
+
+    errors = await call_config.run_inspection({"mcp": {"url": MCP_URL, "tool": "check_plan"}}, {})
+
+    assert errors == [{"path": "", "message": "inspection MCP tool failed: Unknown tool: check_plan"}]
+
+
+def test_validate_call_inspection_checks_mcp_endpoints(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", MCP_URL)
+
+    assert call_config.validate_call_inspection({"dak:inspection": {"mcp": {"url": MCP_URL, "tool": "t"}}}) is None
+    assert call_config.validate_call_inspection(
+        {"dak:inspection": {"mcp": {"url": MCP_URL}}})["error"] == "invalid_inspection"
+    error = call_config.validate_call_inspection(
+        {"dak:inspection": {"mcp": {"url": "http://internal/mcp", "tool": "t"}, "http": {"url": MCP_URL}}})
+    assert error["error"] == "inspection_url_not_allowed" and error["requested_urls"] == ["http://internal/mcp"]
