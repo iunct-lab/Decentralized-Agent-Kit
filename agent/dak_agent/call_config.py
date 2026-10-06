@@ -60,6 +60,7 @@ INSPECTION_KINDS = ("json_schema", "http")
 ALLOWED_INSPECTION_URLS_ENV = "DAK_ALLOWED_INSPECTION_URLS"
 DEFAULT_INSPECTION_RETRIES = 3  # attempts when no max_llm_calls limit applies
 INSPECTION_TIMEOUT_S = 10.0
+MAX_INSPECTION_TIMEOUT_S = 60.0  # a caller's endpoint cannot hold a turn longer
 # Same value as google.adk.a2a.converters.request_converter.A2A_METADATA_KEY.
 A2A_METADATA_KEY = "a2a_metadata"
 
@@ -218,18 +219,24 @@ def validate_call_inspection(call_settings: Dict[str, Any]) -> Optional[Dict[str
     spec = call_settings.get(STATE_CALL_INSPECTION)
     if spec is None:
         return None
-    http = spec.get("http") if isinstance(spec, Mapping) else None
-    timeout = http.get("timeout_seconds", INSPECTION_TIMEOUT_S) if isinstance(http, Mapping) else None
+    def endpoint_ok(endpoint, *required):
+        timeout = endpoint.get("timeout_seconds", INSPECTION_TIMEOUT_S) if isinstance(endpoint, Mapping) else None
+        return (isinstance(endpoint, Mapping) and all(isinstance(endpoint.get(k), str) for k in ("url", *required))
+                and isinstance(timeout, (int, float)) and not isinstance(timeout, bool)
+                and 0 < timeout <= MAX_INSPECTION_TIMEOUT_S)
+
+    endpoints = {k: spec[k] for k in ("http",) if k in spec} if isinstance(spec, Mapping) else {}
+    schema = spec.get("json_schema", {}) if isinstance(spec, Mapping) else None
     shape_ok = (
         isinstance(spec, Mapping) and spec and set(spec) <= set(INSPECTION_KINDS)
-        and isinstance(spec.get("json_schema", {}), Mapping)
-        and (http is None or (isinstance(http, Mapping) and isinstance(http.get("url"), str)
-                              and isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0))
+        and isinstance(schema, Mapping) and not _schema_error(schema, "inspection json_schema")
+        and ("http" not in endpoints or endpoint_ok(endpoints["http"]))
     )
     if not shape_ok:
         return {"error": "invalid_inspection",
-                "expected": '{"json_schema"?: {...}, "http"?: {"url": "...", "timeout_seconds"?: 10}}'}
-    urls = [http["url"].strip()] if http else []
+                "expected": '{"json_schema"?: {<a valid JSON Schema>}, '
+                            '"http"?: {"url": "...", "timeout_seconds"?: 10 (at most 60)}}'}
+    urls = [e["url"].strip() for e in endpoints.values()]
     raw = os.environ.get(ALLOWED_INSPECTION_URLS_ENV)
     allowed = frozenset(u.strip() for u in (raw or "").split(",") if u.strip())
     refused = [u for u in urls if u not in allowed]
@@ -245,7 +252,7 @@ async def _http_inspection_errors(spec: Mapping[str, Any], parsed: Any) -> List[
         async with httpx.AsyncClient(timeout=float(spec.get("timeout_seconds", INSPECTION_TIMEOUT_S))) as client:
             response = await client.post(spec["url"].strip(), json=parsed)
         response.raise_for_status()
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         return [{"path": "", "message": f"inspection endpoint error: {exc}"}]
     try:
         payload = response.json()
@@ -255,7 +262,7 @@ async def _http_inspection_errors(spec: Mapping[str, Any], parsed: Any) -> List[
         return []
     errors = payload.get("errors") if isinstance(payload, Mapping) else None
     if isinstance(errors, list) and errors:
-        return errors
+        return [e if isinstance(e, Mapping) else {"path": "", "message": str(e)} for e in errors]
     return [{"path": "", "message": "inspection endpoint reported invalid, no errors given"}]
 
 

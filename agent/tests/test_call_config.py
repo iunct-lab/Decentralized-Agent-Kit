@@ -317,7 +317,10 @@ def test_validate_call_inspection_accepts_allowed_url_and_schema_only(monkeypatc
 def test_validate_call_inspection_refuses_malformed_specs(monkeypatch):
     monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", INSPECT_URL)
     for bad in ({}, "http://x", {"json_schema": "x"}, {"http": INSPECT_URL}, {"http": {"url": INSPECT_URL, "timeout_seconds": 0}},
-                {"shell": "rm"}):
+                {"shell": "rm"}, {"http": None}, {"json_schema": DATE_SCHEMA, "http": None},
+                {"http": {"url": INSPECT_URL, "timeout_seconds": float("inf")}},
+                {"http": {"url": INSPECT_URL, "timeout_seconds": call_config.MAX_INSPECTION_TIMEOUT_S + 1}},
+                {"json_schema": {"type": 5}}):
         error = call_config.validate_call_inspection({"dak:inspection": bad})
         assert error["error"] == "invalid_inspection", bad
 
@@ -359,6 +362,25 @@ async def test_run_inspection_http_accepts_valid_and_reports_bad_replies(monkeyp
             assert errors == []
         else:
             assert len(errors) == 1 and expected in errors[0]["message"], errors
+
+
+@pytest.mark.asyncio
+async def test_run_inspection_http_turns_odd_errors_into_issues(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", INSPECT_URL)
+    monkeypatch.setattr(httpx.AsyncClient, "post", AsyncMock(return_value=_http_reply({"valid": False, "errors": ["bad date", 3]})))
+
+    errors = await call_config.run_inspection({"http": {"url": INSPECT_URL}}, {})
+
+    assert errors == [{"path": "", "message": "bad date"}, {"path": "", "message": "3"}]
+
+
+@pytest.mark.asyncio
+async def test_run_inspection_http_reports_invalid_url(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", "http://[::1/v")
+
+    errors = await call_config.run_inspection({"http": {"url": "http://[::1/v"}}, {})
+
+    assert len(errors) == 1 and "inspection endpoint error" in errors[0]["message"]
 
 
 @pytest.mark.asyncio
