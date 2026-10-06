@@ -1,5 +1,8 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import httpx
+import pytest
 from google.adk.sessions.state import State
 
 from dak_agent import call_config
@@ -286,3 +289,95 @@ def test_resolve_call_limits_ignores_overflowing_values(monkeypatch):
         {"dak:max_llm_calls": float("inf"), "dak:max_output_tokens": float("inf")})
 
     assert limits == call_config.CallLimits(max_llm_calls=5, max_seconds=0.0, max_output_tokens=0)
+
+
+INSPECT_URL = "http://caller:9000/validate"
+
+
+def _http_reply(payload, status=200):
+    return httpx.Response(status, json=payload, request=httpx.Request("POST", INSPECT_URL))
+
+
+def test_validate_call_inspection_refuses_urls_when_allow_list_unset(monkeypatch):
+    monkeypatch.delenv("DAK_ALLOWED_INSPECTION_URLS", raising=False)
+
+    error = call_config.validate_call_inspection({"dak:inspection": {"http": {"url": INSPECT_URL}}})
+
+    assert error == {"error": "inspection_url_not_allowed", "requested_urls": [INSPECT_URL], "allowed_urls": []}
+
+
+def test_validate_call_inspection_accepts_allowed_url_and_schema_only(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", f"{INSPECT_URL}, http://other/validate")
+
+    assert call_config.validate_call_inspection({"dak:inspection": {"http": {"url": INSPECT_URL}}}) is None
+    assert call_config.validate_call_inspection({"dak:inspection": {"json_schema": DATE_SCHEMA}}) is None
+    assert call_config.validate_call_inspection({}) is None
+
+
+def test_validate_call_inspection_refuses_malformed_specs(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", INSPECT_URL)
+    for bad in ({}, "http://x", {"json_schema": "x"}, {"http": INSPECT_URL}, {"http": {"url": INSPECT_URL, "timeout_seconds": 0}},
+                {"shell": "rm"}):
+        error = call_config.validate_call_inspection({"dak:inspection": bad})
+        assert error["error"] == "invalid_inspection", bad
+
+
+@pytest.mark.asyncio
+async def test_run_inspection_json_schema_reports_errors():
+    errors = await call_config.run_inspection({"json_schema": DATE_SCHEMA}, {"note": "missing date"})
+
+    assert errors == [{"path": "date", "message": "'date' is a required property"}]
+    assert await call_config.run_inspection({"json_schema": DATE_SCHEMA}, {"date": "2026-09-22"}) == []
+
+
+@pytest.mark.asyncio
+async def test_run_inspection_http_combines_with_json_schema(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", INSPECT_URL)
+    caller_errors = [{"path": "date", "message": "not a business day"}]
+    post = AsyncMock(return_value=_http_reply({"valid": False, "errors": caller_errors}))
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+
+    errors = await call_config.run_inspection(
+        {"json_schema": {"type": "object", "required": ["tz"]}, "http": {"url": INSPECT_URL}}, {"date": "2026-09-26"})
+
+    assert errors == [{"path": "tz", "message": "'tz' is a required property"}] + caller_errors
+    post.assert_awaited_once()
+    assert post.await_args.args[-1] == INSPECT_URL and post.await_args.kwargs["json"] == {"date": "2026-09-26"}
+
+
+@pytest.mark.asyncio
+async def test_run_inspection_http_accepts_valid_and_reports_bad_replies(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", INSPECT_URL)
+    spec = {"http": {"url": INSPECT_URL}}
+    for reply, expected in ((_http_reply({"valid": True}), None),
+                            (_http_reply({"valid": False}), "reported invalid, no errors given"),
+                            (_http_reply({"detail": "boom"}, status=500), "inspection endpoint error"),
+                            (httpx.Response(200, text="ok", request=httpx.Request("POST", INSPECT_URL)), "non-JSON")):
+        monkeypatch.setattr(httpx.AsyncClient, "post", AsyncMock(return_value=reply))
+        errors = await call_config.run_inspection(spec, {"date": "2026-09-22"})
+        if expected is None:
+            assert errors == []
+        else:
+            assert len(errors) == 1 and expected in errors[0]["message"], errors
+
+
+@pytest.mark.asyncio
+async def test_run_inspection_http_reports_connection_failure(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", INSPECT_URL)
+    monkeypatch.setattr(httpx.AsyncClient, "post", AsyncMock(side_effect=httpx.ConnectError("refused")))
+
+    errors = await call_config.run_inspection({"http": {"url": INSPECT_URL}}, {"date": "2026-09-22"})
+
+    assert len(errors) == 1 and "inspection endpoint error" in errors[0]["message"]
+
+
+@pytest.mark.asyncio
+async def test_run_inspection_never_calls_a_url_outside_the_allow_list(monkeypatch):
+    monkeypatch.delenv("DAK_ALLOWED_INSPECTION_URLS", raising=False)
+    post = AsyncMock(return_value=_http_reply({"valid": True}))
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+
+    errors = await call_config.run_inspection({"http": {"url": "http://169.254.169.254/"}}, {})
+
+    assert len(errors) == 1 and "inspection_url_not_allowed" in errors[0]["message"]
+    post.assert_not_awaited()
