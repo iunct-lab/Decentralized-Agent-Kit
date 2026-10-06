@@ -101,9 +101,10 @@ async def test_call_output_schema_sets_structured_output_on_that_session_only():
 
 
 @pytest.mark.asyncio
-async def test_reply_not_matching_output_schema_becomes_structured_failure():
+async def test_reply_not_matching_output_schema_becomes_structured_failure(monkeypatch):
     from google.adk.sessions import InMemorySessionService
 
+    monkeypatch.delenv("DAK_MAX_LLM_CALLS", raising=False)
     llm, requests = _recording_llm(reply='{"note": "missing date"}')
     app = _app(llm)
     sessions = InMemorySessionService()
@@ -219,6 +220,19 @@ async def test_inspection_retry_fails_closed_when_the_model_call_raises():
 
 
 @pytest.mark.asyncio
+async def test_inspection_endpoint_down_is_not_a_reason_to_regenerate(monkeypatch):
+    import httpx
+
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", "http://caller/v")
+    monkeypatch.setattr(httpx.AsyncClient, "post", AsyncMock(side_effect=httpx.ConnectError("refused")))
+    texts, requests = await _inspected_run(['{"date": "x"}'], {"dak:inspection": {"http": {"url": "http://caller/v"}}})
+
+    failure = json.loads(texts[-1])
+    assert failure["error"] == "inspection_failed" and failure["attempts"] == len(requests) == 1
+    assert "inspection endpoint error" in failure["issues"][0]["message"]
+
+
+@pytest.mark.asyncio
 async def test_inspection_endpoint_not_allowed_is_refused_before_any_llm_call(monkeypatch):
     monkeypatch.delenv("DAK_ALLOWED_INSPECTION_URLS", raising=False)
     texts, requests = await _inspected_run(['{"date": "x"}'], {"dak:inspection": {"http": {"url": "http://caller/v"}}})
@@ -259,5 +273,7 @@ class TestReplyEligibility:
     def test_validation_error_fails_closed(self):
         """An unexpected error while validating must not let the reply through."""
         with patch("dak_agent.call_config.validate_call_output", side_effect=RuntimeError("boom")):
-            failure = self._check(self._response(types.Part(text='{"date": "x"}')))
-        assert json.loads(failure.content.parts[0].text)["error"] == "output_schema_validation_failed"
+            failure = json.loads(self._check(self._response(types.Part(text='{"date": "x"}'))).content.parts[0].text)
+        # Not regenerated either: the check itself failed, not the reply.
+        assert failure["error"] == "output_schema_validation_failed" and failure["attempts"] == 1
+        assert failure["issues"] == [{"path": "", "message": "validation error: boom", "unavailable": True}]

@@ -513,7 +513,7 @@ class AdaptiveAgent(LlmAgent):
                 logger.warning(f"Could not list the default MCP tools: {e}")
         servers, _ = call_config.resolve_caller_mcp_servers(call_settings)
         refused = (call_config.resolve_model_selection(call_settings, self._base_model_name)[1]
-                   or call_config.validate_call_tools(call_settings))
+                   or call_config.validate_call_tools(call_settings) or call_config.validate_call_inspection(call_settings))
         if servers and not refused:  # no connections for a call that will be refused
             await self._probe_caller_mcp_servers(callback_context.state, servers)
         elif callback_context.state.get(call_config.STATE_TOOLS_ERROR):
@@ -656,11 +656,12 @@ class AdaptiveAgent(LlmAgent):
                     issues = await call_config.run_inspection(inspection, parsed)
             except Exception as e:  # fail closed: never let an unchecked reply through
                 logger.error(f"Reply inspection crashed: {e}", exc_info=True)
-                issues = [{"path": "", "message": f"validation error: {e}"}]
+                issues = [{"path": "", "message": f"validation error: {e}", "unavailable": True}]
             if not issues:
                 return None if response is llm_response else response
             logger.info(f"Reply failed inspection (attempt {attempt}/{max_attempts}): {issues}")
-            if attempt >= max_attempts:
+            # A check that could not run (endpoint down, ...) is no reason to regenerate.
+            if attempt >= max_attempts or any(isinstance(i, Mapping) and i.get("unavailable") for i in issues):
                 break
             try:
                 response = await self._regenerate_reply(callback_context, schema, text, issues)
