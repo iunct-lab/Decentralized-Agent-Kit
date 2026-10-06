@@ -406,7 +406,8 @@ async def test_run_inspection_http_reports_connection_failure(monkeypatch):
 
     errors = await call_config.run_inspection({"http": {"url": INSPECT_URL}}, {"date": "2026-09-22"})
 
-    assert len(errors) == 1 and "inspection endpoint error" in errors[0]["message"]
+    # The check could not run: no regenerated reply would fix that (#245).
+    assert len(errors) == 1 and "inspection endpoint error" in errors[0]["message"] and errors[0]["unavailable"]
 
 
 @pytest.mark.asyncio
@@ -504,7 +505,7 @@ async def test_run_inspection_mcp_bounds_the_whole_call_by_its_timeout(monkeypat
     errors = await call_config.run_inspection({"mcp": {"url": MCP_URL, "tool": "t", "timeout_seconds": 0.05}}, {})
 
     assert asyncio.get_running_loop().time() - started < 1
-    assert errors == [{"path": "", "message": "inspection MCP call timed out after 0.05 s"}]
+    assert errors == [{"path": "", "message": "inspection MCP call timed out after 0.05 s", "unavailable": True}]
 
 
 @pytest.mark.asyncio
@@ -536,7 +537,7 @@ async def test_run_inspection_mcp_reports_tool_error(monkeypatch):
 
     errors = await call_config.run_inspection({"mcp": {"url": MCP_URL, "tool": "check_plan"}}, {})
 
-    assert errors == [{"path": "", "message": "inspection MCP tool failed: Unknown tool: check_plan"}]
+    assert errors == [{"path": "", "message": "inspection MCP tool failed: Unknown tool: check_plan", "unavailable": True}]
 
 
 def test_validate_call_inspection_checks_mcp_endpoints(monkeypatch):

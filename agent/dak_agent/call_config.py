@@ -252,6 +252,12 @@ def validate_call_inspection(call_settings: Dict[str, Any]) -> Optional[Dict[str
     return None
 
 
+def _unavailable(message: str) -> Dict[str, Any]:
+    """An issue saying the check itself could not run (endpoint down, timed
+    out, unreadable answer): no regenerated reply can fix it."""
+    return {"path": "", "message": message, "unavailable": True}
+
+
 async def _http_inspection_errors(spec: Mapping[str, Any], parsed: Any) -> List[Dict[str, Any]]:
     """POST the parsed reply to the caller's endpoint; its errors, or one
     describing why the endpoint could not answer."""
@@ -260,11 +266,11 @@ async def _http_inspection_errors(spec: Mapping[str, Any], parsed: Any) -> List[
             response = await client.post(spec["url"].strip(), json=parsed)
         response.raise_for_status()
     except (httpx.HTTPError, httpx.InvalidURL) as exc:
-        return [{"path": "", "message": f"inspection endpoint error: {exc}"}]
+        return [_unavailable(f"inspection endpoint error: {exc}")]
     try:
         payload = response.json()
     except ValueError:
-        return [{"path": "", "message": f"inspection endpoint returned non-JSON: {response.text[:200]}"}]
+        return [_unavailable(f"inspection endpoint returned non-JSON: {response.text[:200]}")]
     return _verdict_errors(payload, "inspection endpoint")
 
 
@@ -301,20 +307,20 @@ async def _mcp_inspection_errors(spec: Mapping[str, Any], parsed: Any) -> List[D
                     await session.initialize()
                     result = await session.call_tool(spec["tool"], arguments={"data": parsed})
     except TimeoutError:
-        return [{"path": "", "message": f"inspection MCP call timed out after {timeout:g} s"}]
+        return [_unavailable(f"inspection MCP call timed out after {timeout:g} s")]
     except Exception as exc:  # the caller's server, the network, or the mcp client
         while isinstance(exc, BaseExceptionGroup) and len(exc.exceptions) == 1:  # anyio task groups
             exc = exc.exceptions[0]
-        return [{"path": "", "message": f"inspection MCP call failed: {type(exc).__name__}: {exc}"[:200]}]
+        return [_unavailable(f"inspection MCP call failed: {type(exc).__name__}: {exc}"[:200])]
     text = "".join(getattr(c, "text", "") or "" for c in (result.content or []))
     if getattr(result, "isError", False):
-        return [{"path": "", "message": f"inspection MCP tool failed: {text[:200]}"}]
+        return [_unavailable(f"inspection MCP tool failed: {text[:200]}")]
     if not text:
-        return [{"path": "", "message": "inspection MCP returned no content"}]
+        return [_unavailable("inspection MCP returned no content")]
     try:
         payload = json.loads(text)
     except ValueError:
-        return [{"path": "", "message": f"inspection MCP returned non-JSON: {text[:200]}"}]
+        return [_unavailable(f"inspection MCP returned non-JSON: {text[:200]}")]
     return _verdict_errors(payload, "inspection MCP")
 
 
@@ -324,7 +330,7 @@ async def run_inspection(spec: Mapping[str, Any], parsed: Any) -> List[Dict[str,
     `validate_call_inspection` would refuse."""
     refused = validate_call_inspection({STATE_CALL_INSPECTION: spec})
     if refused:
-        return [{"path": "", "message": json.dumps(refused)}]
+        return [_unavailable(json.dumps(refused))]
     errors: List[Dict[str, Any]] = []
     if "json_schema" in spec:
         errors += _json_schema_errors(spec["json_schema"], parsed, "inspection json_schema")
