@@ -5,6 +5,7 @@ state) or as A2A message metadata (ADK's A2A request converter puts that under
 `RunConfig.custom_metadata["a2a_metadata"]`). Later PBIs add more `dak:` keys
 to this module.
 """
+import asyncio
 import json
 import logging
 import os
@@ -51,9 +52,12 @@ MAX_OUTPUT_TOKENS_ENV = "DAK_MAX_OUTPUT_TOKENS"
 # Checks a final reply must pass before DAK returns it; a failing reply is
 # regenerated with the errors attached. {"json_schema": {...}} and/or
 # {"http": {"url", "timeout_seconds"?}} (the caller's endpoint gets the parsed
-# reply as a JSON POST and answers {"valid": bool, "errors": [...]}).
+# reply as a JSON POST and answers {"valid": bool, "errors": [...]}) and/or
+# {"mcp": {"url", "tool", "timeout_seconds"?}} (DAK calls that tool of the
+# caller's streamable-HTTP MCP server with {"data": <reply>}; its text answers
+# the same JSON).
 STATE_CALL_INSPECTION = "dak:inspection"
-INSPECTION_KINDS = ("json_schema", "http")
+INSPECTION_KINDS = ("json_schema", "http", "mcp")
 # Operator's allow-list for the caller's inspection endpoints (comma-separated
 # URLs). Unset means none may be called, for the same reason as
 # ALLOWED_MCP_URLS_ENV.
@@ -219,23 +223,26 @@ def validate_call_inspection(call_settings: Dict[str, Any]) -> Optional[Dict[str
     spec = call_settings.get(STATE_CALL_INSPECTION)
     if spec is None:
         return None
+
     def endpoint_ok(endpoint, *required):
         timeout = endpoint.get("timeout_seconds", INSPECTION_TIMEOUT_S) if isinstance(endpoint, Mapping) else None
         return (isinstance(endpoint, Mapping) and all(isinstance(endpoint.get(k), str) for k in ("url", *required))
                 and isinstance(timeout, (int, float)) and not isinstance(timeout, bool)
                 and 0 < timeout <= MAX_INSPECTION_TIMEOUT_S)
 
-    endpoints = {k: spec[k] for k in ("http",) if k in spec} if isinstance(spec, Mapping) else {}
+    endpoints = {k: spec[k] for k in ("http", "mcp") if k in spec} if isinstance(spec, Mapping) else {}
     schema = spec.get("json_schema", {}) if isinstance(spec, Mapping) else None
     shape_ok = (
         isinstance(spec, Mapping) and spec and set(spec) <= set(INSPECTION_KINDS)
         and isinstance(schema, Mapping) and not _schema_error(schema, "inspection json_schema")
         and ("http" not in endpoints or endpoint_ok(endpoints["http"]))
+        and ("mcp" not in endpoints or endpoint_ok(endpoints["mcp"], "tool"))
     )
     if not shape_ok:
         return {"error": "invalid_inspection",
                 "expected": '{"json_schema"?: {<a valid JSON Schema>}, '
-                            '"http"?: {"url": "...", "timeout_seconds"?: 10 (at most 60)}}'}
+                            '"http"?: {"url": "...", "timeout_seconds"?: 10 (at most 60)}, '
+                            '"mcp"?: {"url": "...", "tool": "...", "timeout_seconds"?: 10 (at most 60)}}'}
     urls = [e["url"].strip() for e in endpoints.values()]
     raw = os.environ.get(ALLOWED_INSPECTION_URLS_ENV)
     allowed = frozenset(u.strip() for u in (raw or "").split(",") if u.strip())
@@ -258,12 +265,46 @@ async def _http_inspection_errors(spec: Mapping[str, Any], parsed: Any) -> List[
         payload = response.json()
     except ValueError:
         return [{"path": "", "message": f"inspection endpoint returned non-JSON: {response.text[:200]}"}]
+    return _verdict_errors(payload, "inspection endpoint")
+
+
+def _verdict_errors(payload: Any, source: str) -> List[Dict[str, Any]]:
+    """The errors in a caller's {"valid": bool, "errors": [...]} answer."""
     if isinstance(payload, Mapping) and payload.get("valid") is True:
         return []
     errors = payload.get("errors") if isinstance(payload, Mapping) else None
     if isinstance(errors, list) and errors:
         return [e if isinstance(e, Mapping) else {"path": "", "message": str(e)} for e in errors]
-    return [{"path": "", "message": "inspection endpoint reported invalid, no errors given"}]
+    return [{"path": "", "message": f"{source} reported invalid, no errors given"}]
+
+
+async def _mcp_inspection_errors(spec: Mapping[str, Any], parsed: Any) -> List[Dict[str, Any]]:
+    """Call the caller's MCP inspection tool once, directly (not as a tool the
+    model sees); its errors, or one describing why it could not answer."""
+    # Imported here: calls without an MCP inspection do not load the client.
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    timeout = float(spec.get("timeout_seconds", INSPECTION_TIMEOUT_S))
+    try:
+        # No redirects: an allowed URL must not lead the agent to another host.
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as http_client, \
+                streamable_http_client(spec["url"].strip(), http_client=http_client) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await asyncio.wait_for(session.initialize(), timeout)
+                result = await asyncio.wait_for(session.call_tool(spec["tool"], arguments={"data": parsed}), timeout)
+    except Exception as exc:
+        return [{"path": "", "message": f"inspection MCP call failed: {exc!r}"}]
+    text = "".join(getattr(c, "text", "") or "" for c in (result.content or []))
+    if getattr(result, "isError", False):
+        return [{"path": "", "message": f"inspection MCP tool failed: {text[:200]}"}]
+    if not text:
+        return [{"path": "", "message": "inspection MCP returned no content"}]
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return [{"path": "", "message": f"inspection MCP returned non-JSON: {text[:200]}"}]
+    return _verdict_errors(payload, "inspection MCP")
 
 
 async def run_inspection(spec: Mapping[str, Any], parsed: Any) -> List[Dict[str, Any]]:
@@ -278,6 +319,8 @@ async def run_inspection(spec: Mapping[str, Any], parsed: Any) -> List[Dict[str,
         errors += _json_schema_errors(spec["json_schema"], parsed, "inspection json_schema")
     if "http" in spec:
         errors += await _http_inspection_errors(spec["http"], parsed)
+    if "mcp" in spec:
+        errors += await _mcp_inspection_errors(spec["mcp"], parsed)
     return errors
 
 
