@@ -516,7 +516,7 @@ async def test_run_inspection_mcp_keeps_failure_messages_short(monkeypatch):
     errors = await call_config.run_inspection({"mcp": {"url": MCP_URL, "tool": "t"}}, {})
 
     assert errors[0]["message"].startswith("inspection MCP call failed: ConnectError")
-    assert len(errors[0]["message"]) < 300
+    assert len(errors[0]["message"]) == 200
 
 
 @pytest.mark.asyncio
