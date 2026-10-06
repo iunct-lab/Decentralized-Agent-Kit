@@ -11,6 +11,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
+import httpx
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from jsonschema_specifications import REGISTRY as METASCHEMAS
@@ -47,6 +48,18 @@ STATE_CALL_MAX_OUTPUT_TOKENS = "dak:max_output_tokens"
 MAX_LLM_CALLS_ENV = "DAK_MAX_LLM_CALLS"
 MAX_SECONDS_ENV = "DAK_MAX_TURN_SECONDS"
 MAX_OUTPUT_TOKENS_ENV = "DAK_MAX_OUTPUT_TOKENS"
+# Checks a final reply must pass before DAK returns it; a failing reply is
+# regenerated with the errors attached. {"json_schema": {...}} and/or
+# {"http": {"url", "timeout_seconds"?}} (the caller's endpoint gets the parsed
+# reply as a JSON POST and answers {"valid": bool, "errors": [...]}).
+STATE_CALL_INSPECTION = "dak:inspection"
+INSPECTION_KINDS = ("json_schema", "http")
+# Operator's allow-list for the caller's inspection endpoints (comma-separated
+# URLs). Unset means none may be called, for the same reason as
+# ALLOWED_MCP_URLS_ENV.
+ALLOWED_INSPECTION_URLS_ENV = "DAK_ALLOWED_INSPECTION_URLS"
+DEFAULT_INSPECTION_RETRIES = 3  # attempts when no max_llm_calls limit applies
+INSPECTION_TIMEOUT_S = 10.0
 # Same value as google.adk.a2a.converters.request_converter.A2A_METADATA_KEY.
 A2A_METADATA_KEY = "a2a_metadata"
 
@@ -159,18 +172,19 @@ def _reject_constant(name: str):
     raise ValueError(f"{name} is not valid JSON")
 
 
-def validate_call_output(schema: Dict[str, Any], text: str) -> Tuple[Optional[Any], List[Dict[str, str]]]:
-    """Check a final model reply against the call's `dak:output_schema`.
-    Returns `(parsed_json, [])` on success, `(None, issues)` otherwise, each
-    issue being `{"path": "a/b", "message": "..."}`."""
+def _schema_error(schema: Dict[str, Any], label: str) -> List[Dict[str, str]]:
     try:
         Draft202012Validator.check_schema(schema)
     except SchemaError as exc:
-        return None, [{"path": "", "message": f"invalid output_schema: {exc.message}"}]
-    try:
-        parsed = json.loads(text, parse_constant=_reject_constant)
-    except (ValueError, RecursionError) as exc:  # RecursionError: absurdly deep nesting
-        return None, [{"path": "", "message": f"invalid JSON: {exc}"}]
+        return [{"path": "", "message": f"invalid {label}: {exc.message}"}]
+    return []
+
+
+def _json_schema_errors(schema: Dict[str, Any], parsed: Any, label: str) -> List[Dict[str, str]]:
+    """Issues of `parsed` against `schema`, each `{"path": "a/b", "message": "..."}`."""
+    issues = _schema_error(schema, label)
+    if issues:
+        return issues
     # The schema comes from the caller. jsonschema's default registry fetches
     # remote `$ref` URLs; this one only knows the bundled metaschemas, so a
     # remote ref is unresolvable instead of a request from this container.
@@ -178,10 +192,86 @@ def validate_call_output(schema: Dict[str, Any], text: str) -> Tuple[Optional[An
     try:
         errors = sorted(validator.iter_errors(parsed), key=lambda e: [str(p) for p in e.absolute_path])
     except Exception as exc:  # unresolvable $ref and the like
-        return None, [{"path": "", "message": f"invalid output_schema: {exc}"}]
-    if errors:
-        return None, [{"path": _issue_path(e), "message": e.message} for e in errors]
-    return parsed, []
+        return [{"path": "", "message": f"invalid {label}: {exc}"}]
+    return [{"path": _issue_path(e), "message": e.message} for e in errors]
+
+
+def validate_call_output(schema: Dict[str, Any], text: str) -> Tuple[Optional[Any], List[Dict[str, str]]]:
+    """Check a final model reply against the call's `dak:output_schema`.
+    Returns `(parsed_json, [])` on success, `(None, issues)` otherwise, each
+    issue being `{"path": "a/b", "message": "..."}`."""
+    issues = _schema_error(schema, "output_schema")
+    if issues:
+        return None, issues
+    try:
+        parsed = json.loads(text, parse_constant=_reject_constant)
+    except (ValueError, RecursionError) as exc:  # RecursionError: absurdly deep nesting
+        return None, [{"path": "", "message": f"invalid JSON: {exc}"}]
+    issues = _json_schema_errors(schema, parsed, "output_schema")
+    return (None, issues) if issues else (parsed, [])
+
+
+def validate_call_inspection(call_settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """An error dict when `dak:inspection` is present but malformed, or names
+    an endpoint the operator does not allow (the call must then not reach any
+    LLM)."""
+    spec = call_settings.get(STATE_CALL_INSPECTION)
+    if spec is None:
+        return None
+    http = spec.get("http") if isinstance(spec, Mapping) else None
+    timeout = http.get("timeout_seconds", INSPECTION_TIMEOUT_S) if isinstance(http, Mapping) else None
+    shape_ok = (
+        isinstance(spec, Mapping) and spec and set(spec) <= set(INSPECTION_KINDS)
+        and isinstance(spec.get("json_schema", {}), Mapping)
+        and (http is None or (isinstance(http, Mapping) and isinstance(http.get("url"), str)
+                              and isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0))
+    )
+    if not shape_ok:
+        return {"error": "invalid_inspection",
+                "expected": '{"json_schema"?: {...}, "http"?: {"url": "...", "timeout_seconds"?: 10}}'}
+    urls = [http["url"].strip()] if http else []
+    raw = os.environ.get(ALLOWED_INSPECTION_URLS_ENV)
+    allowed = frozenset(u.strip() for u in (raw or "").split(",") if u.strip())
+    refused = [u for u in urls if u not in allowed]
+    if refused:
+        return {"error": "inspection_url_not_allowed", "requested_urls": refused, "allowed_urls": sorted(allowed)}
+    return None
+
+
+async def _http_inspection_errors(spec: Mapping[str, Any], parsed: Any) -> List[Dict[str, Any]]:
+    """POST the parsed reply to the caller's endpoint; its errors, or one
+    describing why the endpoint could not answer."""
+    try:
+        async with httpx.AsyncClient(timeout=float(spec.get("timeout_seconds", INSPECTION_TIMEOUT_S))) as client:
+            response = await client.post(spec["url"].strip(), json=parsed)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        return [{"path": "", "message": f"inspection endpoint error: {exc}"}]
+    try:
+        payload = response.json()
+    except ValueError:
+        return [{"path": "", "message": f"inspection endpoint returned non-JSON: {response.text[:200]}"}]
+    if isinstance(payload, Mapping) and payload.get("valid") is True:
+        return []
+    errors = payload.get("errors") if isinstance(payload, Mapping) else None
+    if isinstance(errors, list) and errors:
+        return errors
+    return [{"path": "", "message": "inspection endpoint reported invalid, no errors given"}]
+
+
+async def run_inspection(spec: Mapping[str, Any], parsed: Any) -> List[Dict[str, Any]]:
+    """Run every check `dak:inspection` names on a parsed reply; all their
+    errors ([] when it passes). Refuses (without calling anything) a spec
+    `validate_call_inspection` would refuse."""
+    refused = validate_call_inspection({STATE_CALL_INSPECTION: spec})
+    if refused:
+        return [{"path": "", "message": json.dumps(refused)}]
+    errors: List[Dict[str, Any]] = []
+    if "json_schema" in spec:
+        errors += _json_schema_errors(spec["json_schema"], parsed, "inspection json_schema")
+    if "http" in spec:
+        errors += await _http_inspection_errors(spec["http"], parsed)
+    return errors
 
 
 def call_tool_names(value: Any) -> Optional[List[str]]:
