@@ -44,7 +44,8 @@ def test_call_instruction_is_the_system_prompt_the_llm_receives(agent, fake_llm)
 
 def test_reply_not_matching_output_schema_returns_structured_failure(agent, fake_llm):
     fake_llm.clear(MODEL)
-    fake_llm.script(MODEL, [fake_llm.text('{"note": "missing date"}')])
+    # A failing reply is regenerated (#140): 3 attempts by default, all invalid.
+    fake_llm.script(MODEL, [fake_llm.text('{"note": "missing date"}')] * 3)
 
     events = _run(agent, agent.create_session(), "when?", {"dak:output_schema": DATE_SCHEMA})
 
@@ -52,6 +53,7 @@ def test_reply_not_matching_output_schema_returns_structured_failure(agent, fake
     assert failures, f"events: {events}"
     assert failures[-1]["error"] == "output_schema_validation_failed"
     assert [i["path"] for i in failures[-1]["issues"]] == ["date"]
+    assert failures[-1]["attempts"] == _llm_requests(MODEL) == 3
 
 
 def test_reply_matching_output_schema_is_returned_as_json(agent, fake_llm):
