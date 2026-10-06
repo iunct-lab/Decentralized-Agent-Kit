@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -411,7 +412,7 @@ async def test_run_inspection_never_calls_a_url_outside_the_allow_list(monkeypat
 MCP_URL = "http://caller:9000/mcp"
 
 
-def _fake_mcp(monkeypatch, *, text=None, connect_error=None, is_error=False):
+def _fake_mcp(monkeypatch, *, text=None, connect_error=None, is_error=False, delay=0.0):
     """Stand-ins for the mcp client: the session's call_tool answers `text`."""
     calls = []
 
@@ -437,6 +438,7 @@ def _fake_mcp(monkeypatch, *, text=None, connect_error=None, is_error=False):
 
         async def call_tool(self, name, arguments):
             calls.append(("call_tool", name, arguments))
+            await asyncio.sleep(delay)
             return SimpleNamespace(content=[SimpleNamespace(text=text)] if text is not None else [], isError=is_error)
 
     monkeypatch.setattr(mcp.client.streamable_http, "streamable_http_client", client)
@@ -478,6 +480,39 @@ async def test_run_inspection_mcp_reports_connection_failure(monkeypatch):
     errors = await call_config.run_inspection({"mcp": {"url": MCP_URL, "tool": "check_plan"}}, {})
 
     assert len(errors) == 1 and "inspection MCP call failed" in errors[0]["message"]
+
+
+@pytest.mark.asyncio
+async def test_run_inspection_mcp_bounds_the_whole_call_by_its_timeout(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", MCP_URL)
+    _fake_mcp(monkeypatch, text='{"valid": true}', delay=5)
+
+    started = asyncio.get_running_loop().time()
+    errors = await call_config.run_inspection({"mcp": {"url": MCP_URL, "tool": "t", "timeout_seconds": 0.05}}, {})
+
+    assert asyncio.get_running_loop().time() - started < 1
+    assert errors == [{"path": "", "message": "inspection MCP call timed out after 0.05 s"}]
+
+
+@pytest.mark.asyncio
+async def test_run_inspection_mcp_keeps_failure_messages_short(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", MCP_URL)
+    _fake_mcp(monkeypatch, connect_error=httpx.ConnectError("x" * 1000))
+
+    errors = await call_config.run_inspection({"mcp": {"url": MCP_URL, "tool": "t"}}, {})
+
+    assert errors[0]["message"].startswith("inspection MCP call failed: ConnectError")
+    assert len(errors[0]["message"]) < 300
+
+
+@pytest.mark.asyncio
+async def test_run_inspection_mcp_fills_in_errors_without_a_message(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", MCP_URL)
+    _fake_mcp(monkeypatch, text='{"valid": false, "errors": [{"msg": "bad date"}]}')
+
+    errors = await call_config.run_inspection({"mcp": {"url": MCP_URL, "tool": "t"}}, {})
+
+    assert errors == [{"path": "", "message": '{"msg": "bad date"}'}]
 
 
 @pytest.mark.asyncio

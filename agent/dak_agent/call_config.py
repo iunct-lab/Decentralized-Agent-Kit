@@ -274,7 +274,10 @@ def _verdict_errors(payload: Any, source: str) -> List[Dict[str, Any]]:
         return []
     errors = payload.get("errors") if isinstance(payload, Mapping) else None
     if isinstance(errors, list) and errors:
-        return [e if isinstance(e, Mapping) else {"path": "", "message": str(e)} for e in errors]
+        return [e if isinstance(e, Mapping) and isinstance(e.get("message"), str)
+                else {"path": str(e.get("path", "")) if isinstance(e, Mapping) else "",
+                      "message": json.dumps(e) if isinstance(e, Mapping) else str(e)}
+                for e in errors]
     return [{"path": "", "message": f"{source} reported invalid, no errors given"}]
 
 
@@ -287,14 +290,18 @@ async def _mcp_inspection_errors(spec: Mapping[str, Any], parsed: Any) -> List[D
 
     timeout = float(spec.get("timeout_seconds", INSPECTION_TIMEOUT_S))
     try:
-        # No redirects: an allowed URL must not lead the agent to another host.
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as http_client, \
-                streamable_http_client(spec["url"].strip(), http_client=http_client) as (read, write, _):
-            async with ClientSession(read, write) as session:
-                await asyncio.wait_for(session.initialize(), timeout)
-                result = await asyncio.wait_for(session.call_tool(spec["tool"], arguments={"data": parsed}), timeout)
-    except Exception as exc:
-        return [{"path": "", "message": f"inspection MCP call failed: {exc!r}"}]
+        # One deadline for the whole exchange (connect, initialize, call, close).
+        async with asyncio.timeout(timeout):
+            # No redirects: an allowed URL must not lead the agent to another host.
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as http_client, \
+                    streamable_http_client(spec["url"].strip(), http_client=http_client) as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(spec["tool"], arguments={"data": parsed})
+    except TimeoutError:
+        return [{"path": "", "message": f"inspection MCP call timed out after {timeout:g} s"}]
+    except Exception as exc:  # the caller's server, the network, or the mcp client
+        return [{"path": "", "message": f"inspection MCP call failed: {type(exc).__name__}: {exc}"[:200]}]
     text = "".join(getattr(c, "text", "") or "" for c in (result.content or []))
     if getattr(result, "isError", False):
         return [{"path": "", "message": f"inspection MCP tool failed: {text[:200]}"}]
