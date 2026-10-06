@@ -4,8 +4,8 @@ import json
 
 import httpx
 
-from conftest import (AGENT_RUN_TIMEOUT, AGENT_URL, APP_NAME, FAKE_LLM_URL, event_texts, function_calls,
-                      function_responses)
+from conftest import (AGENT_RUN_TIMEOUT, AGENT_URL, APP_NAME, FAKE_LLM_URL, INSPECT_SERVER_URL, event_texts,
+                      function_calls, function_responses)
 
 MODEL = "fake-default"
 ALT_MODEL = "fake-alt"  # allowed by DAK_ALLOWED_MODELS in docker-compose.test.yml
@@ -146,3 +146,61 @@ def test_unreachable_caller_mcp_ends_the_turn_with_a_reason(agent, fake_llm):
     content = system["content"] if isinstance(system["content"], str) else "".join(
         c.get("text", "") for c in system["content"])
     assert url in content  # the model was told which tools are unavailable
+
+
+# The caller's inspection endpoint, as the agent container reaches it
+# (allowed by DAK_ALLOWED_INSPECTION_URLS in docker-compose.test.yml).
+INSPECT_URL = "http://inspect-server:8080/validate"
+DATE_MISSING = {"valid": False, "errors": [{"path": "date", "message": "date is missing"}]}
+
+
+def _script_inspection(*verdicts):
+    httpx.delete(f"{INSPECT_SERVER_URL}/script", timeout=10.0)
+    if verdicts:
+        httpx.post(f"{INSPECT_SERVER_URL}/script", json={"verdicts": list(verdicts)}, timeout=10.0).raise_for_status()
+
+
+def _inspected() -> list:
+    return httpx.get(f"{INSPECT_SERVER_URL}/requests", timeout=10.0).json()
+
+
+def test_inspection_passes_on_first_try_when_valid(agent, fake_llm):
+    fake_llm.clear(MODEL)
+    _script_inspection()
+    fake_llm.script(MODEL, [fake_llm.text('{"date": "2026-09-22"}')])
+
+    inspection = {"json_schema": DATE_SCHEMA, "http": {"url": INSPECT_URL}}
+    events = _run(agent, agent.create_session(), "when?", {"dak:inspection": inspection})
+
+    assert json.loads(event_texts(events)[-1]) == {"date": "2026-09-22"}, f"events: {events}"
+    assert _llm_requests(MODEL) == 1
+    assert _inspected() == [{"date": "2026-09-22"}]
+
+
+def test_inspection_retries_once_then_succeeds(agent, fake_llm):
+    fake_llm.clear(MODEL)
+    _script_inspection(DATE_MISSING)  # then valid
+    fake_llm.script(MODEL, [fake_llm.text('{"note": "missing date"}'), fake_llm.text('{"date": "2026-09-22"}')])
+
+    events = _run(agent, agent.create_session(), "when?", {"dak:inspection": {"http": {"url": INSPECT_URL}}})
+
+    assert json.loads(event_texts(events)[-1]) == {"date": "2026-09-22"}, f"events: {events}"
+    requests = httpx.get(f"{FAKE_LLM_URL}/requests/{MODEL}", timeout=10.0).json()
+    assert len(requests) == 2
+    assert "date is missing" in json.dumps(requests[1]["messages"])  # the inspection's error, sent back
+    assert _inspected() == [{"note": "missing date"}, {"date": "2026-09-22"}]
+
+
+def test_inspection_fails_after_retry_limit(agent, fake_llm):
+    fake_llm.clear(MODEL)
+    _script_inspection(DATE_MISSING, DATE_MISSING)
+    fake_llm.script(MODEL, [fake_llm.text('{"note": "a"}'), fake_llm.text('{"note": "b"}')])
+
+    events = _run(agent, agent.create_session(), "when?",
+                  {"dak:inspection": {"http": {"url": INSPECT_URL}}, "dak:max_llm_calls": 2})
+
+    failure = json.loads(event_texts(events)[-1])
+    assert failure["error"] == "inspection_failed", f"events: {events}"
+    assert failure["attempts"] == _llm_requests(MODEL) == 2
+    assert failure["issues"] == DATE_MISSING["errors"]
+    assert failure["last_response"] == '{"note": "b"}'

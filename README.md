@@ -269,6 +269,10 @@ DAK_ALLOWED_MCP_URLS=https://example.com/mcp  # optional. MCP servers a caller m
                              # pass per call with `dak:tools.mcp_servers`
                              # (docs/architecture/call_config.md). Unset = no
                              # caller may pass one.
+DAK_ALLOWED_INSPECTION_URLS=https://example.com/validate  # optional. Inspection
+                             # endpoints a caller may name per call with
+                             # `dak:inspection` (docs/architecture/call_config.md).
+                             # Unset = no caller may name one.
 
 # Enforcer Mode
 ENABLE_ENFORCER_MODE=true    # Enable strict ReAct pattern (Ulysses Pact)

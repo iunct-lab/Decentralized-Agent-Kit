@@ -16,6 +16,16 @@ services:
       timeout: 5s
       retries: 15
 
+  inspect-server:  # a caller's inspection endpoint (dak:inspection)
+    build: ./tests/integration/inspect_server
+    ports:
+      - "8090:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
   agent:
     environment:
       - MODEL_NAME=openai/fake-default
@@ -27,9 +37,11 @@ services:
       - DAK_APPROVAL_TIMEOUT_SECONDS=5
       # The stack's own mcp-server stands in for a caller's MCP server (dak:tools.mcp_servers).
       - DAK_ALLOWED_MCP_URLS=http://mcp-server:8000/mcp,http://caller-mcp-unreachable:8000/mcp
+      - DAK_ALLOWED_INSPECTION_URLS=http://inspect-server:8080/validate
     depends_on:
       - postgres
       - fake-llm
+      - inspect-server
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/list-apps')"]
       interval: 5s
