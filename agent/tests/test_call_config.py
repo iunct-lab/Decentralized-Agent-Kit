@@ -379,6 +379,18 @@ async def test_run_inspection_http_turns_odd_errors_into_issues(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_inspection_http_fills_in_errors_without_a_message(monkeypatch):
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", INSPECT_URL)
+    reply = _http_reply({"valid": False, "errors": [{"path": "date", "msg": "日付が不正"}, {"m": "x" * 500}]})
+    monkeypatch.setattr(httpx.AsyncClient, "post", AsyncMock(return_value=reply))
+
+    errors = await call_config.run_inspection({"http": {"url": INSPECT_URL}}, {})
+
+    assert errors[0] == {"path": "date", "message": '{"path": "date", "msg": "日付が不正"}'}
+    assert len(errors[1]["message"]) == 200
+
+
+@pytest.mark.asyncio
 async def test_run_inspection_http_reports_invalid_url(monkeypatch):
     monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", "http://[::1/v")
 
@@ -420,7 +432,7 @@ def _fake_mcp(monkeypatch, *, text=None, connect_error=None, is_error=False, del
     async def client(url, **kwargs):
         if connect_error:
             raise connect_error
-        calls.append(("connect", url, kwargs["http_client"].follow_redirects))
+        calls.append(("connect", url, kwargs["http_client"].follow_redirects, kwargs["terminate_on_close"]))
         yield "read", "write", lambda: None
 
     class Session:
@@ -455,7 +467,8 @@ async def test_run_inspection_mcp_reports_errors(monkeypatch):
 
     assert errors == [{"path": "date", "message": "missing"}]
     # No redirects: an allowed URL must not lead the agent to another host.
-    assert calls == [("connect", MCP_URL, False), ("initialize",), ("call_tool", "check_plan", {"data": {"note": "x"}})]
+    # No closing DELETE: it would run after the deadline has fired.
+    assert calls == [("connect", MCP_URL, False, False), ("initialize",), ("call_tool", "check_plan", {"data": {"note": "x"}})]
 
 
 @pytest.mark.asyncio
@@ -497,7 +510,8 @@ async def test_run_inspection_mcp_bounds_the_whole_call_by_its_timeout(monkeypat
 @pytest.mark.asyncio
 async def test_run_inspection_mcp_keeps_failure_messages_short(monkeypatch):
     monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", MCP_URL)
-    _fake_mcp(monkeypatch, connect_error=httpx.ConnectError("x" * 1000))
+    # The real client raises transport errors from an anyio task group.
+    _fake_mcp(monkeypatch, connect_error=ExceptionGroup("unhandled errors in a TaskGroup", [httpx.ConnectError("x" * 1000)]))
 
     errors = await call_config.run_inspection({"mcp": {"url": MCP_URL, "tool": "t"}}, {})
 

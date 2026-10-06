@@ -276,7 +276,7 @@ def _verdict_errors(payload: Any, source: str) -> List[Dict[str, Any]]:
     if isinstance(errors, list) and errors:
         return [e if isinstance(e, Mapping) and isinstance(e.get("message"), str)
                 else {"path": str(e.get("path", "")) if isinstance(e, Mapping) else "",
-                      "message": json.dumps(e) if isinstance(e, Mapping) else str(e)}
+                      "message": (json.dumps(e, ensure_ascii=False) if isinstance(e, Mapping) else str(e))[:200]}
                 for e in errors]
     return [{"path": "", "message": f"{source} reported invalid, no errors given"}]
 
@@ -290,17 +290,21 @@ async def _mcp_inspection_errors(spec: Mapping[str, Any], parsed: Any) -> List[D
 
     timeout = float(spec.get("timeout_seconds", INSPECTION_TIMEOUT_S))
     try:
-        # One deadline for the whole exchange (connect, initialize, call, close).
+        # One deadline for the whole exchange. No closing DELETE of the MCP
+        # session: it would run after the deadline has fired, unbounded by it.
         async with asyncio.timeout(timeout):
             # No redirects: an allowed URL must not lead the agent to another host.
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as http_client, \
-                    streamable_http_client(spec["url"].strip(), http_client=http_client) as (read, write, _):
+                    streamable_http_client(spec["url"].strip(), http_client=http_client,
+                                           terminate_on_close=False) as (read, write, _):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     result = await session.call_tool(spec["tool"], arguments={"data": parsed})
     except TimeoutError:
         return [{"path": "", "message": f"inspection MCP call timed out after {timeout:g} s"}]
     except Exception as exc:  # the caller's server, the network, or the mcp client
+        while isinstance(exc, BaseExceptionGroup) and len(exc.exceptions) == 1:  # anyio task groups
+            exc = exc.exceptions[0]
         return [{"path": "", "message": f"inspection MCP call failed: {type(exc).__name__}: {exc}"[:200]}]
     text = "".join(getattr(c, "text", "") or "" for c in (result.content or []))
     if getattr(result, "isError", False):
