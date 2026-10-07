@@ -51,31 +51,185 @@ PBI #296 / Task #297。#20 の `SandboxManager`（`session-sandbox.md`）は、`
 
 ### gVisor と runc（#298）
 
+2026-10-07 に計測した。**計測先のカーネルは 4.14 で、gVisor の要件（Linux 5.6 以上）を満たしていない**。後から分かったことで、計測先のカーネルは選べなかった。runsc の値は要件の外での参考値として読む。下の「runsc で起きたこと」のうち、カーネルが原因の見込みのものがある（原因は未確認）。
+
 計測先の構成:
 
 | 項目 | 値 |
 |---|---|
+| CPU / メモリ | arm64（aarch64）8 vCPU / 16 GB |
+| カーネル | 4.14（Amazon Linux 2） |
+| Docker | 28.5.2、root で動く。cgroup v1（cgroupfs） |
+| gVisor | release-20260928.0（`gvisor.tar.bz2` を公式の URL から取り、sha512 を確かめた） |
+| `/dev/kvm` | 無い（`ls: cannot access '/dev/kvm': No such file or directory`） |
 
-所要時間（ミリ秒、10 回の中央値）:
+runsc で起きたこと:
 
-| 計測 | runc | runsc | 差 |
+- 既定の設定（`runsc install` のまま）では、どのコンテナも起動しなかった: `cannot create gofer process: creating gofer filestore files: failed to create filestore file ".gvisor.filestore.…" inside "/var/lib/docker/overlay2/…/merged": function not implemented`。ルートファイルシステムの上に置く filestore を作れない
+- `--overlay2=root:memory`（filestore をメモリに置く）を付けて別名（`runsc-mem`）で登録すると起動した。下の runsc の値はこの設定のもの
+- `docker exec` が失敗する: `checking if sandbox is running: pidfd_open(…): function not implemented`。`pidfd_open` は Linux 5.3 で入ったシステムコールで、計測先のカーネル（4.14）には無い。`SandboxManager` はツールを `docker exec` で実行するので、この計測先では runsc を使えない
+- `docker rm -f` が毎回約 10 秒かかった（runc は約 0.3 秒）。原因は未確認
+
+所要時間（ミリ秒、10 回の中央値。括弧は最小〜最大）:
+
+| 計測 | runc | runsc（`--overlay2=root:memory`） | 差 |
 |---|---:|---:|---:|
-| (a) `docker run --rm … python -c pass` | | | |
-| (b) ハッシュの処理（コンテナの中で測る） | | | |
-| 作成 `docker run -d … sleep infinity` | | | |
-| 実行 `docker exec … python -c pass` | | | |
-| 破棄 `docker rm -f` | | | |
+| (a) `docker run --rm … python -c pass` | 717（689〜861） | 849（768〜898） | +132（+18%） |
+| (b) ハッシュの処理（`docker run` でコンテナの中で測る） | 174.9（173.1〜175.7） | 190.7（186.5〜201.3） | +15.8（+9%） |
+| 作成 `docker run -d … sleep infinity` | 420（349〜492） | 523（391〜614） | +103（+24%） |
+| 実行 `docker exec … python -c pass` | 46（45〜47） | 測れない（`pidfd_open`） | — |
+| 破棄 `docker rm -f` | 313（240〜393） | 10321（10245〜10370、9 回） | +10008 |
 
-#283 の引数が効くか:
+#283 の引数が効くか（runc は `docker exec`、runsc は `docker run` で確かめた。runsc の `docker exec` は終了コードを当てにできないため）:
 
-| 引数 | runc | runsc |
-|---|---|---|
+| 引数 | 確かめ方 | runc | runsc |
+|---|---|---|---|
+| `--user nobody` | `id -u` | 65534 | 65534 |
+| `--read-only` | `touch /x` | 拒否 | 拒否 |
+| `--tmpfs /workspace:…,exec` | 置いたスクリプトを実行 | 実行できた | 実行できた |
+| `--cap-drop ALL` | `/proc/self/status` の `CapEff` | 0 | 0 |
+| `--network none` | `1.1.1.1:443` へ TCP 接続 | `Network is unreachable` | `Network is unreachable` |
+| `--memory=512m` | 700 MB を確保 | exit 137（OOM） | exit 137（OOM） |
+| `--pids-limit=128` | スレッドを 400 本起動 | 127 本目で `RuntimeError` | 400 本とも起動した（効かない） |
+| `--pids-limit=128` | `sleep` を 200 個起動 | 127 個目で `BlockingIOError` | 50 個目で `OSError`（原因は未確認） |
+| `--cpus=1` | 2 プロセスを 2 秒回し、子の CPU 時間 / 経過時間を見る（効けば約 2 秒、効かなければ約 4 秒） | 2.05 秒 / 2.08 秒 | 3.11 秒 / 2.13 秒（1 CPU 分を超えた。sandbox の中の CPU 時間の数え方が違う可能性もあり、効かないとは言い切れない） |
 
-再現コマンド:（#298 で書く）
+読み方:
+
+- gVisor の起動の上乗せは、この計測先で 1 回あたり約 0.1 秒、Python の処理で約 1 割。どちらも `run_command` のタイムアウト（60 秒）に比べて小さい
+- 効かなかったのは `--pids-limit` のスレッドの数。gVisor の公式の互換性の文書は「sandbox の中では cgroup の上限を強制しない」としている。`--cpus` は確かめきれていない
+- 要件どおりのカーネル（5.6 以上）で、`docker exec` と `docker rm -f` が runc と同じように動くかは未検証
+
+再現コマンド: 下のスクリプトを、root で動く Docker のある arm64 の Linux で `bash measure.sh` として 1 回走らせる（`N=10` が既定）。runsc を登録し、dockerd に `SIGHUP` を送って読み直させる。使い捨てのマシンで走らせる前提で、片付けの手順は無い。
+
+<details>
+<summary>measure.sh</summary>
+
+```bash
+#!/bin/bash
+# #298: runc と gVisor（runsc）を #283 の SandboxManager と同じ引数で比べる。1 回のビルドで完結する。
+set -u
+N=${N:-10}
+IMG=python:3.12-slim
+SUDO=; [ "$(id -u)" = 0 ] || SUDO=sudo
+ARGS=(--network none --read-only --tmpfs /workspace:rw,exec,size=256m --tmpfs /tmp:rw,size=64m --env HOME=/workspace
+      --cpus=1 --memory=512m --pids-limit=128 --cap-drop ALL --user nobody)
+COMPUTE='import time,hashlib; t=time.perf_counter(); [hashlib.sha256(str(i).encode()).hexdigest() for i in range(200000)]; print(round((time.perf_counter()-t)*1000,1))'
+ms() { echo $(( ($(date +%s%N) - $1) / 1000000 )); }
+say() { echo "RESULT $*"; }
+
+echo "== env"; uname -a; nproc; free -m; id; docker version --format 'docker {{.Server.Version}}'
+docker info --format 'cgroup {{.CgroupDriver}} v{{.CgroupVersion}} rootless={{json .SecurityOptions}}'
+ls -l /dev/kvm 2>&1 | sed 's/^/KVM /'
+grep -c -E 'vmx|svm' /proc/cpuinfo 2>/dev/null | sed 's/^/cpuflags_virt /'
+
+echo "== install runsc"
+ARCH=$(uname -m); URL=https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}
+cd /tmp && curl -fsSLO $URL/gvisor.tar.bz2 -O $URL/gvisor.tar.bz2.sha512 && sha512sum -c gvisor.tar.bz2.sha512 \
+  && $SUDO tar -xjf gvisor.tar.bz2 -C /usr/local/bin && ls /usr/local/bin | grep -E 'runsc|gvisor' || { say "runsc_install FAILED"; }
+runsc --version 2>&1 | head -3
+echo "before: $(docker info --format '{{range $k,$v := .Runtimes}}{{$k}} {{end}}')"
+$SUDO /usr/local/bin/runsc install
+# 既定の runsc がルートファイルシステムに filestore を作れない環境のために、メモリに置く版も登録する
+$SUDO /usr/local/bin/runsc install --runtime runsc-mem -- --overlay2=root:memory
+cat /etc/docker/daemon.json
+# dockerd は runtimes を SIGHUP で読み直す（systemd が無い環境でも済む）
+$SUDO kill -HUP $(pidof dockerd); sleep 3
+RT=$(docker info --format '{{range $k,$v := .Runtimes}}{{$k}} {{end}}'); echo "after: $RT"
+case " $RT " in *" runsc "*) ;; *) say "runsc_register FAILED"; ;; esac
+
+docker pull -q $IMG >/dev/null
+for R in runsc runsc-mem; do
+  docker run --rm --runtime=$R hello-world >/dev/null 2>/tmp/hw.err && say "$R hello-world ok" || say "$R hello-world FAILED: $(tail -3 /tmp/hw.err | tr '\n' ' ')"
+done
+OK=runsc; docker run --rm --runtime=runsc hello-world >/dev/null 2>&1 || OK=runsc-mem
+
+median() { python3 -c 'import sys,statistics as s; v=[float(x) for x in sys.argv[1:]]; print(s.median(v) if v else "NA", min(v) if v else "", max(v) if v else "")' "$@"; }
+
+for R in runc $OK; do
+  echo "== $R"
+  a=(); c=(); e=(); d=(); b=()
+  for i in $(seq $N); do
+    t=$(date +%s%N); docker run --rm --runtime=$R "${ARGS[@]}" $IMG python -c pass >/dev/null 2>/tmp/err && a+=($(ms $t)) || echo "run_fail $R: $(tail -2 /tmp/err)"
+  done
+  for i in $(seq $N); do
+    n=m298-$R-$i
+    t=$(date +%s%N); docker run -d --name $n --runtime=$R "${ARGS[@]}" $IMG sleep infinity >/dev/null 2>/tmp/err && c+=($(ms $t)) || echo "create_fail $R: $(tail -2 /tmp/err)"
+    t=$(date +%s%N); docker exec -w /workspace $n timeout 60 python -c pass >/dev/null 2>/tmp/exerr && e+=($(ms $t)) || { [ $i = 1 ] && say "$R exec_error $(tail -1 /tmp/exerr)"; }
+    v=$(docker exec -w /workspace $n timeout 60 python -c "$COMPUTE" 2>/dev/null) && b+=($v)
+    t=$(date +%s%N); docker rm -f $n >/dev/null 2>&1 && d+=($(ms $t))
+  done
+  say "$R a_run_pass_ms $(median ${a[@]+"${a[@]}"}) n=${#a[@]}"
+  say "$R c_create_ms $(median ${c[@]+"${c[@]}"}) n=${#c[@]}"
+  say "$R e_exec_pass_ms $(median ${e[@]+"${e[@]}"}) n=${#e[@]}"
+  say "$R b_compute_ms $(median ${b[@]+"${b[@]}"}) n=${#b[@]}"
+
+  b2=()
+  for i in $(seq $N); do v=$(docker run --rm --runtime=$R "${ARGS[@]}" $IMG python -c "$COMPUTE" 2>/dev/null) && b2+=($v); done
+  say "$R b_compute_run_ms $(median ${b2[@]+"${b2[@]}"}) n=${#b2[@]}"
+  r() { docker run --rm --runtime=$R "${ARGS[@]}" $IMG "$@" 2>&1 | tail -1; }
+  say "$R run_memory_limit $(docker run --rm --runtime=$R "${ARGS[@]}" $IMG python -c 'b=bytearray(700*1024*1024); print("ALLOCATED")' 2>&1 | tail -1; echo " exit=${PIPESTATUS[0]}")"
+  say "$R run_pids_limit $(r python -c 'import threading,time
+n=0
+try:
+  for i in range(400):
+    threading.Thread(target=time.sleep,args=(5,),daemon=True).start(); n+=1
+except Exception as ex: print("stopped_at", n, type(ex).__name__); raise SystemExit
+print("started", n)')"
+  say "$R run_procs_limit $(r python -c 'import subprocess
+ps=[]
+try:
+  for i in range(200): ps.append(subprocess.Popen(["sleep","5"]))
+  print("spawned", len(ps))
+except Exception as ex: print("stopped_at", len(ps), type(ex).__name__)')"
+  say "$R run_cpus $(r python -c 'import os,time,multiprocessing as m
+def burn():
+  t=time.time()
+  while time.time()-t<2: pass
+ps=[m.Process(target=burn) for _ in range(2)]; w=time.time(); [p.start() for p in ps]; [p.join() for p in ps]
+c=os.times(); print("cpu_s=%.2f wall_s=%.2f" % (c.children_user+c.children_system, time.time()-w))')"
+  say "$R rm_ms $(median ${d[@]+"${d[@]}"}) n=${#d[@]}"
+
+  echo "== $R: do the #283 flags take effect"
+  n=m298-chk-$R; docker run -d --name $n --runtime=$R "${ARGS[@]}" $IMG sleep infinity >/dev/null 2>&1
+  x() { docker exec -w /workspace $n timeout 60 "$@" 2>&1 | tail -1; }
+  say "$R user $(x id -u)"
+  say "$R readonly_root $(x sh -c 'touch /x && echo WRITABLE || echo denied')"
+  say "$R tmpfs_exec $(x sh -c 'printf "#!/bin/sh\necho ran" > /workspace/s.sh && chmod +x /workspace/s.sh && /workspace/s.sh')"
+  say "$R capeff $(x sh -c 'grep CapEff /proc/self/status')"
+  say "$R network $(x python -c 'import socket; s=socket.socket(); s.settimeout(3)
+try: s.connect(("1.1.1.1",443)); print("CONNECTED")
+except Exception as ex: print("blocked:", type(ex).__name__, ex)')"
+  say "$R ifaces $(x sh -c 'ls /sys/class/net 2>/dev/null | tr "\n" " "; cat /proc/net/dev | tail -n +3 | cut -d: -f1 | tr -d " " | tr "\n" " "')"
+  say "$R memory_limit $(docker exec $n timeout 60 python -c 'b=bytearray(700*1024*1024); print("ALLOCATED 700MB")' >/dev/null 2>&1; echo "exit=$?")"
+  docker inspect -f '{{.State.Running}} oom={{.State.OOMKilled}}' $n | sed "s/^/RESULT $R after_mem_state /"
+  docker rm -f $n >/dev/null 2>&1; docker run -d --name $n --runtime=$R "${ARGS[@]}" $IMG sleep infinity >/dev/null 2>&1
+  say "$R pids_limit $(x python -c 'import threading,time
+n=0
+try:
+  for i in range(400):
+    threading.Thread(target=time.sleep,args=(5,),daemon=True).start(); n+=1
+except Exception as ex: print("stopped_at", n, type(ex).__name__); raise SystemExit
+print("started", n)')"
+  say "$R cpus $(x python -c 'import os,time,multiprocessing as m
+def burn():
+  t=time.time()
+  while time.time()-t<2: pass
+ps=[m.Process(target=burn) for _ in range(2)]; w=time.time(); [p.start() for p in ps]; [p.join() for p in ps]
+c=os.times(); print("cpu_s=%.2f wall_s=%.2f" % (c.children_user+c.children_system, time.time()-w))')"
+  docker rm -f $n >/dev/null 2>&1
+done
+
+echo "== kata"
+if [ -e /dev/kvm ]; then say "kata /dev/kvm present; not attempted in this script (see log)"; else say "kata skipped: /dev/kvm absent"; fi
+echo "== done"
+```
+
+</details>
 
 ### Kata Containers（#298）
 
-（#298 で書く。計測先の `ls -l /dev/kvm` の結果と、計測の表または未検証の記録）
+未検証。計測先に `/dev/kvm` が無い（`ls -l /dev/kvm` → `ls: cannot access '/dev/kvm': No such file or directory`）。Kata は「nested virtualization か bare metal が要る」（1 節の Kata の行の install）ので、この計測先では動かせない。KVM の使えるホストで測るかは #300 の判断に回す。
 
 ## 5. 推す案
 
