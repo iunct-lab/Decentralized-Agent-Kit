@@ -67,7 +67,7 @@ uv run ./run_tck.py --sut-host http://localhost:8000/a2a/dak_agent --transport j
 ```
 
 a2a-tck は `{sut-host}/.well-known/agent-card.json` を読み、カードの `supportedInterfaces` から試す窓口を決める。
-件数はテスト（pytest）の数、表は要件の数。`must_compatibility` は tck の集計（`reports/compatibility.json` の `summary`）のままで、MUST の要件のうち PASS の割合（SKIPPED を分母から除く）。
+pytest の出力（`passed` / `failed` / `errors`）の数はテストの数、それ以外（表と本文）の件数は要件の数。`must_compatibility` は tck の集計（`reports/compatibility.json` の `summary`）のままで、MUST の要件のうち PASS の割合（SKIPPED を分母から除く）。
 
 ### 3.1 今の main（`a2a-sdk` 0.3.26、0.3 の形のカード）
 
