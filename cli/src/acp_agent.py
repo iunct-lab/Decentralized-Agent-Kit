@@ -39,7 +39,9 @@ def _unwrapped(response: Any) -> Any:
 def _result_text(response: Any) -> str:
     """The start of a tool's result as text: an MCP tool's content, a built-in tool's `result`."""
     response = _unwrapped(response)
-    if isinstance(response, dict) and isinstance(response.get("content"), list):
+    if isinstance(response, str):
+        text = response
+    elif isinstance(response, dict) and isinstance(response.get("content"), list):
         text = "\n".join(c.get("text", "") for c in response["content"] if isinstance(c, dict))
     elif isinstance(response, dict) and isinstance(response.get("result"), str):
         text = response["result"]
@@ -176,7 +178,7 @@ class DakAcpAgent(Agent):
                 continue
             asked = await self._send(session_id, turn, event) or asked
         await reading  # raises what the stream raised
-        if failure and not turn["cancelled"]:
+        if failure is not None and not turn["cancelled"]:
             raise RequestError.internal_error({"message": failure})
         return asked
 

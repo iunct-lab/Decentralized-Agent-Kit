@@ -105,6 +105,17 @@ def test_a_failed_turn_is_a_json_rpc_error():
     assert "backend down" in str(e.value.data)
 
 
+def test_an_empty_error_still_fails_the_turn():
+    agent, _, _ = _agent_with([{"error": ""}])
+    with pytest.raises(RequestError):
+        asyncio.run(agent.prompt(prompt=[text_block("hi")], session_id="s1"))
+
+
+def test_a_rewritten_string_result_is_shown_as_text():
+    [update] = events_to_updates(_result({"observation": "hook_rewrote_input", "result": "line1\nline2"}))
+    assert update.content[0].content.text == "line1\nline2"
+
+
 def test_unknown_session_is_invalid_params():
     with pytest.raises(RequestError) as e:
         asyncio.run(DakAcpAgent().prompt(prompt=[text_block("hi")], session_id="nope"))
