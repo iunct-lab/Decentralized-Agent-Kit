@@ -34,7 +34,7 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
 | 大きなツール結果の退避 | 大きい結果をファイルへ退避してポインタを返す / Read の offset・limit | 標準機能なし（`after_tool_callback` プラグインと Artifact で組める） | **実装（本変更）**: `ContextHarnessPlugin` + `read_tool_output` |
 | ファイル操作ツール | `ls`/`read_file`/`write_file`/`edit_file`/`glob`/`grep` | `EnvironmentToolset`（read/write/edit/execute）、`ExecuteBashTool` | MCP の read/write/list/run/search（名前検索のみ）。本変更で出力上限と行範囲読み込みを追加 |
 | 計画 / TODO | `write_todos` | `PlanReActPlanner` / `BuiltInPlanner` | `planner`（確認必須・状態に残らない） |
-| サブエージェント（コンテキスト分離） | `task` ツール | `AgentTool`（子エージェントを独立コンテキストで実行し結果だけ返す） | A2A peer のみ。調査用の分離サブエージェントは無し |
+| サブエージェント（コンテキスト分離） | `task` ツール | `AgentTool`（子エージェントを独立コンテキストで実行し結果だけ返す） | A2A peer に加え、調査用の `AgentTool`（`dak_explorer`、#85）を実装。§3 の「調査サブエージェント」 |
 | スキル（段階的開示） | Skills | `SkillToolset`（list/search/load skill、resource、script） | 独自 `SkillRegistry` + `enable_skill` |
 | ツール失敗からの回復 | リトライ / 自己修正 | `ReflectAndRetryToolPlugin` | `on_tool_error` で観測値化 + §3 の 0（繰り返しのガード）。未知のツール名は `{"observation": "unknown_tool", "candidates"}`（`difflib` で近い名前を最大 3 つ、#185）。ReflectAndRetry は不採用（`docs/design/reflect_retry_plugin.md`、#91） |
 | プロンプトキャッシュ | Anthropic cache | `ContextCacheConfig`（2.8 で Anthropic のキャッシュブレークポイント対応） | 未使用 |
@@ -212,6 +212,15 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 - リセットの材料は `harness.build_reset_compaction(events, handoff_text, original_request_text)`。渡したイベントの範囲全体を覆う ADK の `EventCompaction` を返し、中身は `User request: <元の依頼>` と handoff の文だけ。これを `actions.compaction` に持つイベントをセッションに足すと、以降のリクエストはその範囲の生の履歴（ツールの結果も）の代わりにこの 2 つから組まれる。新しいリセットの仕組みは作らず、自動の圧縮と同じ ADK の圧縮イベントを使う。呼び出す口（`new_context` ツール）は #113。
 - 検証: `test_adaptive_agent.py::test_saved_handoff_reaches_a_resumed_session_in_a_new_process_verbatim`、`test_adaptive_agent.py::test_saved_handoff_reaches_a_turn_that_comes_over_a2a`、`test_adaptive_agent.py::test_handoff_written_mid_invocation_reaches_the_next_model_call`、`test_harness.py::test_reset_compaction_lets_the_scripted_task_complete_from_handoff_alone`、`test_harness.py::test_build_reset_compaction_covers_full_range`。
 
+### 調査サブエージェント（`dak_explorer`、#85）
+
+- 広い調査（多数のファイルの走査・要約）を、読み取り専用のサブエージェント `dak_explorer` に委譲できる（`agent/dak_agent/explorer.py`）。ADK の `AgentTool` で包んで `root_agent` のツールに常時入れ、指示の末尾に「広い調査は `dak_explorer` に委譲する」の 1 文を足す。
+- サブエージェントは同じプロセスの中で、親と同じモデル（同じ Multi-LLM 設定）を使い、既定の MCP サーバの読み取り専用ツール（`read_file` / `list_files` / `search_files` / `grep` / `deep_think`）だけを持つ。`AgentTool` が別のセッションで走らせるので、読んだファイルやツールの生出力は親のセッションにもモデル要求にも入らず、最終回答だけがツール結果になる。親の plugin（権限・ハーネス）はサブエージェントにも引き継がれる。
+- A2A peer（`RemoteA2aAgent`、`agent/dak_agent/a2a_peer_manager.py`）は別のプロセスの別のエージェントで、`transfer_to_agent` で会話ごと渡し、書き込みも含めて自分のツールと設定で自律的に動く。
+- 使い分け: 同じ会話の中で一時的に調査だけを分離したいときは `dak_explorer`、別のエージェントに任せて独立して動かしたいとき（そのエージェントにしか無いツールや権限が要るときも）は A2A peer。`dak_explorer` は peer の設定が無くても常に使える。
+- 制限: `AgentTool` の新しいセッションのキーで MCP を呼ぶので、隔離環境（`SANDBOX_MODE` が off 以外）では親と別の作業場所を見る。親のキーの引き継ぎは #527。
+- 検証: `test_explorer.py::test_explorer_tool_hides_its_raw_tool_output_from_the_parent_request`（親のモデル要求とセッションにサブエージェントのツール生出力が入らず、結論だけが入る）、`test_explorer.py::test_make_explorer_tool_only_has_read_only_tools`。
+
 ### 承認の保留と reply（#100）
 
 承認待ち（ツールの確認）と質問待ち（`ask_question`）を、どのクライアントからでも一覧して答えられる。
@@ -290,7 +299,7 @@ MRTR（MCP 2026-07-28、SEP-2322）との対応: 保留の 1 件 ↔ `InputRequi
 
 | 優先 | 項目 | 狙い | 関連 |
 |---|---|---|---|
-| P1 | **調査用サブエージェント（`AgentTool`）** | 「リポジトリを読んで要約」を子エージェントに任せ、親のコンテキストには結論だけを残す（Deep Agents の `task`、Claude Code の Explore 相当）。長い調査タスクで最も効く | #85 |
+| ~~P1~~ | ~~**調査用サブエージェント（`AgentTool`）**~~ | **済み（#85）**: `dak_explorer`。§3 の「調査サブエージェント」。隔離環境で親と同じ作業場所を読むのは #527 | #85, #527 |
 | P1 | **内容検索ツール（grep）と行番号付き読み込み** | 今の `search_files` はファイル名しか検索できず、中身を探すにはファイル全体を読むしかない。`grep(pattern, path, glob)` と `edit_file`（文字列置換）を足すか、ADK `EnvironmentToolset` への移行を検討 | #86, #16, #20 |
 | ~~P1~~ | ~~**TODO ツール（セッション state に保存）**~~ | **済み（#87）**: `write_todos` / `read_plan`。上の「計画と進捗」 | #87, #21 |
 | ~~P2~~ | ~~**コンテキスト超過からの回復**~~ | **済み（#88）**: 圧縮側は §5、モデル呼び出し側は §3 の 4（予算を絞って有限回呼び直し、尽きたら説明文で終える） | #88 |
