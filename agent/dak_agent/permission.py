@@ -162,6 +162,9 @@ DEFAULT_RULES: List[Rule] = [
     Rule("default", "*", "*", "ask"),
     *(Rule("default", t, "*", "allow") for t in ("read_file", "list_files", "search_files", "grep", "deep_think")),
     *(Rule("default", t, p, "ask") for t in ("read_file", "grep") for p in ("*.env", "*.env.*")),
+    # Reads outside the workspace (#109): an absolute path or one through `..`.
+    *(Rule("default", t, p, "ask")
+      for t in ("read_file", "list_files", "search_files", "grep") for p in ("/*", "..", "../*", "*/..", "*/../*")),
     *(Rule("default", "run_command", p, "allow") for g in _READ_ONLY_GIT for p in (f"git {g}", f"git {g} *")),
     # Options that make those git commands write a file or run a program.
     # No space before the option: shlex.join may quote the word (`'--output=a b'`).
