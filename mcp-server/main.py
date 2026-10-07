@@ -62,6 +62,14 @@ MAX_OUTPUT_CHARS = _env_int("MCP_MAX_OUTPUT_CHARS", 50000)
 MAX_LIST_ENTRIES = _env_int("MCP_MAX_LIST_ENTRIES", 500)
 MAX_GREP_MATCHES = _env_int("MCP_MAX_GREP_MATCHES", 100)
 
+# Project instructions (get_project_instructions): per directory the first of
+# these that exists, root to `path`, cut at this many bytes in total. Only
+# paths under one of the trusted prefixes (relative to /projects, `:`-separated;
+# `.` = the whole mount) are read.
+INSTRUCTION_FILENAMES = ("AGENTS.md", "CLAUDE.md", "CONTEXT.md")
+MAX_INSTRUCTIONS_BYTES = _env_int("MCP_INSTRUCTIONS_MAX_BYTES", 32768)
+TRUSTED_WORKSPACE_PREFIXES = [os.path.normpath(p.strip()) for p in os.getenv("MCP_TRUSTED_WORKSPACE_PREFIXES", ".").split(":") if p.strip()]
+
 
 def _cap_text(text: str, hint: str, limit: int = MAX_OUTPUT_CHARS) -> str:
     if len(text) <= limit:
@@ -388,6 +396,65 @@ async def edit_file(path: str, old_string: str, new_string: str, replace_all: bo
     if replace_all:
         return f"Replaced {count} occurrence(s) in {path}"
     return f"Replaced 1 occurrence in {path}"
+
+
+
+def _workspace_relpath(path: str) -> str:
+    """`path` relative to the workspace root, symlinks resolved (".." or "../…" when it leaves it)."""
+    return os.path.relpath(os.path.realpath(path), os.path.realpath("."))
+
+
+def _is_trusted_path(path: str) -> bool:
+    resolved = _workspace_relpath(path)
+    if resolved == ".." or resolved.startswith("../"):
+        return False
+    return any(
+        prefix == "." or resolved == prefix.rstrip("/") or resolved.startswith(prefix.rstrip("/") + "/")
+        for prefix in TRUSTED_WORKSPACE_PREFIXES
+    )
+
+
+def _walk_instruction_dirs(path: str) -> list[str]:
+    """The directories from the workspace root down to `path` (its parent when it is a file)."""
+    resolved = _workspace_relpath(path)
+    if os.path.isfile(path):
+        resolved = os.path.dirname(resolved) or "."
+    dirs = ["."]
+    if resolved != ".":
+        parts = resolved.split(os.sep)
+        dirs += [os.path.join(*parts[: i + 1]) for i in range(len(parts))]
+    return dirs
+
+
+@mcp.tool()
+async def get_project_instructions(path: str = ".") -> str:
+    """
+    Read the project's instruction files (AGENTS.md, else CLAUDE.md, else
+    CONTEXT.md in each directory) from the workspace root down to `path`,
+    root first: a later (deeper) section overrides an earlier one.
+    Always reads the server's workspace (/projects), never a session sandbox.
+    Args:
+        path: A directory or file in the workspace (default: the root).
+    """
+    if not _is_trusted_path(path):
+        return "[not read: path is outside the trusted workspace (MCP_TRUSTED_WORKSPACE_PREFIXES)]"
+    sections = []
+    try:
+        for directory in _walk_instruction_dirs(path):
+            for filename in INSTRUCTION_FILENAMES:
+                candidate = os.path.join(directory, filename)
+                if os.path.isfile(candidate) and _is_trusted_path(candidate):
+                    with open(candidate, "r", encoding="utf-8", errors="replace") as f:
+                        sections.append(f"--- {candidate} ---\n{f.read()}\n")
+                    break
+    except OSError as e:
+        return f"Error reading project instructions: {e}"
+    text = "".join(sections)
+    data = text.encode("utf-8")
+    if len(data) <= MAX_INSTRUCTIONS_BYTES:
+        return text
+    cut = data[:MAX_INSTRUCTIONS_BYTES].decode("utf-8", errors="ignore")
+    return cut + "\n\n[truncated: instructions exceeded MCP_INSTRUCTIONS_MAX_BYTES]"
 
 
 @contextlib.asynccontextmanager
