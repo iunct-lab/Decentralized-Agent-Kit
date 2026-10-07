@@ -18,6 +18,7 @@ A2A 仕様 1.0 とのずれを測った結果と、版の混在（0.3 の相手�
 - 公式 Python SDK `a2a-sdk`: サーバ側は今の main の 0.3.26 と、書き捨ての枝で上げた 1.2.2（`>=1.1,<2` で解決した版）。
   クライアントは 1.2.2（1.0 の JSON-RPC）と 0.3.26（古い DAK が使う版）
 - 適合テスト: [a2a-tck](https://github.com/a2aproject/a2a-tck) のコミット `263b9cfaf16a554bdfb166a7ba5b67716e946349`
+- `a2a-sdk` の移行ガイド [`docs/migrations/v1_0/README.md`](https://github.com/a2aproject/a2a-python/blob/main/docs/migrations/v1_0/README.md) の「6. Supporting v0.3 Clients」（0.3 のクライアントも受ける手順）
 - DAK 側: google-adk 2.11.0 の `google/adk/cli/fast_api.py`（`a2a=True` の組み立て）と `google/adk/a2a/_compat.py`、
   `agent/entrypoint.sh`、`agent/dak_agent/a2a_peer_manager.py`
 - 構成: fake-LLM の構成（`docker-compose.yml` + `docker-compose.test.yml` の `agent` と `fake-llm`）。窓口は `http://localhost:8000/a2a/dak_agent`
@@ -66,6 +67,7 @@ uv run ./run_tck.py --sut-host http://localhost:8000/a2a/dak_agent --transport j
 ```
 
 a2a-tck は `{sut-host}/.well-known/agent-card.json` を読み、カードの `supportedInterfaces` から試す窓口を決める。
+件数はテスト（pytest）の数、表は要件の数。`must_compatibility` は tck の集計（`reports/compatibility.json` の `summary`）のままで、MUST の要件のうち PASS の割合（SKIPPED を分母から除く）。
 
 ### 3.1 今の main（`a2a-sdk` 0.3.26、0.3 の形のカード）
 
@@ -78,10 +80,11 @@ E   Failed: Agent card declares no supportedInterfaces — cannot determine whic
 | 要件 | 結果 | 理由 |
 |---|---|---|
 | CARD-DISC-001 | PASS | カードは取れる |
+| CARD-PROTO-002、JSONRPC-SVC-001、HTTP_JSON-URL-001、HTTP_JSON-URL-002、HTTP_JSON-QP-001 | PASS | SUT に問い合わせない静的な検査（tck が持つ仕様の定義を確かめる） |
 | CARD-STRUCT-001 | FAIL | `Missing required fields: {'supportedInterfaces'}` |
 | CARD-PROTO-001 | FAIL | `supportedInterfaces must be a list` |
 | BIND-FIELD-001 | FAIL | `At least one protocol binding must be declared` |
-| それ以外（CORE-*、DM-*、STREAM-*、JSONRPC-* など） | NOT TESTED | カードに窓口が無く、クライアントを作れない（225 件の error） |
+| それ以外の 105 件（CORE-*、DM-*、STREAM-*、JSONRPC-* など） | NOT TESTED | カードに窓口が無く、クライアントを作れない（225 件の error） |
 
 ### 3.2 書き捨ての枝（`a2a-sdk` 1.2.2、1.0 の形のカード）
 
@@ -100,7 +103,7 @@ E   Failed: Agent card declares no supportedInterfaces — cannot determine whic
 "must_compatibility": "69.1%"
 ```
 
-MUST の要件 113 件のうち、PASS 55 件・FAIL 3 件・SKIPPED 33 件・NOT TESTED 22 件（SKIPPED と NOT TESTED は、gRPC・HTTP+JSON の窓口、push 通知、拡張カードなど、カードが宣言していない機能）。FAIL の 3 件:
+MUST の要件 114 件のうち、PASS 56 件・FAIL 3 件・SKIPPED 33 件・NOT TESTED 22 件（SKIPPED と NOT TESTED は、gRPC・HTTP+JSON の窓口、push 通知、拡張カードなど、カードが宣言していない機能）。FAIL の 3 件:
 
 | 要件 | 落ちたテスト | 理由 | DAK で直せるか |
 |---|---|---|---|
@@ -129,6 +132,8 @@ MUST の要件 113 件のうち、PASS 55 件・FAIL 3 件・SKIPPED 33 件・NO
 - カードは、0.3 の窓口を並べると両方の版の相手が読める。`a2a-sdk` 1.x はカードを配るときに、`supportedInterfaces` に 0.3 の版の窓口があればそれを 0.3 の形（トップレベルの `url` など）にも書き足す（`a2a/server/request_handlers/response_helpers.py` の `agent_card_to_dict`）。1.0 の窓口だけだと、0.3 の相手（`a2a-sdk` 0.3 を使う古い DAK を含む）はカードを読めない
 - 1.0 の相手と a2a-tck は 1.0 の窓口を選び、結果は 1.0 だけのカードと変わらない（§3.2）
 - 0.3 の相手を切り捨てる理由が無い。混在している間に DAK 同士の委譲が切れるのを避けられる
+
+この形は `a2a-sdk` の移行ガイドの「6. Supporting v0.3 Clients」の 2 つの手順（`supported_interfaces` に 0.3 の `AgentInterface` を足す、route に `enable_v0_3_compat=True`）と同じで、後者は ADK が済ませている。互換の範囲（カードは 1.0 と 0.3 の項目の和で配る、など）は移行ガイドが参照する取りまとめの Issue [a2a-python#742](https://github.com/a2aproject/a2a-python/issues/742)（closed）にある。
 
 受けるのをやめるのは、0.3 の窓口を宣言から消すとき（`a2a-sdk` が 0.3 の互換を外したとき、または相手が 1.0 にそろったとき）。そのときはこの節を書き換える。
 
