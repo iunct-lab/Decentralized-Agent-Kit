@@ -24,8 +24,16 @@ CONFIRMATION = "adk_request_confirmation"
 RESULT_PREVIEW_CHARS = 2000
 
 
+def _unwrapped(response: Any) -> Any:
+    """A hook's rewrite (harness.py: hook_rewrote_input / _output) wraps the tool's own result."""
+    while isinstance(response, dict) and str(response.get("observation", "")).startswith("hook_rewrote_"):
+        response = response.get("result")
+    return response
+
+
 def _result_text(response: Any) -> str:
     """The start of a tool's result as text: an MCP tool's content, a built-in tool's `result`."""
+    response = _unwrapped(response)
     if isinstance(response, dict) and isinstance(response.get("content"), list):
         text = "\n".join(c.get("text", "") for c in response["content"] if isinstance(c, dict))
     elif isinstance(response, dict) and isinstance(response.get("result"), str):
@@ -36,6 +44,8 @@ def _result_text(response: Any) -> str:
 
 
 def _failed(response: Any) -> bool:
+    """Not run or failed: an error, MCP's isError, or an observation (denied_by_policy, unknown_tool, ...)."""
+    response = _unwrapped(response)
     return isinstance(response, dict) and (
         "error" in response or "observation" in response or response.get("isError") is True)
 
