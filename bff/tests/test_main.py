@@ -3,6 +3,7 @@ import json
 import os
 import sys
 
+import httpx
 import respx
 from fastapi.testclient import TestClient
 from httpx import Response
@@ -146,3 +147,41 @@ def test_approval_answer_goes_to_agent_reply_route():
     assert response.status_code == 200
     assert "resumed" in response.text
     assert json.loads(reply.calls.last.request.content) == {"user_id": USER_ID, "session_id": SESSION_ID, "mode": "reject"}
+
+
+def post_answer(mode: str = "once"):
+    return client.post("/chat/approvals/fc-1", data={"mode": mode, "session_id": SESSION_ID, "user_id": USER_ID})
+
+
+@respx.mock
+def test_expired_approval_says_the_agent_moved_on():
+    respx.post(f"{AGENT_URL}/approvals/fc-1/reply").mock(
+        return_value=Response(409, json={"observation": "timed_out"})
+    )
+
+    response = post_answer()
+
+    assert response.status_code == 200
+    assert 'class="chat-message system"' in response.text
+    assert "expired" in response.text and "timed out" in response.text
+
+
+@respx.mock
+def test_answered_approval_says_it_is_no_longer_pending():
+    respx.post(f"{AGENT_URL}/approvals/fc-1/reply").mock(return_value=Response(404, json={"detail": "fc-1 is not pending"}))
+
+    response = post_answer()
+
+    assert response.status_code == 200
+    assert 'class="chat-message system"' in response.text
+    assert "no longer pending" in response.text
+
+
+@respx.mock
+def test_unreachable_agent_is_shown_as_error():
+    respx.post(f"{AGENT_URL}/approvals/fc-1/reply").mock(side_effect=httpx.ConnectError("refused"))
+
+    response = post_answer()
+
+    assert response.status_code == 200
+    assert 'class="chat-message error"' in response.text
