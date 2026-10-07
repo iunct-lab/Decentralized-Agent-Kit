@@ -159,6 +159,13 @@ class TestSandboxManager(unittest.TestCase):
         self.assertEqual(cmd, ["docker", "exec", "-w", "/workspace", name, "timeout", "60", "sh", "-c", "ls"])
         self.assertIn("timeout", run.call_args.kwargs)
 
+    def test_exec_in_session_passes_stdin_to_the_container(self):
+        run = MagicMock()
+        manager = SandboxManager(mode="docker", run=run)
+        manager.exec_in_session("s1", ["cat"], input="data")
+        self.assertEqual(run.call_args.args[0][:3], ["docker", "exec", "-i"])  # without -i, docker drops stdin
+        self.assertEqual(run.call_args.kwargs["input"], "data")
+
     def test_exec_in_session_inproc_uses_the_workdir(self):
         run = MagicMock()
         with patch("sandbox.tempfile.mkdtemp", return_value="/tmp/dak-sandbox-x"):

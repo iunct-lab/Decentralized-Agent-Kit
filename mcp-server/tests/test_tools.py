@@ -3,6 +3,7 @@ from unittest.mock import patch, mock_open, MagicMock, AsyncMock
 import os
 import sys
 import subprocess
+import tempfile
 from types import SimpleNamespace
 
 # Add parent directory to path to import main
@@ -292,14 +293,62 @@ class TestSessionSandboxRouting(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cmd[-3:], ["sh", "-c", "echo hi | cat"])  # shell semantics kept
         self.assertIn("hi", result)
 
-    async def test_docker_file_tools_refuse_instead_of_touching_the_server_files(self):
+    async def test_docker_file_tools_run_in_the_container_not_on_the_server_files(self):
         run = MagicMock()
-        with patch.object(main, "_sandbox", SandboxManager(mode="docker", run=run)), \
+        run.return_value = MagicMock(returncode=0, stdout="in container", stderr="")
+        with patch.object(main, "_sandbox", SandboxManager(mode="docker", run=run)) as sandbox, \
                 patch('builtins.open', mock_open(read_data="server file")) as mock_file:
             result = await main.read_file("README.md", ctx=_ctx("s1"))
-        self.assertIn("not available in SANDBOX_MODE=docker", result)
+        self.assertEqual(result, "in container")
         mock_file.assert_not_called()
-        run.assert_not_called()  # refusing must not start a container first
+        cmd = run.call_args.args[0]
+        self.assertEqual(cmd[:5], ["docker", "exec", "-w", "/workspace", sandbox._container_name("s1")])
+        self.assertEqual(cmd[-3:], ["cat", "--", "README.md"])
+
+    async def test_docker_file_tools_behave_like_inproc(self):
+        # The same calls as the inproc tests, through the docker commands, run here in a
+        # directory per container instead of a container.
+        with tempfile.TemporaryDirectory() as root, \
+                patch.object(main, "_sandbox", SandboxManager(mode="docker", run=_fake_docker(root))):
+            await main.write_file("sub/a.txt", "hello", ctx=_ctx("s1"))
+            self.assertEqual(await main.read_file("sub/a.txt", ctx=_ctx("s1")), "hello")
+            self.assertEqual(await main.list_files(".", ctx=_ctx("s1")), "sub")
+            self.assertEqual(await main.search_files("*.txt", ".", ctx=_ctx("s1")), "./sub/a.txt")
+            self.assertEqual(await main.search_files("*.txt", "sub/", ctx=_ctx("s1")), "sub/a.txt")
+            self.assertEqual(await main.grep("hel", "./", ctx=_ctx("s1")), "./sub/a.txt:1: hello")
+            self.assertEqual(await main.grep("hel", "sub/a.txt", glob_pattern="*.py", ctx=_ctx("s1")),
+                             "sub/a.txt:1: hello")
+            self.assertEqual(await main.grep("hel", ".", glob_pattern="*.py", ctx=_ctx("s1")), "No matches found.")
+            await main.edit_file("sub/a.txt", "hello", "bye", ctx=_ctx("s1"))
+            self.assertEqual(await main.read_file("sub/a.txt", ctx=_ctx("s1")), "bye")
+            self.assertIn("Error listing files", await main.list_files("sub/a.txt", ctx=_ctx("s1")))
+            # Another session sees none of it, through any file tool.
+            self.assertIn("No such file", await main.read_file("sub/a.txt", ctx=_ctx("s2")))
+            self.assertEqual(await main.list_files(".", ctx=_ctx("s2")), "")
+            self.assertEqual(await main.search_files("*.txt", ".", ctx=_ctx("s2")), "")
+            self.assertEqual(await main.grep("bye", ".", ctx=_ctx("s2")), "No matches found.")
+
+    async def test_docker_paths_outside_the_workspace_are_refused(self):
+        run = MagicMock()
+        with patch.object(main, "_sandbox", SandboxManager(mode="docker", run=run)):
+            for path in ("../escape.txt", "/etc/hostname", "sub/../../x"):
+                self.assertIn("outside the session workspace", await main.read_file(path, ctx=_ctx("s1")))
+            self.assertIn("outside the session workspace", await main.write_file("../x", "y", ctx=_ctx("s1")))
+            self.assertIn("outside the session workspace", await main.grep("x", "/", ctx=_ctx("s1")))
+        run.assert_not_called()  # refused before a container is started
+
+
+def _fake_docker(root):
+    """Stands in for the docker CLI: `docker exec` runs its command here, in root/<container name>."""
+    def run(cmd, **kwargs):
+        if cmd[:2] != ["docker", "exec"]:
+            return MagicMock(returncode=0, stdout="", stderr="")  # docker run / rm
+        w = cmd.index("-w")
+        workdir = os.path.join(root, cmd[w + 2])
+        os.makedirs(workdir, exist_ok=True)
+        kwargs["cwd"] = workdir
+        return subprocess.run(cmd[w + 3:], **kwargs)
+    return run
 
 
 if __name__ == '__main__':
