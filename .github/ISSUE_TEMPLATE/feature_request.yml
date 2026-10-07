@@ -1,18 +1,24 @@
-name: 機能要望 (Feature request)
-description: 新機能・改善の提案
-labels: ["enhancement"]
+name: 要望 (Request)
+description: 利用者の要望（意図を変えずに整えた文）。ここから PBI を切る。要望と PBI は 1 対 1 ではない
+title: "要望: "
+labels: ["type:request"]
 body:
   - type: textarea
-    id: problem
+    id: request
     attributes:
-      label: 解決したい課題 / Problem
-      description: 「〜できると嬉しい」ではなく「〜が今できず困っている」の形で。
+      label: 要望
+      description: 言いたいこと。「〜できると嬉しい」でも「〜が今できず困っている」でもよい。意図を変えずに整えてよい（誤字・話し言葉・並び）。意味・範囲・優先度の強さは変えない。PBI から参照される。
     validations:
       required: true
   - type: textarea
-    id: proposal
+    id: source
     attributes:
-      label: 提案する解決策 / Proposed solution
+      label: 出典
+      description: 誰から / いつ / 経路（チャット、定期実行の提案、別 Issue のコメント …）
+      value: |
+        - 誰から:
+        - いつ:
+        - 経路:
     validations:
       required: true
   - type: dropdown
@@ -28,11 +34,15 @@ body:
         - tests/integration
         - docs / infra
     validations:
-      required: true
-  - type: textarea
-    id: charter
-    attributes:
-      label: 憲章との整合 / Alignment with CHARTER.md
-      description: docs/CHARTER.md のどのスコープ・原則に沿うか（該当すれば）。
-    validations:
       required: false
+  - type: textarea
+    id: derived
+    attributes:
+      label: 派生 PBI
+      description: PBI を切ったら追記（`- #N 題 — Priority`）。全部 Done でこの Issue を閉じる。
+      value: （PBI を作ったら追記）
+  - type: textarea
+    id: notes
+    attributes:
+      label: 解釈メモ
+      description: 曖昧な箇所をどう読んだか、聞きたいこと。意味が変わりうる読み替えはここに書く。docs/CHARTER.md のどのスコープ・原則に沿うかもここに（該当すれば）。
