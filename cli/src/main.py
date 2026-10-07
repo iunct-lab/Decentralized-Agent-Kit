@@ -404,6 +404,25 @@ def approve(
                   else f"[green]Answered ({mode}).[/green]")
 
 
+@app.command()
+def acp():
+    """
+    Run as an Agent Client Protocol agent on stdin/stdout, for editors such as Zed.
+    """
+    # Imported here: the other commands do not need the SDK. stdout is the
+    # protocol's, so logs go to stderr and nothing is printed.
+    import asyncio
+    import logging
+    import sys
+
+    from acp import run_agent
+
+    from .acp_agent import DakAcpAgent
+
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO)
+    asyncio.run(run_agent(DakAcpAgent()))
+
+
 history_app = typer.Typer(help="Manage chat history")
 app.add_typer(history_app, name="history")
 

@@ -10,6 +10,7 @@ dev = [
     "pytest>=9.1.1",
     "httpx>=0.28.1",
     "playwright>=1.61.0",
+    "agent-client-protocol>=0.12.1,<0.13",
 ]
 
 [tool.pytest.ini_options]
