@@ -3,9 +3,10 @@
 Runs only with DAK_SANDBOX_DOCKER_TESTS=1, against the stack started with the
 opt-in socket override (and a short TTL for the reaper test):
 
-    SANDBOX_TTL_SECONDS=5 docker compose -f docker-compose.yml -f docker-compose.test.yml \
+    export SANDBOX_TTL_SECONDS=5     # read by the stack and by these tests
+    docker compose -f docker-compose.yml -f docker-compose.test.yml \
         -f docker-compose.sandbox.yml up -d --build --wait
-    DAK_SANDBOX_DOCKER_TESTS=1 uv run pytest test_sandbox_isolation.py -q
+    cd tests/integration && DAK_SANDBOX_DOCKER_TESTS=1 uv run pytest test_sandbox_isolation.py -q
 
 The test process needs the same daemon (it runs `docker inspect` / `docker ps`).
 """
@@ -57,16 +58,19 @@ def _sandbox_containers() -> set[str]:
 
 def test_two_sessions_cannot_see_each_others_files():
     a, b = _key(), _key()
-    _call(a, "run_command", {"command": "echo a > a.txt"})
-    _call(a, "write_file", {"path": "notes/b.txt", "content": "from a"})
-    assert "a.txt" in _call(a, "run_command", {"command": "ls"})
-    assert _call(a, "read_file", {"path": "notes/b.txt"}) == "from a"
+    # Each session writes its own files, through run_command and through a file tool.
+    for key, name in ((a, "a"), (b, "b")):
+        _call(key, "run_command", {"command": f"echo {name} > {name}.txt"})
+        _call(key, "write_file", {"path": f"notes/{name}.txt", "content": f"from {name}"})
+        assert f"{name}.txt" in _call(key, "run_command", {"command": "ls"})
+        assert _call(key, "read_file", {"path": f"notes/{name}.txt"}) == f"from {name}"
 
-    listing = _call(b, "run_command", {"command": "ls -A"})
-    assert "a.txt" not in listing and "notes" not in listing
-    assert _call(b, "list_files", {"path": "."}) == ""
-    assert "No such file" in _call(b, "read_file", {"path": "notes/b.txt"})
-    assert _call(b, "grep", {"pattern": "from", "path": "."}) == "No matches found."
+    # Neither sees the other's, in either direction.
+    for key, other in ((a, "b"), (b, "a")):
+        assert f"{other}.txt" not in _call(key, "run_command", {"command": "ls -A . notes"})
+        assert f"{other}.txt" not in _call(key, "list_files", {"path": "notes"})
+        assert "No such file" in _call(key, "read_file", {"path": f"notes/{other}.txt"})
+        assert _call(key, "grep", {"pattern": f"from {other}", "path": "."}) == "No matches found."
 
 
 def test_network_is_blocked_in_sandbox():
@@ -89,12 +93,13 @@ def test_resource_limits_are_applied():
     inspected = subprocess.run(["docker", "inspect", _container(key)], check=True, capture_output=True, text=True)
     host_config = json.loads(inspected.stdout)[0]["HostConfig"]
     cpus = float(os.getenv("SANDBOX_CPUS", "1"))
-    memory = os.getenv("SANDBOX_MEMORY", "512m")
-    assert memory.endswith("m")  # the only unit this test converts
+    memory = os.getenv("SANDBOX_MEMORY", "512m").lower()
+    units = {"b": 1, "k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}  # docker run --memory
+    memory_bytes = int(memory[:-1]) * units[memory[-1]] if memory[-1] in units else int(memory)
     pids = int(os.getenv("SANDBOX_PIDS_LIMIT", "128"))
 
     assert host_config["NanoCpus"] == int(cpus * 1e9)
-    assert host_config["Memory"] == int(memory[:-1]) * 1024 * 1024
+    assert host_config["Memory"] == memory_bytes
     assert host_config["PidsLimit"] == pids
     assert host_config["NetworkMode"] == "none"
     assert host_config["ReadonlyRootfs"] is True
