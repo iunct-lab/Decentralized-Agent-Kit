@@ -142,7 +142,7 @@ fake-LLM がモデル名ごとに応答をスクリプトできること（`/scr
 
 ## 6. GitHub Project を単一の真実に（要件1）
 
-- Project v2 のフィールドは Status/Area/Kind/Priority/Phase/Story Points。DAK 固有の値（Project の URL、Area・Phase の選択肢）は root の `ops.config.json`。
+- Project v2 のフィールドは Status（`Backlog` を含む）/Area/Kind/Priority/Phase/Story Points。DAK 固有の値（Project の URL、Area・Phase の選択肢）は root の `ops.config.json`、その意味は [issue-workflow.md](issue-workflow.md)。
 - `project-autoadd.yml` が以後の新 Issue/PR を自動追加し、新しい Issue の Status を Backlog にする（未設定時はスキップして CI を汚さない）。定期実行の提案は `scripts/setup/request_issue.py` が要望 Issue として起票し、自分で Backlog に載せる。
 - すべての自動化アウトプット（auto-merge PR・レビュー要求・各種提案 Issue）が Project に集約される。
 
