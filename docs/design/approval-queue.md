@@ -124,7 +124,7 @@ MRTR の形: サーバはクライアントの要求（`tools/call` など）に
 | `session_id` + `id`（状態は agent のセッション） | `requestState`（状態はクライアントが運ぶ） | **未対応**。DAK は状態を agent のセッションに持つので、不透明な状態をクライアントに持たせない |
 | reply で元の invocation を再開 | 元の要求を `inputResponses` 付きで再送 | 形が違う。DAK は元の要求を再送させない |
 | — | `sampling/createMessage` の `inputRequests` | **未対応**（範囲外） |
-| mcp-server が `input_required` を返したときの透過 | — | **未対応**。agent の mcp（1.28.1）は `InputRequiredResult` を持たない（`mcp/types.py` の `input_required` は Tasks の `TaskStatus` だけ）。ADK の `McpTool` も扱わない。mcp-server 側の対応は #112 で追う |
+| mcp-server が `input_required` を返したときの透過 | — | **未対応**。agent の mcp は 2.3.0 から `InputRequiredResult` を持つが、ADK（2.11）の `McpTool` は結果の `resultType` を捨てるだけで扱わない。mcp-server 側の対応は #112 で追う |
 
 ## Task への影響（PBI #100 の決定ログにも書く）
 

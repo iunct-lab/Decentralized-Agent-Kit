@@ -293,6 +293,7 @@ async def _mcp_inspection_errors(spec: Mapping[str, Any], parsed: Any) -> List[D
     """Call the caller's MCP inspection tool once, directly (not as a tool the
     model sees); its errors, or one describing why it could not answer."""
     # Imported here: calls without an MCP inspection do not load the client.
+    import httpx2  # mcp 2.x takes an httpx2 client, not an httpx one
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
 
@@ -302,7 +303,7 @@ async def _mcp_inspection_errors(spec: Mapping[str, Any], parsed: Any) -> List[D
         # session: it would run after the deadline has fired, unbounded by it.
         async with asyncio.timeout(timeout):
             # No redirects: an allowed URL must not lead the agent to another host.
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as http_client, \
+            async with httpx2.AsyncClient(timeout=timeout, follow_redirects=False) as http_client, \
                     streamable_http_client(spec["url"].strip(), http_client=http_client,
                                            terminate_on_close=False) as (read, write, _):
                 async with ClientSession(read, write) as session:
@@ -315,7 +316,7 @@ async def _mcp_inspection_errors(spec: Mapping[str, Any], parsed: Any) -> List[D
             exc = exc.exceptions[0]
         return [_unavailable(f"inspection MCP call failed: {type(exc).__name__}: {exc}"[:200])]
     text = "".join(getattr(c, "text", "") or "" for c in (result.content or []))
-    if getattr(result, "isError", False):
+    if result.is_error:
         return [_unavailable(f"inspection MCP tool failed: {text[:200]}")]
     if not text:
         return [_unavailable("inspection MCP returned no content")]

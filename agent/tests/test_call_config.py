@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
+import httpx2
 import mcp
 import mcp.client.streamable_http
 import pytest
@@ -454,7 +455,9 @@ def _fake_mcp(monkeypatch, *, text=None, connect_error=None, is_error=False, del
     async def client(url, **kwargs):
         if connect_error:
             raise connect_error
-        calls.append(("connect", url, kwargs["http_client"].follow_redirects, kwargs["terminate_on_close"]))
+        http_client = kwargs["http_client"]
+        assert isinstance(http_client, httpx2.AsyncClient)  # mcp 2.x does not work with an httpx client
+        calls.append(("connect", url, http_client.follow_redirects, kwargs["terminate_on_close"]))
         yield "read", "write", lambda: None
 
     class Session:
@@ -473,7 +476,7 @@ def _fake_mcp(monkeypatch, *, text=None, connect_error=None, is_error=False, del
         async def call_tool(self, name, arguments):
             calls.append(("call_tool", name, arguments))
             await asyncio.sleep(delay)
-            return SimpleNamespace(content=[SimpleNamespace(text=text)] if text is not None else [], isError=is_error)
+            return SimpleNamespace(content=[SimpleNamespace(text=text)] if text is not None else [], is_error=is_error)
 
     monkeypatch.setattr(mcp.client.streamable_http, "streamable_http_client", client)
     monkeypatch.setattr(mcp, "ClientSession", Session)

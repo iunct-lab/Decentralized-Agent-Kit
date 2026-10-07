@@ -187,16 +187,16 @@ def test_duplicate_caller_mcp_servers_are_used_once(monkeypatch):
 
 def test_caller_mcp_toolsets_do_not_follow_redirects(monkeypatch):
     """An allowed endpoint must not be able to redirect the agent to an
-    internal address (the MCP SDK's client follows redirects by default)."""
+    internal address. The client is an httpx2 one: mcp 2.x does not work with
+    an httpx client (it fails quietly instead of raising)."""
+    import httpx2
     from dak_agent import skill_tools
 
-    caller = skill_tools.make_mcp_toolset(CALLER_MCP, "http", None, follow_redirects=False)
-    default = skill_tools.make_mcp_toolset(CALLER_MCP, "http", None)
     for conn_type in ("http", "sse"):
         params = skill_tools.make_mcp_toolset(CALLER_MCP, conn_type, None, follow_redirects=False)._connection_params
-        assert params.httpx_client_factory().follow_redirects is False
-    assert caller._connection_params.httpx_client_factory().follow_redirects is False
-    assert default._connection_params.httpx_client_factory().follow_redirects is True
+        client = params.httpx_client_factory()
+        assert isinstance(client, httpx2.AsyncClient)
+        assert client.follow_redirects is False
 
 
 @pytest.mark.asyncio
