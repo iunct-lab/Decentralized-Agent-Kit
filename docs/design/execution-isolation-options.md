@@ -17,7 +17,7 @@ PBI #296 / Task #297。#20 の `SandboxManager`（`session-sandbox.md`）は、`
 | gVisor（`runsc`） | サンドボックスごとの application kernel がアプリのシステムコールを受け、ホストのカーネルに直接届くものを減らす（VM の仮想ハードウェアは持たない）。既定の platform は systrap で、KVM は任意 | Linux 5.6 以上、x86_64 / ARM64。KVM は不要 | `docker run --runtime=runsc`。ホストの Docker に `runsc install` で登録する | `docker run` に `--runtime=<値>` を 1 つ足す | 合う。ランタイムの登録はホストの Docker の設定で、mcp-server は名前を渡すだけ | Apache-2.0・無料・不要 | release-20260928.0（2026-09-30） | [overview](https://gvisor.dev/docs/) 、[install](https://gvisor.dev/docs/user_guide/install/) 、[docker](https://gvisor.dev/docs/user_guide/quick_start/docker/) 、[platforms](https://gvisor.dev/docs/architecture_guide/platforms/) 、[compatibility](https://gvisor.dev/docs/user_guide/compatibility/) 、[releases](https://github.com/google/gvisor/releases) |
 | Kata Containers | コンテナごとに軽量 VM（QEMU / Cloud Hypervisor / Dragonball）を起動し、ゲストのカーネルで動かす | ハードウェア仮想化（KVM）。「nested virtualization か bare metal が要る」。x86_64 / aarch64 / ppc64le / s390x | `docker run --runtime io.containerd.kata.v2`（Docker 22.06 以上） | `--runtime=<値>` を 1 つ足す（gVisor と同じ） | 合う（gVisor と同じ） | Apache-2.0・無料・不要 | 4.2.0（2026-09-15） | [README](https://github.com/kata-containers/kata-containers) 、[install](https://github.com/kata-containers/kata-containers/blob/main/docs/install/README.md) 、[Limitations](https://github.com/kata-containers/kata-containers/blob/main/docs/Limitations.md) 、[releases](https://github.com/kata-containers/kata-containers/releases) |
 | Docker Sandboxes（`sbx`） | サンドボックスごとに microVM と専用の Docker デーモン。外向きの TCP はホストのプロキシを通り、そこでポリシーをかける | macOS Sonoma 14 以上の Apple silicon、Ubuntu 24.04 以上で KVM の使える Linux（x86_64 / arm64）、Windows 11（x64） | ホストの `sbx` CLI: `sbx create shell` → `sbx exec` → `sbx rm`。ローカルの API・ソケットの文書は見当たらない（未確認） | `docker` の代わりに `sbx` を呼ぶ別の実装。`docker exec -d` 相当は無い | 合わない見込み。`sbx` はホストの CLI で、mcp-server のコンテナから呼ぶ標準の口が文書に無い（3 節） | プロプライエタリ（Docker Inc.）。CLI とローカルの実行は商用でも無料。`sbx login`（Docker アカウント）が要る | v0.47.0（2026-10-05）。v0.48.0-rc3 は rc | [overview](https://docs.docker.com/ai/sandboxes/) 、[install](https://docs.docker.com/ai/sandboxes/install/) 、[architecture](https://docs.docker.com/ai/sandboxes/architecture/) 、[CLI](https://docs.docker.com/reference/cli/sbx/) 、[FAQ](https://docs.docker.com/ai/sandboxes/faq/) 、[releases](https://github.com/docker/sbx-releases) |
-| CubeSandbox | サンドボックスごとに KVM の microVM（RustVMM）と専用のカーネル。サンドボックス間と外向きの通信は eBPF の仮想スイッチと L7 のゲートウェイで絞る | KVM の使える x86_64 / aarch64 の Linux（KVM の無いクラウドの VM 向けの PVM は x86_64 だけ）。4 コア・8 GB 以上、XFS の `/data/cubelet` に 50 GB 以上 | E2B 互換の REST API（CubeAPI）。API の前にクラスタ管理・ノード管理・ハイパーバイザ・containerd の shim の一式を置く | `docker` を呼ばない別の実装（E2B 互換の API のクライアント） | API で呼ぶので合うが、ホスト側に常駐サービスの一式が要る | Apache-2.0（同梱の第三者のものを除く）・無料。アカウントの要否は未確認（文書に記載なし） | v0.7.2（2026-09-24） | [README](https://github.com/TencentCloud/CubeSandbox) 、[quickstart](https://github.com/TencentCloud/CubeSandbox/blob/master/docs/guide/quickstart.md) 、[releases](https://github.com/TencentCloud/CubeSandbox/releases) |
+| CubeSandbox | サンドボックスごとに KVM の microVM（RustVMM）と専用のカーネル。サンドボックス間と外向きの通信は eBPF の仮想スイッチと L7 のゲートウェイで絞る | KVM の使える x86_64 / aarch64 の Linux。KVM の無い x86_64 のクラウドの VM でも、配布の PVM のホストカーネルを入れて起動し直せば動く（PVM は x86_64 だけ。aarch64 は KVM の使える bare metal が要る）。4 コア・8 GB 以上、XFS の `/data/cubelet` に 50 GB 以上 | E2B 互換の REST API（CubeAPI）。API の前にクラスタ管理・ノード管理・ハイパーバイザ・containerd の shim の一式を置く | `docker` を呼ばない別の実装（E2B 互換の API のクライアント） | API で呼ぶので合うが、ホスト側に常駐サービスの一式が要る | Apache-2.0（同梱の第三者のものを除く）・無料。アカウント不要（ローカルの配置では E2B の SDK が求める `E2B_API_KEY` に任意の文字列を入れる） | v0.7.2（2026-09-24） | [README](https://github.com/TencentCloud/CubeSandbox) 、[quickstart](https://github.com/TencentCloud/CubeSandbox/blob/master/docs/guide/quickstart.md) 、[releases](https://github.com/TencentCloud/CubeSandbox/releases) |
 | srt（プロセス単位の層） | コンテナを使わず、Linux では bubblewrap で名前空間を作り、通信はホストのプロキシに通す。macOS は Seatbelt | Linux（bubblewrap 0.4 以上、socat、ripgrep）、macOS。KVM 不要 | `srt [--settings <file>] <command>` でコマンドを包む | 別の層。#292 で `run_command` を包む（`command-sandbox.md`） | 合う（コンテナの中で使える構成は `command-sandbox.md`） | Apache-2.0・無料・不要。「Beta Research Preview」 | 0.0.78（2026-09-30） | [README](https://github.com/anthropics/sandbox-runtime) 、[npm](https://registry.npmjs.org/@anthropic-ai/sandbox-runtime) |
 | vetto（プロセス単位の層） | デーモンを持たない非特権のプロセスのサンドボックス。Linux では Landlock・名前空間・seccomp・cgroups v2 の `cgroup.kill` と、許可リストのためのループバックのプロキシ。仕組みが欠けていれば exit 125 で止まる | Linux 5.13 以上（x86_64 / aarch64）、macOS、Windows。KVM 不要 | `vetto run -- <command>` | 別の層（srt と同じ） | 合う見込み（コンテナの中で動くかは未確認） | Apache-2.0・無料・不要 | v0.6.1（2026-10-06）。リポジトリの作成は 2026-08-22 | [README](https://github.com/shleder/vetto) 、[compat](https://github.com/shleder/vetto/blob/main/docs/compat.md) 、[releases](https://github.com/shleder/vetto/releases) |
 
@@ -27,7 +27,7 @@ PBI #296 / Task #297。#20 の `SandboxManager`（`session-sandbox.md`）は、`
 - **gVisor**: `SandboxManager` への変更が最小（`--runtime` を足すだけ）で、KVM の無いクラウドの VM や arm64 でも動く。代わりにホストの Docker に `runsc` を入れて登録する作業が要り、互換性に制限がある（公式の互換性の文書: sandbox の中では cgroup の上限を強制しない、ext4 / fat32 のブロックデバイスは使えない、io_uring は既定で無効、など）。#283 の引数がどこまで効くかは 4 節で実測する
 - **Kata Containers**: 呼び出し方は gVisor と同じで、VM の境界で分けるので隔離は最も強い部類。代わりに KVM（入れ子の仮想化か bare metal）が要る。公式は Kubernetes 向けの導入（Helm の chart）を推し、Docker では `io.containerd.kata.v2` の shim を入れる。rootless の Docker で動くかは未確認
 - **Docker Sandboxes**: エージェント向けの製品で、`sbx create shell` でエージェントを起動しない汎用のサンドボックスも作れる。ネットワークは `sbx policy`（全体の既定 `allow-all` / `balanced` / `deny-all`、サンドボックスごとの allow / deny）で絞る。ホストの CLI がローカルの `sandboxd` を操作する作りで、ローカルの API は文書に無い。REST API と SDK はクラウドのサンドボックス向けで experimental（有料の契約が要る）。評価の詳細は 3 節
-- **CubeSandbox**: E2B 互換の API を呼ぶだけで済むが、ホストに一式（API ゲートウェイ、クラスタ管理、ノード管理、ハイパーバイザ、eBPF の仮想スイッチ、外向きのゲートウェイ）を常駐させる。KVM が要り、XFS の 50 GB の領域など条件が重い。この比較では KVM の使えるホストを用意しないので、実測しない（PBI #296 のスコープ外）
+- **CubeSandbox**: E2B 互換の API を呼ぶだけで済むが、ホストに一式（API ゲートウェイ、クラスタ管理、ノード管理、ハイパーバイザ、eBPF の仮想スイッチ、外向きのゲートウェイ）を常駐させる。KVM（x86_64 なら PVM のホストカーネルでも可。その場合はホストのカーネルを入れ替える）が要り、XFS の 50 GB の領域など条件が重い。この比較ではそのホストを用意しないので、実測しない（PBI #296 のスコープ外）
 - **srt / vetto**: カーネルを分けない。コマンドごとに包む層で、#20 の実行先（コンテナの種類）とは独立に重ねられる。srt は #292 で扱う。vetto は #31 のコメントで作者本人（リポジトリの所有者と同じ GitHub のアカウント、2026-08-30）が紹介したもので、第三者の評価は見当たらない。比較表に載せるだけにし、個別の検証はしない
 
 ## 3. Docker Sandboxes を mcp-server から使うには（評価、実測しない）
@@ -51,7 +51,27 @@ PBI #296 / Task #297。#20 の `SandboxManager`（`session-sandbox.md`）は、`
 
 ### gVisor と runc（#298）
 
-（#298 で書く）
+計測先の構成:
+
+| 項目 | 値 |
+|---|---|
+
+所要時間（ミリ秒、10 回の中央値）:
+
+| 計測 | runc | runsc | 差 |
+|---|---:|---:|---:|
+| (a) `docker run --rm … python -c pass` | | | |
+| (b) ハッシュの処理（コンテナの中で測る） | | | |
+| 作成 `docker run -d … sleep infinity` | | | |
+| 実行 `docker exec … python -c pass` | | | |
+| 破棄 `docker rm -f` | | | |
+
+#283 の引数が効くか:
+
+| 引数 | runc | runsc |
+|---|---|---|
+
+再現コマンド:（#298 で書く）
 
 ### Kata Containers（#298）
 
