@@ -6,6 +6,7 @@ DAK session, each prompt one turn of ADK's /run_sse, and its events become
 stdout carries the protocol: log to stderr only, never print.
 """
 import asyncio
+import contextlib
 import json
 import logging
 from typing import Any, Dict, List
@@ -159,10 +160,11 @@ class DakAcpAgent(Agent):
 
         def pump():  # requests blocks; read the stream in a thread and hand each event over
             try:
-                for event in client.stream_events(new_message):
-                    if turn["cancelled"]:
-                        break  # leaving the loop closes the connection
-                    loop.call_soon_threadsafe(events.put_nowait, event)
+                with contextlib.closing(client.stream_events(new_message)) as stream:
+                    for event in stream:
+                        if turn["cancelled"]:
+                            break  # closing the stream closes the connection
+                        loop.call_soon_threadsafe(events.put_nowait, event)
             finally:
                 loop.call_soon_threadsafe(events.put_nowait, None)
 
@@ -187,6 +189,7 @@ class DakAcpAgent(Agent):
         if not pending:
             return False
         item = pending[0]
+        # A confirmation this turn did not show (raised after a 404 / 409) has no tool_call yet: its own id
         call_id = turn["calls"].get(item["id"]) or item["id"]
         answer = await self._conn.request_permission(
             session_id=session_id, options=OPTIONS, tool_call=ToolCallUpdate(

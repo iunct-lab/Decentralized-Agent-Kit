@@ -140,7 +140,8 @@ How ACP maps onto DAK is in `docs/architecture/acp_adapter.md`.
 What works: conversation (the reply as message chunks), DAK's tool calls and their results, Allow / Reject
 for a tool call that needs approval (each time; there is no "always"), and Stop (`session/cancel`).
 A stopped turn ends when the agent's next event arrives (a running model call or tool finishes first);
-a tool call that was waiting for approval is left unanswered, and the next prompt drops it.
+after Allow / Reject, it ends only when the agent has finished the rest of that turn, which Stop does not cut short.
+A tool call that was waiting for approval is left unanswered, and the next prompt drops it.
 
 Not supported: loading past sessions, switching DAK's modes, images and audio, the editor's files and terminal
 (DAK's tools run in the mcp-server container on its `/projects`, not in the editor's folder), and MCP servers

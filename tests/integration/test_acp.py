@@ -109,17 +109,15 @@ def _write_file_script(fake_llm, name, *after):
 
 @pytest.fixture
 def written():
-    """An empty file under acp-it/ that write_file overwrites (mcp-server writes into the repo, mounted
-    at /projects). Made here, as test_search_edit_flow.py does: a file the container creates belongs to
-    its user and the host may not read or remove it. Write into a directory: #543."""
-    name = f"acp-it/{uuid.uuid4().hex[:8]}.txt"
+    """An empty file under the git-ignored tests/integration/artifacts/ that write_file overwrites
+    (mcp-server writes into the repo, mounted at /projects). Made here: a file the container creates
+    belongs to its user, and the host may not read or remove it. In a directory: #543."""
+    name = f"tests/integration/artifacts/acp_{uuid.uuid4().hex[:8]}.txt"
     path = os.path.join(REPO_ROOT, name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     open(path, "w").close()
     yield name
     os.remove(path)
-    if not os.listdir(os.path.dirname(path)):
-        os.rmdir(os.path.dirname(path))
 
 
 def _content(name):
