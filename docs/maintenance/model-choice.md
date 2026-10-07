@@ -35,7 +35,6 @@
 
 - トークン数は 1 字 ≈ 1 トークンで数えた（日本語の多い憲章に合わせた多めの見積もり）。出力は 1 呼び出し 0.3k〜1.5k。
 - 合計: triage を除くと入力 約 0.51M（41k + 464k + 4k）/ 出力 約 0.03M、triage を含むと入力 約 1.02M / 出力 約 0.05M（feature-sync と triage が大半）。
-- 実測（`dak-maint compare-models` のトークン数）が出たら #351 で置き換える。
 
 | モデル | triage を除く | triage を含む |
 |---|---|---|
@@ -82,8 +81,9 @@ Gemini の無料枠に収まれば $0 だが、回数制限が未確認なので
 ## 結果
 
 保守の定期実行のモデルは、Amazon Bedrock の GPT-6 luna（`MAINT_LLM_MODEL=bedrock/global.openai.gpt-6-luna`、IAM（GitHub の OIDC）で呼ぶ）に決まっている。
-Gemini の利用枠切れ（429）で定期実行が止まったため、利用者の指示で決めた（PBI #157 の決定ログ 2026-09-26、コードは PR #384）。
+手動実行が Gemini の利用枠切れ（429）で確かめられなかったため、利用者の指示で決めた（PBI #157 の決定ログ 2026-09-26、コードは PR #384）。
 切り替えの準備は `docs/maintenance/README.md` の「Amazon Bedrock（IAM。API キー不要）」。
+Bedrock 上の価格は未確認（上の表と月額の `gpt-6-luna` は OpenAI の API の価格）。
 
 上の候補を `dak-maint compare-models` で同じ入力で比べる実行はしていない。モデルが決まっているので不要と利用者が判断した（PBI #348 の決定ログ 2026-10-07）。
 `compare-models` は、また別のモデルを検討するときに使える。
