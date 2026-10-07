@@ -44,7 +44,7 @@ PBI #296 / Task #297。#20 の `SandboxManager`（`session-sandbox.md`）は、`
 - 回数: 各 10 回の中央値
 - 計測すること:
   - (a) `docker run --rm … python -c pass` の総時間
-  - (b) 作成済みのコンテナで `python -c "import hashlib; [hashlib.sha256(str(i).encode()).hexdigest() for i in range(200000)]"` の処理時間（コンテナの中で測る）
+  - (b) `docker run --rm … python -c "import hashlib; [hashlib.sha256(str(i).encode()).hexdigest() for i in range(200000)]"` の処理時間（コンテナの中で測る）
   - `SandboxManager` の流れどおりの `docker run -d … sleep infinity`（作成）、`docker exec … python -c pass`（実行 1 回）、`docker rm -f`（破棄）の時間
   - #283 の引数のうち効かないもの（非 root、読み取り専用のルート、tmpfs での実行、capability、通信の遮断、メモリ・PID・CPU の上限）
 - 実測しないもの: Docker Sandboxes（利用者の回答で一次資料の評価に変えた）、CubeSandbox（KVM の使えるホストが要る）
@@ -96,7 +96,7 @@ runsc で起きたこと:
 
 読み方:
 
-- gVisor の上乗せは、この計測先で起動が 1 回あたり約 0.1 秒、Python の処理が約 1 割。どちらも `run_command` のタイムアウト（60 秒）に比べて小さい
+- gVisor の上乗せは、この計測先で起動が 1 回あたり約 0.1 秒、Python の処理が約 1 割。どちらも `run_command` のタイムアウト（60 秒）に比べて小さい。ただし破棄（`docker rm -f`）は約 10 秒かかった（原因は未確認）。`SandboxManager` は TTL の掃除で破棄するので、要件どおりのカーネルでも遅いなら掃除の時間に効く
 - 効かなかったのは `--pids-limit`（スレッドの数）。gVisor の公式の互換性の文書は「sandbox の中では cgroup の上限を強制しない」としている。`--cpus` は確かめきれていない
 - 要件どおりのカーネル（5.6 以上）で、既定の設定での起動、`docker exec`、`docker rm -f` が runc と同じように動くかは未検証
 
