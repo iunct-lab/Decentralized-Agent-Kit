@@ -139,8 +139,9 @@ def _write_text(ctx: Context | None, path: str, content: str) -> None:
         _docker_exec(ctx, ["sh", "-c", script, "sh", _docker_path(path)], input=content)
         return
     target = _session_path(ctx, path)
-    # Ensure directory exists
-    os.makedirs(os.path.dirname(target), exist_ok=True)
+    # Ensure directory exists (a bare file name has none to make)
+    if os.path.dirname(target):
+        os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(target, "w", encoding="utf-8") as f:
         f.write(content)
 
@@ -162,7 +163,7 @@ def _docker_tree(ctx: Context | None, path: str) -> tuple[str, list[tuple[str, b
     files = []
     with tarfile.open(fileobj=io.BytesIO(data)) as tar:
         for member in tar:
-            if member.isfile():
+            if member.isfile() or member.islnk():  # tar stores a hard link's second name as a link
                 name = posixpath.join(DOCKER_WORKDIR, posixpath.normpath(member.name))
                 files.append((name, tar.extractfile(member).read()))
     return posixpath.normpath(posixpath.join(DOCKER_WORKDIR, rel)), files
@@ -323,7 +324,9 @@ async def grep(pattern: str, path: str = ".", glob_pattern: str = "*", ignore_ca
             for name, content in sorted(tree):
                 if name != base and not glob.fnmatch.fnmatch(posixpath.basename(name), glob_pattern):
                     continue
-                if scan(_shown(path, base, name), content.decode("utf-8", errors="replace").splitlines()):
+                # Iterated like the open() file below: the same line boundaries and numbers.
+                lines = io.StringIO(content.decode("utf-8", errors="replace"), newline=None)
+                if scan(_shown(path, base, name), lines):
                     break
         else:
             base = _session_path(ctx, path)
