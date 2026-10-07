@@ -24,6 +24,7 @@ from .adaptive_agent import AdaptiveAgent
 from .builtin_tools import make_builtin_tools
 from .config import get_litellm_model_name, load_agent_config, resolve_model_name
 from .enforcer import ENFORCER_INSTRUCTION, enforcer_validator
+from .explorer import DELEGATION_INSTRUCTION, make_explorer_tool
 from .harness import (
     ContextHarnessPlugin,
     HarnessSettings,
@@ -71,11 +72,15 @@ else:
         "You are a helpful assistant powered by the Decentralized Agent Kit.",
     )
     after_model_callback = None
+instruction = f"{instruction}\n\n{DELEGATION_INSTRUCTION}"
 
 # --- Model ---
 model_name = resolve_model_name()
 formatted_model_name = get_litellm_model_name(model_name)
 model = LiteLlm(model=formatted_model_name)
+
+# --- Read-only investigation sub-agent (its tool output stays out of this session) ---
+root_agent_tools.append(make_explorer_tool(model, mcp_url))
 
 # --- Context harness (compaction + tool-output budget + request guard) ---
 use_harness = harness_enabled()
