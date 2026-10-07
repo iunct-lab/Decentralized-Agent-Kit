@@ -47,6 +47,30 @@ jobs:
         if: matrix.component == 'maintenance'  # 保守とセキュリティの道具（scripts/setup・scripts/security）
         run: uv run --no-project --with pytest pytest scripts -q
 
+  license:
+    # 依存のライセンスを方針と照らす（PBI #344。docs/maintenance/license-policy.md）。一覧は成果物に残す
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [agent, cli, mcp-server, bff, maintenance]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            ${{ matrix.component }}/uv.lock
+            maintenance/uv.lock
+      - name: Check dependency licenses
+        run: ./scripts/license_check.sh ${{ matrix.component }}
+      - name: Upload license report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: license-report-${{ matrix.component }}
+          path: license-report/
+
   integration:
     runs-on: ubuntu-latest
     needs: unit

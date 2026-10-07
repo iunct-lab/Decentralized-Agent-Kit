@@ -212,3 +212,6 @@ __marimo__/
 node_modules
 # UI E2E screenshots (Playwright)
 tests/integration/artifacts/
+
+# scripts/license_check.sh の出力（PBI #344）
+license-report/

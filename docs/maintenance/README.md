@@ -15,7 +15,7 @@
 
 | ファイル | トリガ | 役割 | Tier |
 |----------|--------|------|------|
-| `ci.yml` | PR / push(main) | unit マトリクス + fake-LLM 統合（既存） | — |
+| `ci.yml` | PR / push(main) | unit マトリクス + fake-LLM 統合（既存）+ 依存のライセンスの確認（`license`。`scripts/license_check.sh`、方針は [license-policy.md](license-policy.md)） | — |
 | `labels.yml` | `labels.yml` 変更 / 手動 | ラベル体系を宣言的に同期 | — |
 | `project-autoadd.yml` | Issue/PR open | 新規 Issue/PR を Project に自動追加し、新しい Issue の Status を Backlog にする | — |
 | `dependency-triage.yml` | `pull_request_target`(dependabot) | 依存PRを判定し auto-merge or レビュー要求 | 0→1 |
