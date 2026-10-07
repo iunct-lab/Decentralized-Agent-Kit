@@ -2,7 +2,7 @@
 per model, so tests can inspect the requests and clear them between runs."""
 import httpx
 
-from conftest import FAKE_LLM_URL
+from conftest import FAKE_LLM_URL, system_instruction, tool_names
 
 MODEL = "fake-requests-log"
 TOOLS = [{"type": "function", "function": {"name": "dummy_tool", "parameters": {}}}]
@@ -38,3 +38,26 @@ def test_delete_script_clears_requests_log(fake_llm):
 
     fake_llm.clear(MODEL)
     assert _recorded() == []
+
+
+def test_system_instruction_and_tool_names_helpers():
+    entry = {
+        "messages": [
+            {"role": "system", "content": "You are DAK."},
+            {"role": "user", "content": "hello"},
+            {"role": "system", "content": "not the first"},
+        ],
+        "tools": [{"type": "function", "function": {"name": n, "parameters": {}}} for n in ("b_tool", "a_tool")],
+    }
+    assert system_instruction(entry) == "You are DAK."
+    assert tool_names(entry) == ["b_tool", "a_tool"]  # in the order sent, not sorted
+
+    assert system_instruction({"messages": [{"role": "user", "content": "hello"}], "tools": []}) == ""
+    assert tool_names({"messages": [], "tools": []}) == []
+
+
+def test_fake_llm_requests_returns_the_log(fake_llm):
+    fake_llm.clear(MODEL)
+    _send(tools=TOOLS)
+    assert fake_llm.requests(MODEL) == _recorded()
+    assert tool_names(fake_llm.requests(MODEL)[-1]) == ["dummy_tool"]
