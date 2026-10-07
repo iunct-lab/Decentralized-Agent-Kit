@@ -11,7 +11,8 @@ DAK が自分自身を保守するためのツールキット（要件2/3のド�
 - `watch` / `feature` / `charter` — tech-watch / feature-sync / charter-review の提案パイプライン
 - `model_compare` — 固定の入力（`tests/fixtures/model_compare/`）で複数のモデルに保守のプロンプトを投げて比べる
 - `eval_history` — nightly-eval の結果の記録（`docs/eval/history.jsonl`）と、経路ごとの月の実行回数の上限（`docs/eval/README.md`）
-- `cli` — `dak-maint {triage,watch,feature-sync,collect-deps,charter-review,compare-models,eval-record,eval-budget}`（ワークフローから呼ぶ。`collect-deps` は `gh pr list --json body` の出力を標準入力で受け、feature-sync に渡す依存の一覧を出す）
+- `license` — 依存のライセンスの表記を SPDX にそろえ、方針（`license-policy.toml`）と照らす（`docs/maintenance/license-policy.md`）
+- `cli` — `dak-maint {triage,watch,feature-sync,collect-deps,charter-review,compare-models,eval-record,eval-budget,license-check}`（ワークフローから呼ぶ。`collect-deps` は `gh pr list --json body` の出力を標準入力で受け、feature-sync に渡す依存の一覧を出す）
 
 同じロジックは `agent/skills/dependency-maintenance/` の DAK スキルからも利用でき、
 DAK 自エージェントが対話的にトリアージを実行できる。
@@ -51,6 +52,19 @@ uv run dak-maint compare-models --models models.json --prices prices.json --out 
 鍵はファイルに書かず、`api_key_env` に名前を書いた環境変数から読む。呼び出しが失敗したケース（`temperature` を受け付けない 400 など）は表の `error` に残して次へ進む。
 トークン数は応答の `usage`（Bedrock は Converse の `usage`）から取り、返さないモデルは「—」。
 `JSON` は各段の応答が JSON として読めたかだけを見る。形の違う JSON（watch のクエリ生成に配列でなくオブジェクトを返すなど）は処理が捨てるので、`yes` で件数 0 になる。件数 0 の行は、表の下の出力とトークン数（後の段が呼ばれたか）も合わせて読む。`--prices` の形が違えば、モデルを呼ぶ前に exit 2 で止まる。triage は既存の評価器がオブジェクトの答えだけを読むので、配列で答えると `no` になる（error に `'list' object has no attribute 'get'`）。watch と feature-sync は、定期実行（2 件まで）と違い 50 件まで数えて並べる（charter-review は処理そのものが 1 件にまとめる）。`--prices` / `--models` が読めない、`api_key_env` の環境変数が無い、`--out` のディレクトリに書けないときは、モデルを呼ぶ前に exit 2（前の表は消さない）。最後に `--out` へ書けなかったときは、表を標準出力に出して exit 1。固定入力は `tests/fixtures/` から読むので、ソースのまま `uv run` で動かす（wheel には入らない）。
+
+### 依存のライセンスを確かめる（license-check）
+
+`pip-licenses --from=all --format=json` の一覧を、方針 `license-policy.toml`（許容の一覧・表記の別名・確かめた SPDX・個別の例外）と照らす。
+欄は `License-Expression` → `License-Metadata` → `License-Classifier` の順に、SPDX の式にそろえられた最初のものを採る。`OR` はどれか 1 つ、`AND` はすべてが許容なら通る。
+許容外（`denied`）かライセンスが分からない（`unknown`）依存があれば、1 件ずつ「<component>: <package> <version> のライセンス <license> は許容の一覧に無い（<理由>）」を出して exit 1。方針か一覧が読めなければ exit 2。
+
+```bash
+uv run dak-maint license-check --component agent --input agent-licenses.json --policy license-policy.toml \
+  --exclude dak-agent --markdown-out license-report/agent.md   # --exclude はコンポーネント自身。--markdown-out は全件の表
+```
+
+例外を足す・許容の一覧を変えるのは利用者の判断（方針の経緯は `docs/maintenance/license-policy.md`）。
 
 判定は「Tier0(semver+CI) で大半を決め、曖昧な時だけ LLM に委ねる」設計。
 `--assessor llm` で triage のリスク評価も LLM 化。reasoning 系（watch/feature-sync/charter-review）は

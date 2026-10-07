@@ -9,6 +9,7 @@ Subcommands:
   compare-models 固定の入力で複数のモデルに保守のプロンプトを投げ、結果を Markdown の表にする
   eval-record    nightly-eval の JUnit XML を docs/eval/history.jsonl に 1 行追記する
   eval-budget    経路ごとの今月の実行回数を数え、上限に達していれば allowed=false を出す
+  license-check  pip-licenses の一覧を方針（license-policy.toml）と照らし、許容外か不明なら exit 1
 
 reasoning 系（watch/feature-sync/charter-review）は LLM 必須。MAINT_LLM_* 未設定なら
 proposals は空を返す（ワークフローは 0 件として扱う）。
@@ -31,7 +32,7 @@ from .llm_client import make_complete
 from .watch import propose_technologies
 from .feature import deps_from_prs, propose_feature_adoptions
 from .charter import review_charter
-from . import eval_history, model_compare
+from . import eval_history, license, model_compare
 
 
 def _bool(s: str) -> bool:
@@ -261,6 +262,26 @@ def cmd_eval_budget(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---- license-check ----
+
+def cmd_license_check(args: argparse.Namespace) -> int:
+    try:
+        policy = license.load_policy(args.policy)
+        packages = json.loads(Path(args.input).read_text(encoding="utf-8"))
+    except (OSError, ValueError, KeyError) as e:
+        print(f"error: 方針か一覧が読めない: {e}", file=sys.stderr)
+        return 2
+    findings = license.check(args.component, packages, policy, exclude=set(args.exclude))
+    if args.markdown_out:
+        Path(args.markdown_out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.markdown_out).write_text(license.to_markdown(findings), encoding="utf-8")
+    failed = [f for f in findings if f.failed]
+    for f in failed:
+        print(f.message())
+    print(f"{args.component}: {len(findings)} 件中 許容外・不明 {len(failed)} 件", file=sys.stderr)
+    return 1 if failed else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="dak-maint", description="DAK self-maintenance toolkit")
     sub = p.add_subparsers(dest="command", required=True)
@@ -323,6 +344,14 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--provider", required=True)
     b.add_argument("--limit", type=_non_negative_int, required=True)
     b.set_defaults(func=cmd_eval_budget)
+
+    lc = sub.add_parser("license-check", help="依存のライセンスを方針と照らす")
+    lc.add_argument("--component", required=True)
+    lc.add_argument("--input", required=True, help="pip-licenses --from=all --format=json の出力")
+    lc.add_argument("--policy", default="license-policy.toml")
+    lc.add_argument("--exclude", action="append", default=[], help="コンポーネント自身のパッケージ名（繰り返し可）")
+    lc.add_argument("--markdown-out", default="", help="全件の表を書く先（CI の成果物）")
+    lc.set_defaults(func=cmd_license_check)
     return p
 
 
