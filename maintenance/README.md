@@ -65,7 +65,7 @@ uv run dak-maint license-check --component agent --input agent-licenses.json --p
 ```
 
 `--lock <uv export --frozen --no-dev の出力>` を渡すと、lock にあって環境に無い依存（Windows でだけ入るもの、別の Python の版でだけ入るもの）を PyPI の JSON（`https://pypi.org/pypi/<名前>/<版>/json`）で判定する（表の理由の頭に `PyPI:`。問い合わせられなければ、記録や例外があっても不明）。
-確かめた SPDX（`[[verified]]`）は、記録した版で `License-Expression` が無いときに、自由記述の欄より優先して使う（版が上がれば表記で判定し、決まらなければ「不明」で止まるので確かめ直す）。個別の例外（`[[exceptions]]`）は、欄から別の許容外のライセンスが読めたら効かない。
+確かめた SPDX（`[[verified]]`）は、記録した版で `License-Expression` が無く、自由記述の欄が決まらないか許容のときに、その欄より優先して使う（欄が許容外を言えば隠さない。版が上がれば表記で判定し、決まらなければ「不明」で止まるので確かめ直す）。個別の例外（`[[exceptions]]`）は、欄から別の許容外のライセンスが読めたら効かない。
 例外を足す・許容の一覧を変えるのは利用者の判断（方針の経緯は `docs/maintenance/license-policy.md`）。
 
 判定は「Tier0(semver+CI) で大半を決め、曖昧な時だけ LLM に委ねる」設計。
