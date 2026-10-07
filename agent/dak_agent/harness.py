@@ -971,9 +971,11 @@ class ContextHarnessPlugin(BasePlugin):
     """App-wide plugin implementing the tool-call guard, the tool-output budget
     and the request guard."""
 
-    def __init__(self, settings: HarnessSettings, default_model_name: str, name: str = "dak_context_harness"):
+    def __init__(self, settings: HarnessSettings, default_model_name: str, name: str = "dak_context_harness",
+                 peers_available: bool = False):
         super().__init__(name=name)
         self.settings = settings
+        self.peers_available = peers_available  # A2A peers to hand a broad read to
         self._default_model_name = default_model_name
         self._settings_cache: Dict[str, HarnessSettings] = {default_model_name: settings}
         self._hooks = hooks.load_hooks()
@@ -1180,6 +1182,10 @@ class ContextHarnessPlugin(BasePlugin):
                 f"(artifact_name='{artifact}', offset=..., pattern=...) to read the rest, "
                 "or narrow the tool call."
             )
+            if self.peers_available:
+                replacement["hint"] += (
+                    " If an A2A peer agent is available for this task, consider delegating the broad read"
+                    " to it instead of paging through everything yourself.")
         else:
             replacement["hint"] = "Output was too large for the context window; narrow the tool call."
         return replacement

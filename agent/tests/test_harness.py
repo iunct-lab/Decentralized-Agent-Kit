@@ -372,6 +372,21 @@ class TestToolOutputBudget:
         assert "[80 chars / 0 lines omitted]" in preview  # head and tail both show part of the one line
 
     @pytest.mark.asyncio
+    async def test_hint_mentions_delegation_when_peers_available(self):
+        plugin = ContextHarnessPlugin(HarnessSettings(context_window=8192), "test-model", peers_available=True)
+        result = await plugin.after_tool_callback(
+            tool=_tool(), tool_args={}, tool_context=_tool_context(), result="x" * 10_000)
+        assert "read_tool_output(artifact_name='tool_output_read_file_call-1.txt'" in result["hint"]
+        assert "delegating" in result["hint"]
+
+    @pytest.mark.asyncio
+    async def test_hint_has_no_delegation_mention_when_no_peers(self):
+        result = await self.plugin.after_tool_callback(
+            tool=_tool(), tool_args={}, tool_context=_tool_context(), result="x" * 10_000)
+        assert "read_tool_output(artifact_name='tool_output_read_file_call-1.txt'" in result["hint"]
+        assert "delegating" not in result["hint"]
+
+    @pytest.mark.asyncio
     async def test_without_artifact_service_still_truncates(self):
         ctx = _tool_context(save_side_effect=ValueError("Artifact service is not initialized."))
         result = await self.plugin.after_tool_callback(

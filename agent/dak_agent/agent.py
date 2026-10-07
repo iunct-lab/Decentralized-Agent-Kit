@@ -118,6 +118,8 @@ permission_plugin = PermissionPlugin(DEFAULT_RULES + load_rules(load_agent_confi
 app = App(
     name="dak_agent",
     root_agent=root_agent,
-    plugins=[permission_plugin] + ([ContextHarnessPlugin(harness_settings, formatted_model_name)] if use_harness else []),
+    plugins=[permission_plugin] + (
+        [ContextHarnessPlugin(harness_settings, formatted_model_name, peers_available=bool(a2a_sub_agents))]
+        if use_harness else []),
     events_compaction_config=make_compaction_config(harness_settings, llm=model) if use_harness else None,
 )
