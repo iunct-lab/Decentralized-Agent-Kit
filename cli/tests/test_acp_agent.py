@@ -8,8 +8,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from acp import RequestError, resource_link_block, text_block
 
+from acp.schema import AllowedOutcome, DeniedOutcome, RequestPermissionResponse
+
 from src.acp_agent import DakAcpAgent, events_to_updates
-from src.client import AgentClient
+from src.client import AgentClient, ApprovalError
 
 STATE_ONLY = {"author": "dak_agent", "actions": {"stateDelta": {"dak_original_request": "hi"}}}
 TEXT = {"author": "dak_agent", "partial": False,
@@ -129,16 +131,24 @@ def test_stream_events_reads_sse_data_lines(mock_config_class, mock_post):
 
 
 class _Conn:
-    def __init__(self):
+    def __init__(self, answer="allow"):
         self.updates = []
+        self.asked = []
+        self.answer = answer
 
     async def session_update(self, session_id, update, **kwargs):
         self.updates.append((session_id, update))
 
+    async def request_permission(self, session_id, tool_call, options, **kwargs):
+        self.asked.append((tool_call, options))
+        outcome = DeniedOutcome(outcome="cancelled") if self.answer == "cancelled" \
+            else AllowedOutcome(outcome="selected", option_id=self.answer)
+        return RequestPermissionResponse(outcome=outcome)
 
-def _agent_with(events):
+
+def _agent_with(events, answer="allow"):
     agent = DakAcpAgent()
-    conn = _Conn()
+    conn = _Conn(answer)
     agent.on_connect(conn)
     client = MagicMock()
     client.stream_events.return_value = iter(events)
@@ -157,12 +167,106 @@ def test_prompt_streams_updates_and_ends_turn():
     assert [u.session_update for _, u in conn.updates] == ["tool_call", "tool_call_update", "agent_message_chunk"]
 
 
-def test_prompt_says_approval_is_not_available_yet():
-    agent, conn, _ = _agent_with([CONFIRMATION, WAITING])
+PENDING = [{"id": "adk-a4f3", "kind": "approval", "tool_name": "write_file",
+            "tool_args": {"path": "a.txt", "content": "x"}, "status": "pending"}]
+DONE = _result({"content": [{"type": "text", "text": "Successfully wrote to a.txt"}], "isError": False})
+DONE["content"]["parts"][0]["functionResponse"]["id"] = "call_11accb99"
+
+
+def _approval_turn(answer, reply=None):
+    agent, conn, client = _agent_with([CONFIRMATION, WAITING, TEXT], answer)
+    client.list_approvals.side_effect = [PENDING, []]
+    if isinstance(reply, Exception):
+        client.reply_approval.side_effect = reply
+    else:
+        client.reply_approval.return_value = reply
+    response = asyncio.run(agent.prompt(prompt=[text_block("write")], session_id="s1"))
+    return response, conn, client
+
+
+def test_allowed_permission_is_answered_once_and_the_turn_goes_on():
+    response, conn, client = _approval_turn("allow", [DONE, TEXT])
+
+    [(tool_call, options)] = conn.asked
+    assert (tool_call.tool_call_id, tool_call.title, tool_call.status) == ("call_11accb99", "write_file", "pending")
+    assert [(o.option_id, o.kind) for o in options] == [("allow", "allow_once"), ("reject", "reject_once")]
+    client.reply_approval.assert_called_once_with("adk-a4f3", client.session_id, "once")
+    assert response.stop_reason == "end_turn"
+    done = [u for _, u in conn.updates if u.session_update == "tool_call_update"][-1]
+    assert (done.tool_call_id, done.status) == ("call_11accb99", "completed")
+
+
+def test_rejected_permission_is_answered_reject():
+    response, _, client = _approval_turn("reject", [TEXT])
+
+    client.reply_approval.assert_called_once_with("adk-a4f3", client.session_id, "reject")
+    assert response.stop_reason == "end_turn"
+
+
+def test_another_confirmation_in_the_reply_is_asked_too():
+    agent, conn, client = _agent_with([CONFIRMATION, WAITING, TEXT])
+    client.list_approvals.side_effect = [PENDING, [{**PENDING[0], "id": "adk-b"}]]
+    client.reply_approval.side_effect = [
+        {"status": "needs_approval", "response": [DONE, {**CONFIRMATION, "content": {"role": "model", "parts": [
+            {"functionCall": {"id": "adk-b", "name": "adk_request_confirmation",
+                              "args": {"originalFunctionCall": {"id": "call_2", "name": "write_file"}}}}]}}]},
+        [TEXT]]
 
     assert asyncio.run(agent.prompt(prompt=[text_block("write")], session_id="s1")).stop_reason == "end_turn"
-    last = conn.updates[-1][1]
-    assert last.session_update == "agent_message_chunk" and "write_file" in last.content.text
+    assert [c.tool_call_id for c, _ in conn.asked] == ["call_11accb99", "call_2"]
+
+
+def test_cancelled_permission_is_left_unanswered():
+    response, _, client = _approval_turn("cancelled")
+
+    client.reply_approval.assert_not_called()
+    assert response.stop_reason == "cancelled"
+
+
+def test_expired_approval_fails_the_call_and_ends_the_turn():
+    response, conn, client = _approval_turn("allow", ApprovalError(409, '{"observation": "timed_out"}'))
+
+    assert response.stop_reason == "end_turn"
+    failed, said = conn.updates[-2][1], conn.updates[-1][1]
+    assert (failed.tool_call_id, failed.status) == ("call_11accb99", "failed")
+    assert "expired" in said.content.text
+    assert client.list_approvals.call_count == 2  # read again: the agent went on and may have asked again
+
+
+def test_a_confirmation_after_an_expired_one_is_asked():
+    agent, conn, client = _agent_with([CONFIRMATION, WAITING, TEXT])
+    client.list_approvals.side_effect = [PENDING, [{**PENDING[0], "id": "adk-later", "tool_name": "edit_file"}], []]
+    client.reply_approval.side_effect = [ApprovalError(409, "timed_out"), [TEXT]]
+
+    assert asyncio.run(agent.prompt(prompt=[text_block("write")], session_id="s1")).stop_reason == "end_turn"
+    assert [c.title for c, _ in conn.asked] == ["write_file", "edit_file"]
+    assert client.reply_approval.call_args.args[0] == "adk-later"
+
+
+def test_cancel_stops_reading_the_stream():
+    agent = DakAcpAgent()
+    conn = _Conn()
+    agent.on_connect(conn)
+    read, running = [], {}
+
+    def events(_message):
+        for event in (LIST_SKILLS_CALL, LIST_SKILLS_RESULT, TEXT):
+            read.append(event)
+            if event is LIST_SKILLS_CALL:
+                asyncio.run_coroutine_threadsafe(agent.cancel(session_id="s1"), running["loop"]).result()
+            yield event
+
+    client = MagicMock()
+    client.stream_events.side_effect = events
+    agent._clients["s1"] = client
+
+    async def main():
+        running["loop"] = asyncio.get_running_loop()
+        return await agent.prompt(prompt=[text_block("go")], session_id="s1")
+
+    assert asyncio.run(main()).stop_reason == "cancelled"
+    assert conn.updates == []
+    assert read == [LIST_SKILLS_CALL]  # the generator was left: the connection closes, the agent's turn stops
 
 
 @patch("src.acp_agent.AgentClient")
