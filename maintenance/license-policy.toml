@@ -107,6 +107,12 @@ version = "8.1.8"
 license = "BSD-3-Clause"
 reviewed = "2026-10-07"
 
+[[verified]]
+package = "agent-client-protocol"
+version = "0.12.1"
+license = "Apache-2.0"
+reviewed = "2026-10-07"
+
 # 許容の一覧に無くても個別に認める依存。2026-10-07 に利用者が決めた
 [[exceptions]]
 package = "psycopg2-binary"
