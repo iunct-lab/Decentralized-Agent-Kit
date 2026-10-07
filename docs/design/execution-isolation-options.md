@@ -228,4 +228,36 @@ echo "== done"
 
 ## 5. 推す案
 
-（#300 で書く）
+**採否は利用者が決める**（PBI #296 の `## 判断待ち`。回答は PBI の決定ログに引用する）。ここは比較と実測から言えることと、推す案。
+
+### 方式ごとの要点
+
+| 方式 | 隔離の強さ | 実測の上乗せ | `SandboxManager` に足す変更 | 動かせるホスト | 運用の負担 |
+|---|---|---|---|---|---|
+| runc（今） | ホストのカーネルを共有 | 基準 | なし | cgroups のある Linux の Docker（rootless で cgroups が無いと上限が効かない） | なし |
+| gVisor | システムコールを sandbox の application kernel で受ける | 起動 +0.1 秒、処理 +9%（要件の外の計測先での参考値） | `--runtime` を 1 つ足す | Linux 5.6 以上、x86_64 / arm64、KVM 不要 | ホストの Docker に `runsc` を入れて登録。`--pids-limit` はスレッドに効かない |
+| Kata Containers | コンテナごとの VM | 未検証（KVM の使える計測先が無い） | `--runtime` を 1 つ足す | KVM（入れ子の仮想化か bare metal） | `io.containerd.kata.v2` の shim を入れる。KVM のあるホストが要る |
+| Docker Sandboxes | サンドボックスごとの microVM と専用の Docker デーモン | 未検証（実測しない） | `sbx` を呼ぶ別の実装 | Apple silicon の Mac、KVM のある Ubuntu 24.04 以上、Windows 11 | `sbx login`、ネットワークの方針の初期化、ホストに常駐する `sandboxd`。mcp-server のコンテナから呼ぶ標準の口が無い（3 節） |
+| CubeSandbox | サンドボックスごとの microVM | 未検証（実測しない） | E2B 互換の API のクライアント（別の実装） | KVM のある Linux（x86_64 は PVM のホストカーネルでも可） | ホストに一式の常駐サービス、XFS の 50 GB の領域 |
+| srt / vetto | プロセス単位（カーネルは共有） | srt は 1 回あたり約 0.47 秒（`command-sandbox.md`） | 別の層（コマンドを包む） | Linux / macOS | #292 で扱う |
+
+### 推す案: gVisor を opt-in の実行先として足す（別の実装 PBI）
+
+- 理由: `SandboxManager` への変更が `--runtime` 1 つで済み、独立コンテナの原則（mcp-server は Docker の API を呼ぶだけ）を崩さない。KVM が要らないので、クラウドの VM や arm64 のホストでも使える。上乗せは `run_command` のタイムアウト（60 秒）に比べて小さい
+- #20 の既定（`SANDBOX_MODE=off`、`docker` は明示の opt-in、`session-sandbox.md`）と矛盾しない形: `SANDBOX_RUNTIME`（既定 `runc`）のような設定を足し、`docker` モードのときだけ `docker run --runtime=<値>` を付ける。指定したランタイムがホストの Docker に無いときは、素の runc に黙って戻さず、起動時にエラーで止める（隔離を強めたつもりで強まっていない状態を作らない。`SANDBOX_MODE` の不正な値と同じ扱い）
+- 実装の前に確かめること（その PBI の最初の Task）: 要件どおりのカーネル（5.6 以上）で cgroups のある root の Docker の上で、既定の設定での起動、`docker exec`、`docker rm -f` が runc と同じように動くか。今回の計測先（カーネル 4.14）ではどれも動かなかった（4 節）。確かめる先のホストは、その PBI で決める
+- `--pids-limit` がスレッドに効かないことは、文書に制限として書く（プロセスの数の上限は別に見る）
+
+### 見送る案
+
+- **Kata Containers**: 呼び出し方は gVisor と同じで隔離は強いが、KVM のあるホストが要り、今回は動かせる計測先が無かった。KVM のあるホストで #20 を動かす必要が出たときに、gVisor と同じ `SANDBOX_RUNTIME` の値として足せる（`io.containerd.kata.v2`）
+- **Docker Sandboxes**: mcp-server のコンテナから呼ぶ標準の口が無く、ホストに橋渡しのサービスを置くか mcp-server をホストで動かす必要がある（3 節）。プロプライエタリで、アカウントのサインインが要る
+- **CubeSandbox**: ホストに一式の常駐サービスと KVM が要る。`docs/CHARTER.md` が避ける「重量級の新規常時依存」に当たる
+
+### 未検証のまま残るもの
+
+- gVisor の要件どおりのカーネルでの動作と上乗せ（推す案の最初の Task）
+- Kata Containers の動作と上乗せ（KVM のあるホストが要る）
+- Docker Sandboxes の作成・実行・破棄の時間（3 節）
+- CubeSandbox のすべて
+- `--cpus` が gVisor で効くか（4 節）
