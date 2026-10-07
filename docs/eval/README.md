@@ -41,10 +41,10 @@ gh release download eval-history -p history.jsonl          # 今の記録を落�
 `dak-maint eval-budget --history <落とした history.jsonl> --provider <経路> --limit <回数>`（`maintenance/` で実行）が数え、上限に達していれば `allowed=false` と理由を出す。
 
 差し替え（`gh release upload … --clobber`）は消してから上げるので、途中で失敗すると asset が消えることがある。
-そのときは最後に成功した実行の artifact の写しから戻す:
+そのときは**差し替えに失敗したその実行**の artifact の写しから戻す（写しは差し替えの前に上がっていて、その晩の行まで入っている。写しが上がらなかった晩は差し替えないので、asset は前の晩のまま残る）:
 
 ```bash
-gh run download <run-id> -n nightly-eval -D restore     # restore/eval-history/history.jsonl
+gh run download <差し替えに失敗した実行の run-id> -n nightly-eval -D restore     # restore/eval-history/history.jsonl
 gh release upload eval-history restore/eval-history/history.jsonl --clobber
 ```
 
