@@ -353,6 +353,13 @@ def call_tool_names(value: Any) -> Optional[List[str]]:
     return None
 
 
+def call_offers_transfer(call_settings: Dict[str, Any]) -> bool:
+    """Whether this call keeps the A2A peers: `dak:tools` is not given, or it
+    names transfer_to_agent (ADK adds that tool from sub_agents on its own)."""
+    call_tools = call_settings.get(STATE_CALL_TOOLS)
+    return call_tools is None or TRANSFER_TOOL in (call_tool_names(call_tools) or [])
+
+
 def validate_call_tools(call_settings: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """An error dict when `dak:tools` is present but malformed, or names MCP
     servers the operator does not allow. A caller who asked for a restriction

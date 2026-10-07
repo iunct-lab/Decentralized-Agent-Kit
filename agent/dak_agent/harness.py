@@ -1103,8 +1103,7 @@ class ContextHarnessPlugin(BasePlugin):
             return False
         from . import call_config  # one-way: call_config never imports harness
 
-        call_tools = call_config.resolve_dak_settings(tool_context).get(call_config.STATE_CALL_TOOLS)
-        return call_tools is None or call_config.TRANSFER_TOOL in (call_config.call_tool_names(call_tools) or [])
+        return call_config.call_offers_transfer(call_config.resolve_dak_settings(tool_context))
 
     async def after_tool_callback(self, *, tool, tool_args, tool_context, result) -> Optional[dict]:
         tool_name = getattr(tool, "name", "tool")
