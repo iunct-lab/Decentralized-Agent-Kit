@@ -111,8 +111,10 @@ jobs:
           uv run dak-maint eval-record --junit ../tests/integration/eval-report.xml \
             --history "$HISTORY" --model "$MODEL"
 
-      # 差し替えに失敗したときは、この写しから asset を戻す（docs/eval/README.md）
+      # 差し替えに失敗したときは、この写しから asset を戻す（docs/eval/README.md）。
+      # 写しが上がらなかった晩は差し替えない（Publish history の条件）。
       - name: Upload eval artifacts
+        id: artifact
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -123,7 +125,7 @@ jobs:
             ollama.log
 
       - name: Publish history
-        if: always() && steps.record.outcome == 'success'
+        if: always() && steps.record.outcome == 'success' && steps.artifact.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload eval-history -R "$GITHUB_REPOSITORY" eval-history/history.jsonl --clobber
