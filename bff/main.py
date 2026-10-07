@@ -112,6 +112,13 @@ async def chat(request: Request, prompt: str = Form(...), session_id: str = Form
 # A tool call the agent holds for the user's answer (docs/design/approval-queue.md)
 REQUEST_CONFIRMATION = "adk_request_confirmation"
 
+# Replies the agent refused (docs/design/approval-queue.md): 409 still resumed
+# the agent, so it must not read as "nothing happened"
+APPROVAL_REPLY_NOTICES = {
+    409: "This approval had expired: the agent was told it timed out and has moved on.",
+    404: "This approval is no longer pending: it was already answered or dropped.",
+}
+
 
 def _render_agent_turn_html(events: list, session_id: str, user_id: str) -> str:
     """One agent turn (ADK events, as `/run` returns them) as chat HTML. Text
@@ -215,6 +222,8 @@ async def answer_approval(fc_id: str, mode: str = Form(...), session_id: str = F
                 json={"user_id": user_id, "session_id": session_id, "mode": mode},
                 headers=headers,
             )
+            if response.status_code in APPROVAL_REPLY_NOTICES:
+                return HTMLResponse(f'<div class="chat-message system">{APPROVAL_REPLY_NOTICES[response.status_code]}</div>\n')
             response.raise_for_status()
             data = response.json()
     except Exception as e:
