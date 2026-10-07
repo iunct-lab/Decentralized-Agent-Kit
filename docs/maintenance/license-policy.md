@@ -47,6 +47,8 @@ uvx pip-licenses==5.5.5 --python .venv/bin/python --with-system --from=all --for
 | `pywin32` 311 | agent, mcp-server | メタデータ `PSF` | `PSF-2.0 AND BSD-3-Clause`（`win32/`・`Pythonwin/`・`com/` の License.txt は BSD 3 条項の文） |
 | `tzdata` 2025.2 | agent | メタデータ `Apache-2.0` | `Apache-2.0` |
 
+Python の版でだけ入る依存も同じく環境に見えない。そのうち `click` 8.1.8（cli、`python_full_version < '3.10'`）は PyPI の欄が分類子 `BSD License` だけで、wheel の `LICENSE.txt` を読んで `BSD-3-Clause` と確かめた（2026-10-07）。
+
 CI（Linux）の環境の一覧だけではこの 3 件が見えないので、`uv export --frozen --no-dev` の一覧と環境の一覧を突き合わせ、環境に無い依存は PyPI の JSON（`https://pypi.org/pypi/<名前>/<版>/json`）のライセンス欄で判定する（下の「決定」。#346/#347）。
 
 ## 道具の比較

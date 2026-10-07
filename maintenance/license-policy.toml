@@ -88,6 +88,18 @@ version = "0.12.0"
 license = "MIT"
 reviewed = "2026-10-01"
 
+[[verified]]
+package = "colorama"
+version = "0.4.6"
+license = "BSD-3-Clause"
+reviewed = "2026-10-01"
+
+[[verified]]
+package = "click"
+version = "8.1.8"
+license = "BSD-3-Clause"
+reviewed = "2026-10-07"
+
 # 許容の一覧に無くても個別に認める依存。2026-10-07 に利用者が決めた
 [[exceptions]]
 package = "psycopg2-binary"
