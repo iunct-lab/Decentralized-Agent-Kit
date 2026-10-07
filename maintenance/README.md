@@ -64,6 +64,7 @@ uv run dak-maint license-check --component agent --input agent-licenses.json --p
   --exclude dak-agent --markdown-out license-report/agent.md   # --exclude はコンポーネント自身。--markdown-out は全件の表
 ```
 
+確かめた SPDX（`[[verified]]`）は 3 つの欄で決まらないときに、記録した版にだけ使う（版が上がれば「不明」で止まるので確かめ直す）。個別の例外（`[[exceptions]]`）は、欄から別の許容外のライセンスが読めたら効かない。
 例外を足す・許容の一覧を変えるのは利用者の判断（方針の経緯は `docs/maintenance/license-policy.md`）。
 
 判定は「Tier0(semver+CI) で大半を決め、曖昧な時だけ LLM に委ねる」設計。
