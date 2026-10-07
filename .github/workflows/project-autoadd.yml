@@ -23,13 +23,13 @@ permissions:
 jobs:
   add-to-project:
     runs-on: ubuntu-latest
-    # Project 未設定（bootstrap_project.sh 実行前）はスキップして失敗にしない。
+    # Project 未設定（DAK_PROJECT_URL が無い）はスキップして失敗にしない。
     if: ${{ vars.DAK_PROJECT_URL != '' }}
     steps:
       - uses: actions/add-to-project@v2.0.0
         id: add
         with:
-          # bootstrap_project.sh が出力する Project URL を Variables に登録して使う。
+          # Project の URL を Variables に登録して使う（root の ops.config.json の projectUrl と同じ）。
           # 例: gh variable set DAK_PROJECT_URL --body "https://github.com/users/teeppp/projects/N"
           project-url: ${{ vars.DAK_PROJECT_URL }}
           github-token: ${{ secrets.DAK_PROJECT_TOKEN }}

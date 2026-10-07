@@ -43,7 +43,7 @@ fake-LLM はモデル名ごとに応答をスクリプトできる制御API（`/
   DAK スキル `agent/skills/dependency_maintenance/` からエージェントも実行できる。
 - **新技術ウォッチ**: `tech-watch` / `charter-review` が `docs/CHARTER.md` を軸に提案 Issue を起票。
 - **継続テスト**: `nightly-eval`（小型 Ollama）+ golden replay の自動増殖。`docs/eval/`。
-- **すべての作業は GitHub Project 管理**（`scripts/setup/bootstrap_project.sh`）。
+- **すべての作業は GitHub Project 管理**（DAK の Project の固有の値は root の `ops.config.json`）。
 
 ## 保守・検証の入口
 
