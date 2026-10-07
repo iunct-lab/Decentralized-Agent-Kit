@@ -6,8 +6,8 @@ DAK 自体は Apache-2.0（`LICENSE`）。この文書は、5 つのコンポー
 - 対象外: コンテナイメージの OS パッケージ、`tests/integration/` の依存、各コンポーネントの dev の依存、`bff` が CDN から読む htmx
 - ライセンスの法的な解釈（弱いコピーレフトを認めるかなど）は利用者が決める。仕組みは決めた方針を機械的に当てはめるだけ
 
-> **状態（2026-10-01）**: 棚卸しと方針の**案**。許容の一覧と個別の例外は PBI #344 で利用者の回答を待っている。
-> 回答が出たら「方針」の節を確定させ、`maintenance/license-policy.toml`（#346）に写す。
+> **状態（2026-10-07）**: 方針は利用者が決めた（下の「決定」。PBI #344 の決定ログに回答の原文）。
+> `maintenance/license-policy.toml`（#346）はこの決定を写したもの。
 
 ## 取り方
 
@@ -47,7 +47,7 @@ uvx pip-licenses==5.5.5 --python .venv/bin/python --with-system --from=all --for
 | `pywin32` 311 | agent, mcp-server | メタデータ `PSF` | `PSF-2.0 AND BSD-3-Clause`（`win32/`・`Pythonwin/`・`com/` の License.txt は BSD 3 条項の文） |
 | `tzdata` 2025.2 | agent | メタデータ `Apache-2.0` | `Apache-2.0` |
 
-CI（Linux）の license ジョブは、このままではこの 3 件を見ない。どう扱うかは利用者の判断待ち（PBI #344）。
+CI（Linux）の環境の一覧だけではこの 3 件が見えないので、`uv export --frozen --no-dev` の一覧と環境の一覧を突き合わせ、環境に無い依存は PyPI の JSON（`https://pypi.org/pypi/<名前>/<版>/json`）のライセンス欄で判定する（下の「決定」。#346/#347）。
 
 ## 道具の比較
 
@@ -158,7 +158,7 @@ LGPL の部分（psycopg2 本体、`libkeyutils`、`libcrypt`）が論点にな�
 
 ## 方針
 
-### 案（利用者の回答待ち）
+### 案（2026-10-01 に利用者に尋ねたもの）
 
 許容の一覧（`allow`）:
 
@@ -172,8 +172,11 @@ LGPL の部分（psycopg2 本体、`libkeyutils`、`libcrypt`）が論点にな�
 - 上の表の「表記だけでは決められない」残りの 9 件（`fastuuid` ほか）: LICENSE ファイルで確かめた SPDX を記録する
 
 許容外か不明の依存が入ったら CI の license ジョブが止まり、例外を足すかどうかを利用者が決める。
-Windows でだけ入る依存（`colorama`, `pywin32`, `tzdata`）を CI でどう確かめるかも、利用者の判断待ち（PBI #344）。
 
 ### 決定
 
-（利用者の回答の後に書く）
+2026-10-07、利用者の回答（PBI #344 の決定ログ）:
+
+- **許容の一覧は案のとおり**: 許容的なもの（`MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `PSF-2.0`, `Python-2.0`, `CNRI-Python`, `Unlicense`, `0BSD`）と `MPL-2.0`。LGPL は一覧に入れない
+- **個別に認めるのは `psycopg2-binary`（agent、`LGPL-3.0-or-later`）と `jsonalias`（agent、`MIT`）だけ**。表記だけでは決められない残りの 9 件は、確かめた SPDX の記録（許容の一覧の中のライセンスに読み替えるだけで、例外ではない）
+- **Windows でだけ入る依存も CI で見る**: `uv export --frozen --no-dev` の一覧と環境の一覧を突き合わせ、環境に無い依存は PyPI の JSON のライセンス欄で判定する。PyPI の表記も同じ正規化と方針で判定し、決まらなければ「不明」で止める
