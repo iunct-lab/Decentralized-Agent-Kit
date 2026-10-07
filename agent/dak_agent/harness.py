@@ -549,11 +549,19 @@ def _drop_duplicate_structured_content(result: Any, text: str) -> Optional[dict]
     return {k: v for k, v in result.items() if k != "structuredContent"}
 
 
-def _preview(text: str, max_chars: int) -> str:
+def _preview(text: str, max_chars: int, artifact: Optional[str]) -> str:
+    """Head and tail of an oversized tool output under a header that says how
+    much there was, what was kept, and where the full output went."""
     head = int(max_chars * 0.7)
     tail = max_chars - head
-    omitted = len(text) - head - tail
-    return f"{text[:head]}\n\n... [{omitted} chars omitted] ...\n\n{text[-tail:]}"
+    omitted_chars = len(text) - head - tail
+    total_lines = text.count("\n") + (0 if not text or text.endswith("\n") else 1)
+    omitted_lines = max(0, total_lines - text[:head].count("\n") - text[-tail:].count("\n"))
+    header = (f"[truncated: original {len(text)} chars / {total_lines} lines; "
+              f"kept head {head} chars + tail {tail} chars"
+              + (f"; artifact={artifact}" if artifact else "") + "]\n")
+    return (f"{header}{text[:head]}\n\n... [{omitted_chars} chars / {omitted_lines} lines omitted] ...\n\n"
+            f"{text[-tail:]}")
 
 
 def _artifact_name(tool_name: str, call_id: Optional[str]) -> str:
@@ -1154,7 +1162,7 @@ class ContextHarnessPlugin(BasePlugin):
 
         logger.info("Context harness: truncated %s output %d -> %d chars", tool_name, len(text), max_chars)
         replacement = {
-            "result": _preview(text, max_chars),
+            "result": _preview(text, max_chars, artifact),
             "truncated": True,
             "original_chars": len(text),
         }
