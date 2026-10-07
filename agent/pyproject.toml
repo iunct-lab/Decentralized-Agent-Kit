@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "google-adk[a2a,db,mcp]>=2.8.0,<3",
-    "mcp>=1.28.1,<2",
+    "mcp>=1.28.1,<3",
     "asyncpg>=0.30",
     "fastapi>=0.139.0",
     "uvicorn>=0.50.0",
