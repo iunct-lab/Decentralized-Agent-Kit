@@ -109,14 +109,22 @@ def _write_file_script(fake_llm, name, *after):
 
 @pytest.fixture
 def written():
-    """A path under acp-it/ (mcp-server writes into the repo, mounted at /projects); removed afterwards."""
+    """An empty file under acp-it/ that write_file overwrites (mcp-server writes into the repo, mounted
+    at /projects). Made here, as test_search_edit_flow.py does: a file the container creates belongs to
+    its user and the host may not read or remove it. Write into a directory: #543."""
     name = f"acp-it/{uuid.uuid4().hex[:8]}.txt"
-    yield name
     path = os.path.join(REPO_ROOT, name)
-    if os.path.exists(path):
-        os.remove(path)
-    if os.path.isdir(os.path.dirname(path)) and not os.listdir(os.path.dirname(path)):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w").close()
+    yield name
+    os.remove(path)
+    if not os.listdir(os.path.dirname(path)):
         os.rmdir(os.path.dirname(path))
+
+
+def _content(name):
+    with open(os.path.join(REPO_ROOT, name)) as f:
+        return f.read()
 
 
 def _write_call(editor):
@@ -135,8 +143,7 @@ def test_acp_permission_allow(fake_llm, tmp_path, written):
     assert (asked.tool_call_id, asked.title) == (call.tool_call_id, "write_file")
     done = [u for u in editor.updates if u.session_update == "tool_call_update" and u.tool_call_id == call.tool_call_id]
     assert [u.status for u in done] == ["pending", "completed"]
-    with open(os.path.join(REPO_ROOT, written)) as f:
-        assert f.read() == "written via ACP"
+    assert _content(written) == "written via ACP"
     assert editor.updates[-1].content.text == "Wrote it."
 
 
@@ -150,7 +157,7 @@ def test_acp_permission_reject(fake_llm, tmp_path, written):
     done = [u for u in editor.updates if u.session_update == "tool_call_update" and u.tool_call_id == call.tool_call_id]
     assert [u.status for u in done] == ["pending", "failed"]
     assert "denied_by_user" in json.dumps(done[-1].raw_output)
-    assert not os.path.exists(os.path.join(REPO_ROOT, written))
+    assert _content(written) == ""
     assert editor.updates[-1].content.text == "OK, I did not write it."
 
 
@@ -162,5 +169,5 @@ def test_acp_cancel(fake_llm, tmp_path, written):
     _, responses, editor = asyncio.run(_turns(tmp_path, "Write a file", "Never mind", editor=Editor("cancel")))
 
     assert [r.stop_reason for r in responses] == ["cancelled", "end_turn"]
-    assert not os.path.exists(os.path.join(REPO_ROOT, written))
+    assert _content(written) == ""
     assert editor.updates[-1].content.text == "Next prompt answered."
