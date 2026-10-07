@@ -17,6 +17,7 @@ allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "MPL-2.0"]
 
 [[verified]]
 package = "Jinja2"
+version = "3.1.6"
 license = "BSD-3-Clause"
 reviewed = "2026-10-01"
 
@@ -96,8 +97,30 @@ def test_fields_are_taken_expression_then_metadata_then_classifier(policy):
 
 
 def test_verified_record_resolves_an_ambiguous_label(policy):
-    [f] = check("bff", [_pkg("jinja2", classifier="BSD License")], policy)
+    [f] = check("bff", [_pkg("jinja2", classifier="BSD License", version="3.1.6")], policy)
     assert (f.license, f.status) == ("BSD-3-Clause", "ok")
+
+
+def test_verified_record_does_not_hide_a_new_version_or_a_declared_license(policy):
+    [newer] = check("bff", [_pkg("Jinja2", classifier="BSD License", version="3.2.0")], policy)
+    [declared] = check("bff", [_pkg("Jinja2", expression="GPL-3.0-only", version="3.1.6")], policy)
+    assert newer.status == "unknown"
+    assert (declared.status, declared.license) == ("denied", "GPL-3.0-only")
+
+
+def test_exception_does_not_cover_a_different_license(policy):
+    [f] = check("agent", [_pkg("psycopg2-binary", expression="AGPL-3.0-only")], policy)
+    assert f.status == "denied" and "LGPL-3.0-or-later で認めた" in f.reason
+
+
+def test_with_exception_id_without_a_digit_goes_through_check(policy):
+    [f] = check("agent", [_pkg("llvmish", expression="Apache-2.0 WITH LLVM-exception")], policy)
+    assert (f.status, f.license) == ("ok", "Apache-2.0 WITH LLVM-exception")
+
+
+def test_digitless_ids_are_trusted_in_license_expression(policy):
+    [f] = check("agent", [_pkg("z", expression="Zlib AND MIT", metadata="MIT")], policy)
+    assert (f.status, f.license) == ("denied", "Zlib AND MIT")
 
 
 def test_exception_applies_only_inside_its_components(policy):
@@ -143,6 +166,13 @@ def test_cli_exit_code_messages_and_markdown(policy, tmp_path, capsys):
 
     listing.write_text(json.dumps([_pkg("rich", metadata="MIT")]))
     assert main(args) == 0
+
+
+def test_cli_malformed_policy_value_is_exit_2(tmp_path):
+    (tmp_path / "policy.toml").write_text('allow = ["MIT"]\n[aliases]\n"Foo" = "Apache 2.0"\n', encoding="utf-8")
+    (tmp_path / "in.json").write_text(json.dumps([_pkg("x", metadata="Foo")]))
+    assert main(["license-check", "--component", "cli", "--input", str(tmp_path / "in.json"),
+                 "--policy", str(tmp_path / "policy.toml")]) == 2
 
 
 def test_cli_unreadable_input_is_exit_2(tmp_path):

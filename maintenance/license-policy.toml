@@ -33,49 +33,58 @@ allow = [
 "The Unlicense (Unlicense)" = "Unlicense"
 
 # 表記だけでは決められず、LICENSE ファイル（または配布元）を読んで確かめた SPDX の式。
-# 例外ではない（許容の一覧で判定する）
+# 例外ではない（許容の一覧で判定する）。3 つの欄で決まらないときだけ使い、版が変われば確かめ直す（CI が「不明」で止まる）
 [[verified]]
 package = "fastuuid"
+version = "0.14.0"
 license = "BSD-3-Clause"
 reviewed = "2026-10-01"
 
 [[verified]]
 package = "Jinja2"
+version = "3.1.6"
 license = "BSD-3-Clause"
 reviewed = "2026-10-01"
 
 [[verified]]
 package = "prompt_toolkit"
+version = "3.0.52"
 license = "BSD-3-Clause"
 reviewed = "2026-10-01"
 
 [[verified]]
 package = "sqlparse"
+version = "0.5.3"
 license = "BSD-3-Clause"
 reviewed = "2026-10-01"
 
 [[verified]]
 package = "wrapt"
+version = "1.17.3"
 license = "BSD-2-Clause"
 reviewed = "2026-10-01"
 
 [[verified]]
 package = "pyasn1_modules"
+version = "0.4.2"
 license = "BSD-2-Clause"
 reviewed = "2026-10-01"
 
 [[verified]]
 package = "packaging"
+version = "25.0"
 license = "Apache-2.0 OR BSD-2-Clause"
 reviewed = "2026-10-01"
 
 [[verified]]
 package = "python-dateutil"
+version = "2.9.0.post0"
 license = "Apache-2.0 AND BSD-3-Clause"
 reviewed = "2026-10-01"
 
 [[verified]]
 package = "tiktoken"
+version = "0.12.0"
 license = "MIT"
 reviewed = "2026-10-01"
 

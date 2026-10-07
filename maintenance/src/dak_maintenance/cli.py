@@ -271,7 +271,11 @@ def cmd_license_check(args: argparse.Namespace) -> int:
     except (OSError, ValueError, KeyError) as e:
         print(f"error: 方針か一覧が読めない: {e}", file=sys.stderr)
         return 2
-    findings = license.check(args.component, packages, policy, exclude=set(args.exclude))
+    try:
+        findings = license.check(args.component, packages, policy, exclude=set(args.exclude))
+    except (ValueError, KeyError, TypeError) as e:  # 方針の値が SPDX の式でない、必須の欄が無いなど
+        print(f"error: 方針か一覧の形が違う: {e!r}", file=sys.stderr)
+        return 2
     if args.markdown_out:
         Path(args.markdown_out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.markdown_out).write_text(license.to_markdown(findings), encoding="utf-8")

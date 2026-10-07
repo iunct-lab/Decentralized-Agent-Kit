@@ -21,7 +21,7 @@ _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]*$")
 class Policy:
     allow: frozenset[str]
     aliases: dict[str, str]
-    verified: dict[str, str]  # パッケージ → LICENSE ファイルで確かめた SPDX の式
+    verified: dict[tuple[str, str], str]  # (パッケージ, 版) → LICENSE ファイルで確かめた SPDX の式
     exceptions: tuple[dict, ...]
 
 
@@ -53,7 +53,7 @@ def load_policy(path: str | Path) -> Policy:
     return Policy(
         allow=frozenset(data.get("allow", [])),
         aliases=dict(data.get("aliases", {})),
-        verified={canonical_name(v["package"]): v["license"] for v in data.get("verified", [])},
+        verified={(canonical_name(v["package"]), v["version"]): v["license"] for v in data.get("verified", [])},
         exceptions=tuple(data.get("exceptions", [])),
     )
 
@@ -128,12 +128,13 @@ def _denied_ids(expr: str, allow: frozenset[str]) -> list[str]:
     return p.denied
 
 
-def normalize(raw: str | None, aliases: dict[str, str], known: frozenset[str] = frozenset()) -> str | None:
+def normalize(raw: str | None, aliases: dict[str, str], known: frozenset[str] | None = None) -> str | None:
     """表記を SPDX の式にそろえる。そろえられなければ None（不明）。
 
     空・`UNKNOWN`・ライセンスの本文（改行を含む）は None。`; ` は pip-licenses が分類子をつないだもので、
-    `AND` か `OR` か分からないので `AND` とみなす（緩い方に倒さない）。版の数字の無い ID（`Apache`, `BSD`）は
-    どのライセンスか決まらないので、`known`（許容の一覧）に無ければ None。
+    `AND` か `OR` か分からないので `AND` とみなす（緩い方に倒さない）。`known`（許容の一覧）を渡すと、版の数字の
+    無い ID（`Apache`, `BSD`）はどのライセンスか決まらないので、`known` に無ければ None（自由記述の
+    `License-Metadata` と分類子のため。`License-Expression` は PEP 639 で SPDX と決まっているので渡さない）。
     """
     s = (raw or "").strip()
     if not s or s == "UNKNOWN" or "\n" in s:
@@ -149,8 +150,10 @@ def normalize(raw: str | None, aliases: dict[str, str], known: frozenset[str] = 
         evaluate_expression(s, frozenset())
     except ValueError:
         return None
-    ids = [t for t in _tokens(s) if t not in _OPERATORS and t not in "()"]
-    if any(not re.search(r"\d", t) and t not in known for t in ids):
+    toks = _tokens(s)
+    ids = [t for i, t in enumerate(toks)
+           if t not in _OPERATORS and t not in "()" and (i == 0 or toks[i - 1] != "WITH")]
+    if known is not None and any(not re.search(r"\d", t) and t not in known for t in ids):
         return None
     return " ".join(_tokens(s)).replace("( ", "(").replace(" )", ")")
 
@@ -171,14 +174,19 @@ def check(component: str, packages: list[dict], policy: Policy, exclude: set[str
         if name in excluded:
             continue
         version = pkg.get("Version", "")
-        if name in policy.verified:
-            expr, source = policy.verified[name], "方針の verified（LICENSE ファイルで確認）"
-        else:
-            expr, source = next(
-                ((n, f) for f in FIELDS if (n := normalize(pkg.get(f), policy.aliases, policy.allow))), (None, "")
-            )
+        expr, source = next(
+            ((n, f) for f in FIELDS
+             if (n := normalize(pkg.get(f), policy.aliases, None if f == FIELDS[0] else policy.allow))),
+            (None, ""),
+        )
+        if expr is None and (name, version) in policy.verified:  # 欄で決まらないときだけ。版が変われば確かめ直す
+            expr, source = policy.verified[(name, version)], "方針の verified（LICENSE ファイルで確認）"
         exc = _exception_for(policy, component, name)
-        if exc:
+        if exc and expr is not None and expr != exc["license"] and not evaluate_expression(expr, policy.allow):
+            # 例外は認めたときのライセンスに対してだけ。表記がそろえられて別の許容外のライセンスになったら止める
+            findings.append(Finding(component, pkg["Name"], version, expr, "denied",
+                                    f"例外は {exc['license']} で認めたが、今は {expr}。{source}"))
+        elif exc:
             findings.append(Finding(component, pkg["Name"], version, exc["license"], "exception",
                                     f"{exc['reason']}（確認 {exc['reviewed']}）"))
         elif expr is None:
