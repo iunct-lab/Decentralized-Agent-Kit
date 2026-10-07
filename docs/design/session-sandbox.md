@@ -100,7 +100,9 @@ Docker を使わず、mcp-server のプロセスの中でセッションごと�
 
 - 2026-09-30: `SANDBOX_MODE=inproc` の mcp-server を uvicorn で起動し、`X-DAK-Session-Key` の異なる 2 つの MCP クライアント（`mcp` の `streamablehttp_client`）から呼んだ。ヘッダは `ctx.request_context.request.headers` で取れ、互いのファイルは見えず、`../` は拒まれ、TTL のあと作業ディレクトリは消えた（#284 の PR #444）。inproc の不可視と破棄は `mcp-server/tests/` の単体テストでも確かめる（#285）
 
+- 2026-10-07: `docker` モードを rootful の Docker（cgroup v1、cgroupfs ドライバ）で `docker-compose.yml` + `docker-compose.test.yml` + `docker-compose.sandbox.yml`（`SANDBOX_TTL_SECONDS=5`）で起動し、`DAK_SANDBOX_DOCKER_TESTS=1` で `tests/integration/test_sandbox_isolation.py` を回した（4 passed、#446）。2 セッションは `run_command` でもファイル系ツールでも互いのファイルが見えず、外への接続は失敗し、`docker inspect` の `NanoCpus` / `Memory` / `PidsLimit` / `NetworkMode` / `ReadonlyRootfs` / `CapDrop` は設定どおりで、コンテナの中の cgroup にも同じ値（CPU の quota 100000 / 100 ms、メモリ 536870912、PID 128）が入り、TTL のあとコンテナは消えた。フラグ無しでは 4 件とも skip する
+
 ## 未検証事項
 
-- `docker` モードの隔離（上のフラグが実際に効くこと、TTL の破棄）は動かしていない（#446、承認後）
-- rootless の Docker では、ソケットに触れて得られるのはそのデーモンを動かすユーザの権限で、上の「リスク」（ホストの root 相当）より小さい。一方で `--cpus` / `--pids-limit` は cgroup v2 の委譲が無いと効かない。どちらも実機で確かめていない
+- rootless の Docker では、ソケットに触れて得られるのはそのデーモンを動かすユーザの権限で、上の「リスク」（ホストの root 相当）より小さい。一方で `--cpus` / `--memory` / `--pids-limit` は cgroup v2 の委譲が無いと効かない。rootless では確かめていない（`test_resource_limits_are_applied` はコンテナの中の cgroup の値まで見るので、委譲が無ければ失敗して分かる）
+- cgroup v2 のホストでは確かめていない（テストは v1 と v2 の両方のファイルを読む）
