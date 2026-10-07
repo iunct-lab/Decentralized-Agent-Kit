@@ -80,9 +80,11 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
    - プレビューの先頭には `[truncated: original N chars / L lines; kept head H chars + tail T chars; artifact=<name>]`
      の見出しを付け、間の省略は `... [X chars / Y lines omitted] ...` と書く（退避できなかったときは
      `artifact=` を付けない）。モデルが切り詰めを全出力と取り違えないため。
-   - A2A peer が設定されている（`ENABLE_A2A_CONSUMER=true` で peer を読み込めた）ときだけ、`hint` に
-     「広い読み取りは peer への委譲を検討せよ」の 1 文を足す。peer が無いときと、全文を退避できなかったときは
-     再読取（`read_tool_output`）または呼び出しを絞る方法だけを示す。
+   - A2A peer が設定されていて（`ENABLE_A2A_CONSUMER=true` で peer を読み込めた）、その呼び出しで
+     `transfer_to_agent` が使える（`dak:tools` で絞っていない、または名指ししている）ときだけ、`hint` に
+     「広い読み取りは `transfer_to_agent` で peer への委譲を検討せよ。peer はこの出力も artifact も見えないので、
+     渡すのはデータではなく問い」の 1 文を足す。それ以外と、全文を退避できなかったときは再読取（`read_tool_output`）
+     または呼び出しを絞る方法だけを示す。
    - MCP 結果で `structuredContent` が本文の複製になっている場合は落とす（全 MCP 呼び出しで
      約半分の節約になる）。
 2. **ADK の token-threshold compaction**（`EventsCompactionConfig`）

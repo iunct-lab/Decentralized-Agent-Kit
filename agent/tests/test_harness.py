@@ -377,14 +377,35 @@ class TestToolOutputBudget:
         result = await plugin.after_tool_callback(
             tool=_tool(), tool_args={}, tool_context=_tool_context(), result="x" * 10_000)
         assert "read_tool_output(artifact_name='tool_output_read_file_call-1.txt'" in result["hint"]
-        assert "delegating" in result["hint"]
+        assert "transfer_to_agent" in result["hint"]
+
+    @pytest.mark.asyncio
+    async def test_hint_has_no_delegation_when_call_tools_leave_out_transfer(self):
+        """A `dak:tools` list without transfer_to_agent drops the peers for the call."""
+        plugin = ContextHarnessPlugin(HarnessSettings(context_window=8192), "test-model", peers_available=True)
+        ctx = _tool_context()
+        ctx.state["dak:tools"] = ["read_file"]
+        result = await plugin.after_tool_callback(tool=_tool(), tool_args={}, tool_context=ctx, result="x" * 10_000)
+        assert "transfer_to_agent" not in result["hint"]
+
+        ctx = _tool_context()
+        ctx.state["dak:tools"] = ["read_file", "transfer_to_agent"]
+        result = await plugin.after_tool_callback(tool=_tool(), tool_args={}, tool_context=ctx, result="x" * 10_000)
+        assert "transfer_to_agent" in result["hint"]
+
+    @pytest.mark.asyncio
+    async def test_hint_has_no_delegation_when_output_not_offloaded(self):
+        plugin = ContextHarnessPlugin(HarnessSettings(context_window=8192), "test-model", peers_available=True)
+        ctx = _tool_context(save_side_effect=ValueError("Artifact service is not initialized."))
+        result = await plugin.after_tool_callback(tool=_tool(), tool_args={}, tool_context=ctx, result="x" * 10_000)
+        assert "transfer_to_agent" not in result["hint"]
 
     @pytest.mark.asyncio
     async def test_hint_has_no_delegation_mention_when_no_peers(self):
         result = await self.plugin.after_tool_callback(
             tool=_tool(), tool_args={}, tool_context=_tool_context(), result="x" * 10_000)
         assert "read_tool_output(artifact_name='tool_output_read_file_call-1.txt'" in result["hint"]
-        assert "delegating" not in result["hint"]
+        assert "transfer_to_agent" not in result["hint"]
 
     @pytest.mark.asyncio
     async def test_without_artifact_service_still_truncates(self):

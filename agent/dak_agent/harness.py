@@ -1095,6 +1095,17 @@ class ContextHarnessPlugin(BasePlugin):
         """A tool call ran normally: the run of consecutive violations is over."""
         _guard_state(tool_context.state, invocation_id)["violation_streak"] = 0
 
+    def _can_delegate(self, tool_context) -> bool:
+        """A2A peers were loaded and this call offers transfer_to_agent: a
+        `dak:tools` list that leaves it out drops the peers for the call
+        (AdaptiveAgent)."""
+        if not self.peers_available:
+            return False
+        from . import call_config  # one-way: call_config never imports harness
+
+        call_tools = call_config.resolve_dak_settings(tool_context).get(call_config.STATE_CALL_TOOLS)
+        return call_tools is None or call_config.TRANSFER_TOOL in (call_config.call_tool_names(call_tools) or [])
+
     async def after_tool_callback(self, *, tool, tool_args, tool_context, result) -> Optional[dict]:
         tool_name = getattr(tool, "name", "tool")
         # A call answered by an earlier plugin (the PermissionPlugin denying it or
@@ -1182,10 +1193,11 @@ class ContextHarnessPlugin(BasePlugin):
                 f"(artifact_name='{artifact}', offset=..., pattern=...) to read the rest, "
                 "or narrow the tool call."
             )
-            if self.peers_available:
+            if self._can_delegate(tool_context):
                 replacement["hint"] += (
-                    " If an A2A peer agent is available for this task, consider delegating the broad read"
-                    " to it instead of paging through everything yourself.")
+                    " If a broad read is the job, consider handing it to an A2A peer agent with"
+                    " transfer_to_agent instead of paging through everything yourself; the peer cannot"
+                    " see this output or its artifact, so pass on the question, not the data.")
         else:
             replacement["hint"] = "Output was too large for the context window; narrow the tool call."
         return replacement
