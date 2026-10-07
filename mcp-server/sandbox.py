@@ -31,6 +31,21 @@ SANDBOX_PIDS_LIMIT = os.getenv("SANDBOX_PIDS_LIMIT", "128")
 DOCKER_WORKDIR = "/workspace"
 # Marks our containers so a restarted server can remove the ones a killed server left behind.
 DOCKER_LABEL = "dak.sandbox=1"
+DOCKER_SOCKET = "/var/run/docker.sock"
+
+
+def check_socket_exposure(mode: str, in_container: bool, socket_visible: bool) -> None:
+    """Refuse a container that sees the Docker socket outside SANDBOX_MODE=docker.
+
+    There, run_command runs unisolated next to a socket that drives the host's
+    daemon. Run directly on a host, the server already has the developer's own
+    rights, so a socket there adds nothing and is allowed.
+    """
+    if in_container and socket_visible and mode != "docker":
+        raise RuntimeError(
+            f"{DOCKER_SOCKET} is mounted but SANDBOX_MODE={mode}: run_command would reach the host's "
+            "Docker daemon unisolated. Use docker-compose.sandbox.yml (SANDBOX_MODE=docker) or drop the mount."
+        )
 
 
 class SandboxManager:

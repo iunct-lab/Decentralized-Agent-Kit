@@ -78,9 +78,10 @@ Docker を使わず、mcp-server のプロセスの中でセッションごと�
    - TTL の破棄: `lifespan` の起動時に `sweep()` し、`min(SANDBOX_TTL_SECONDS, 60)` 秒ごとに `reap_expired()` を呼ぶループを回し、停止時に `destroy_all()` する。呼び出しが来ないときも TTL 後に破棄される
    - 「最後の利用」は呼び出しの始まり（`ensure_session`）の時刻。それでも実行中の呼び出しのセッションは消えない: ツールの本体は `async def` の中で同期の `subprocess.run` / ファイル I/O をするので、その間 event loop は塞がり、`lifespan` の reaper は呼び出しの合間にしか走らない。ツールをスレッドや非同期の実行に変えるなら、実行中の呼び出しの数を持って reaper に飛ばさせる
    - `docker-compose.yml` は、利用者がソケットのマウントを承認するまで変えない（#284 の「着手前に確認」）。`mcp-server/Dockerfile` には `sandbox.py` のコピーと `docker` CLI を足す（CLI だけではホストに届かない。届くのはソケットをマウントしたときだけ）
-3. **ソケットを承認されたら**（`## 判断待ち` の A）
+3. **ソケットを承認されたら**（`## 判断待ち` の A。2026-09-30 に A と回答）
    - ソケットのマウントは基本の `docker-compose.yml` に入れず、opt-in の上書きファイル（`docker-compose.sandbox.yml`。`SANDBOX_MODE=docker` とソケットを一緒に設定する）に置く。基本の構成でソケットが見えることは無い
-   - mcp-server は、ソケット（`/var/run/docker.sock`）が見えるのに `SANDBOX_MODE` が `docker` でなければ起動を拒む（上の「リスク」: 隔離の外の `run_command` がホストの root 相当になる組み合わせを作らない）
+   - mcp-server は、ソケット（`/var/run/docker.sock`）が見えるのに `SANDBOX_MODE` が `docker` でなければ起動を拒む（上の「リスク」: 隔離の外の `run_command` がホストの root 相当になる組み合わせを作らない）。拒むのはコンテナの中（`/.dockerenv` がある）だけ: mcp-server をホストで直接動かす開発者の機械には普通ソケットがあり、そこは開発者自身の権限で動くので、ソケットが増やす権限は無い（`sandbox.check_socket_exposure`、#507）
+   - rootless の Docker はソケットの場所が違うので、マウント元は `DAK_DOCKER_SOCKET`（既定 `/var/run/docker.sock`）で変えられる。コンテナの中のパスは `/var/run/docker.sock` に固定する
    - `docker` モードのファイル系ツールを `docker exec` で動かす Task を切る
    - `docker` モードの実機検証（#446。#285 の手順 3〜5 を分けたもの）（2 セッションの不可視、ネットワーク遮断、`docker inspect` の `NanoCpus` / `Memory` / `PidsLimit`、TTL 後の `docker ps`）を行う
 4. **検証（#285 / #446）**: `inproc` の不可視と破棄は（#285） `cd mcp-server && uv run pytest -q` で確かめる（Docker 不要）。`docker` モードは Docker のデーモンに届く実機でだけ確かめられ、明示の環境変数（`DAK_SANDBOX_DOCKER_TESTS=1`）が無ければ `pytest.mark.skipif` で飛ばす（承認のあとにコードを直さずに回せるように。理由の文に「未承認なら回さない」と書く）。`tests/integration/` が通っても `docker` モードを確かめたことにはならない（`permission-boundary.md` の「#20 への制約」）

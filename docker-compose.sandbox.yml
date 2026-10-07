@@ -1,0 +1,24 @@
+# Opt-in: one disposable container per user session for the mcp-server tools
+# (SANDBOX_MODE=docker, docs/design/session-sandbox.md, PBI #20).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d --build
+#
+# WARNING: this mounts the host's Docker socket into mcp-server. The server, and
+# anyone who reaches its port 8001, can then drive the host's Docker daemon
+# (root on the host with rootful Docker; the daemon user's rights with rootless).
+# The base docker-compose.yml never mounts it, and mcp-server refuses to start
+# with the socket visible unless SANDBOX_MODE=docker.
+#
+# Rootless Docker keeps the socket elsewhere: set DAK_DOCKER_SOCKET, e.g.
+# DAK_DOCKER_SOCKET=$XDG_RUNTIME_DIR/docker.sock.
+services:
+  mcp-server:
+    environment:
+      - SANDBOX_MODE=docker
+      - SANDBOX_IMAGE=${SANDBOX_IMAGE:-python:3.12-slim}
+      - SANDBOX_TTL_SECONDS=${SANDBOX_TTL_SECONDS:-900}
+      - SANDBOX_CPUS=${SANDBOX_CPUS:-1}
+      - SANDBOX_MEMORY=${SANDBOX_MEMORY:-512m}
+      - SANDBOX_PIDS_LIMIT=${SANDBOX_PIDS_LIMIT:-128}
+    volumes:
+      - ${DAK_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock

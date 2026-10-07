@@ -109,8 +109,17 @@ share the session `default`). Design: `docs/design/session-sandbox.md`.
 
 `docker` mode needs a Docker daemon the server can reach. `docker-compose.yml`
 does not mount the host's Docker socket into this container: whoever controls
-that socket controls the host, so mounting it waits for an explicit decision
-(PBI #20).
+that socket controls the host. The opt-in override mounts it together with
+`SANDBOX_MODE=docker`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d --build
+# rootless Docker: DAK_DOCKER_SOCKET=$XDG_RUNTIME_DIR/docker.sock docker compose ...
+```
+
+In a container that sees `/var/run/docker.sock`, the server refuses to start
+unless `SANDBOX_MODE=docker` (`run_command` would otherwise reach the host's
+daemon unisolated).
 
 ## Dependencies
 
