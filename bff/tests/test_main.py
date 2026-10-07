@@ -116,14 +116,22 @@ def test_chat_renders_confirmation_as_escaped_approval_card():
     respx.get(f"{AGENT_URL}/apps/dak_agent/users/{USER_ID}/sessions/{SESSION_ID}").mock(
         return_value=Response(200, json={"id": SESSION_ID})
     )
-    events = [confirmation_event("fc-1", "write_file", {"content": "<script>x</script>"}), adk_text_event("after")]
+    args = {"content": "<script>x</script>"}
+    events = [
+        # The held call itself comes first, as a thought; its arguments are the model's too
+        {"content": {"parts": [{"functionCall": {"name": "write_file", "args": args}}]}},
+        {"content": {"parts": [{"functionResponse": {"name": "write_file", "response": {"error": "<script>y</script>"}}}]}},
+        adk_text_event("<script>z</script>"),
+        confirmation_event("fc-1", "write_file", args),
+        adk_text_event("after"),
+    ]
     respx.post(f"{AGENT_URL}/run").mock(return_value=Response(200, json=events))
 
     response = post_chat("write")
 
     assert 'hx-post="/chat/approvals/fc-1"' in response.text
     assert f'name="session_id" value="{SESSION_ID}"' in response.text
-    assert "<script>x</script>" not in response.text  # the model's arguments are escaped
+    assert "<script>" not in response.text  # nothing the model wrote runs next to the Approve button
     assert "after" not in response.text  # the turn ends at the confirmation
 
 
