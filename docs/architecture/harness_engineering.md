@@ -216,7 +216,7 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 
 - 作業ツリーの `AGENTS.md` / `CLAUDE.md` / `CONTEXT.md` を、mcp-server のツール `get_project_instructions(path=".")` が読む。ワークスペースのルート（`/projects`）から `path` へ降りながら、各ディレクトリで `AGENTS.md` → `CLAUDE.md` → `CONTEXT.md` の最初の 1 件を採り、`--- <dir>/<file> ---` の区切りでルート側から連結する（深い方が後ろ＝優先）。合計 `MCP_INSTRUCTIONS_MAX_BYTES`（既定 32768 バイト）で切り、`[truncated: …]` を付ける。
 - 信頼: `MCP_TRUSTED_WORKSPACE_PREFIXES`（`/projects` からの相対、`:` 区切り、既定 `.` = マウント全体）の外のパス、ワークスペースの外（`..`、絶対パス、外へ向くシンボリックリンク）は何も開かず `[not read: …]` を返す。プレフィックスの外にある祖先ディレクトリの指示ファイルも読まない。読むのはいつもサーバの `/projects` で、`SANDBOX_MODE` のセッションのワークスペース（モデルが書いたファイル）は読まない。
-- agent は毎 invocation の始め（`before_agent_callback` の `_restore_session_config`、指示を組む前）に既定の MCP サーバのこのツールを 1 回だけ自分で呼び（モデルには選ばせない）、結果を state の `dak_project_instructions` に置く。`[not read` で始まる結果や空なら消し、呼び出しの失敗では前の値を残す（invocation は落とさない）。ツールの無い古い mcp-server や、既定の MCP サーバを持たない agent では何もしない。
+- agent は毎 invocation の始め（`before_agent_callback` の `_restore_session_config`、指示を組む前）に既定の MCP サーバのこのツールを 1 回だけ自分で呼び（モデルには選ばせない）、結果を state の `dak_project_instructions` に置く。`[not read` で始まる結果や空なら `None` にして消す（ADK の `State` に削除は無い）。呼び出しの失敗やエラーの結果（`isError`、`Error reading project instructions`）では前の値を残す（invocation は落とさない）。値が変わったときだけ書くので、同じ指示で毎ターン state の差分は増えない。ツールの無い古い mcp-server、既定の MCP サーバを持たない agent、拒否される呼び出し（許されない `dak:model` など）、`dak:instruction` を渡した呼び出しでは呼ばない。コストは invocation ごとに MCP の往復 2 回（ツール一覧と呼び出し）。
 - 指示には計画の前に `# Project Instructions` として入る。ファイルの文なので `{var}` 置換を通さない。長さは計画と同じ上限（`HarnessSettings.plan_chars`）で切り、切ったら `[truncated — call get_project_instructions for the full text]` を付ける。`dak:instruction` を渡した呼び出しには入れない。
 - 検証: `mcp-server/tests/test_project_instructions.py`、`test_adaptive_agent.py -k project_instructions`。
 

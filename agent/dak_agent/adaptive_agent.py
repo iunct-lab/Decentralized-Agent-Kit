@@ -330,8 +330,10 @@ class AdaptiveAgent(LlmAgent):
         """Read the workspace's instruction files from the default MCP server
         once per invocation (the agent calls the tool itself, the model does
         not choose to). The server answers "[not read: …]" for an untrusted
-        workspace: then nothing is kept. A failure keeps the last text and
-        never fails the invocation."""
+        workspace, and nothing for none: then the kept text is cleared (set to
+        None: ADK's State has no delete). A failure or an error result keeps
+        the last text and never fails the invocation. Only a changed text is
+        written, so an unchanged one adds no state delta to every turn."""
         if not self._has_default_mcp_toolset:
             return
         try:
@@ -340,10 +342,15 @@ class AdaptiveAgent(LlmAgent):
             tool = next((t for t in tools if getattr(t, "name", None) == "get_project_instructions"), None)
             if tool is None:  # an older mcp-server
                 return
-            text = _result_text(await tool.run_async(args={"path": "."}, tool_context=callback_context))
+            result = await tool.run_async(args={"path": "."}, tool_context=callback_context)
+            text = _result_text(result)
+            if (isinstance(result, Mapping) and result.get("isError")) or (
+                    text or "").startswith("Error reading project instructions"):
+                logger.warning(f"Could not read the project instructions: {text}")
+                return
             if not text or text.startswith("[not read"):
-                callback_context.state.pop(STATE_PROJECT_INSTRUCTIONS, None)
-            else:
+                text = None
+            if callback_context.state.get(STATE_PROJECT_INSTRUCTIONS) != text:
                 callback_context.state[STATE_PROJECT_INSTRUCTIONS] = text
         except Exception as e:
             logger.warning(f"Could not read the project instructions: {e}")
@@ -569,8 +576,11 @@ class AdaptiveAgent(LlmAgent):
             callback_context.state[call_config.STATE_TOOLS_ERROR] = None  # stale: not about this call
         try:
             self._capture_original_request(callback_context)
-            # Before the instruction is built, so this invocation already has them.
-            await self._inject_project_instructions(callback_context)
+            # Before the instruction is built, so this invocation already has
+            # them. Not for a call that will be refused (no connections), nor
+            # one whose `dak:instruction` replaces the instruction.
+            if not refused and not call_settings.get(call_config.STATE_CALL_INSTRUCTION):
+                await self._inject_project_instructions(callback_context)
             error = self._apply_session_config(callback_context)
         except Exception as e:
             logger.error(f"CRITICAL ERROR restoring session config: {e}", exc_info=True)
