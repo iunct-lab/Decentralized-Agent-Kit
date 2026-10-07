@@ -314,7 +314,7 @@ MRTR（MCP 2026-07-28、SEP-2322）との対応: 保留の 1 件 ↔ `InputRequi
 P3 の「プロンプトキャッシュ」について決めたこと（既定で有効にするかは `docs/design/prompt_cache_evaluation.md`、#94。先頭の安定は #105）:
 
 - **圧縮の要約リクエストにはキャッシュの書き込みを求めない**（#266）: 要約器（`BudgetedEventSummarizer`）が送るのは毎回内容が変わる一回限りのプロンプトで、後のリクエストと先頭を共有しない。書き込んでも再利用されず、書き込みの割増しだけが乗る。今の要約器は自分で `LlmRequest` を組むので、App がキャッシュを有効にしても `cache_config` は `None` のままで、キャッシュの印（`cache_control` など）は付かない（`agent/tests/test_context_cache_interaction.py` の `test_cache_config_survives_compaction` が固定）。印に依らずプロバイダが自動でキャッシュするもの（OpenAI の自動キャッシュ、Gemini の暗黙のキャッシュ。`docs/design/prompt_cache_evaluation.md` の 5 章）はこの方針の外で、DAK からは抑えていない。プロバイダ側で明示的に抑える必要が出たら #94 で扱う
-- **モード切替はリクエストの先頭を必ず変える**（#264）: `switch_mode` は Meta-Agent の出力で system 指示を丸ごと作り直し、ツール集合も選び直す（列挙してマスクする方式ではない）。fake-LLM で切替の前後に届いたリクエストを比べると、system 指示の共通の先頭は 0 文字で、ツールの集合も変わる（`tests/integration/test_mode_cache_prefix.py` が固定。ツールの集合が変わらなくなったらこのテストが落ちる）。先頭を安定させるか、モード切替を残すかは #92 で決める
+- **モード切替の前後で、キャッシュが効くために変えたくない先頭と、変わってよい末尾**（#264）: プレフィックスキャッシュは先頭から一致する所までしか効かない。変えたくないのは先頭に来る **system 指示とツール定義**（OpenAI 形式の本文では messages[0] の system と `tools`）と、**履歴の古い部分**。変わってよいのは**末尾**（最新のユーザー発話、ツールの結果、差分で注入する情報）だけ。今の `switch_mode` はこの境界を守らない: Meta-Agent の出力で system 指示を丸ごと作り直し、ツール集合も選び直す（列挙してマスクする方式ではない）。`tests/integration/test_mode_cache_prefix.py` の台本（ファイルを読むモードへの切替）では、system 指示の共通の先頭は 0 文字で、ツールは `read_file` が加わった。テストはツール集合が変わることを固定しており、変わらなくなったら落ちる。Meta-Agent が前と同じ指示とツールを選べば先頭は変わらないが、指示は毎回モデルが生成するので一致は当てにできない。計画の書き換えも system 指示を変える（`docs/design/prompt_cache_evaluation.md` の 3 章）。先頭を安定させるか、モード切替を残すかは #92 で決める
 
 ## 5. 2 度目の発端: 圧縮の要約リクエスト自身が窓を超えた（2026-09-14）
 
