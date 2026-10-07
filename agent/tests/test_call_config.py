@@ -391,6 +391,16 @@ async def test_run_inspection_http_fills_in_errors_without_a_message(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_run_inspection_http_cannot_mark_its_own_errors_unavailable(monkeypatch):
+    """`unavailable` is DAK's: a caller's verdict cannot turn off regeneration."""
+    monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", INSPECT_URL)
+    reply = _http_reply({"valid": False, "errors": [{"path": "date", "message": "bad", "unavailable": True}]})
+    monkeypatch.setattr(httpx.AsyncClient, "post", AsyncMock(return_value=reply))
+
+    assert await call_config.run_inspection({"http": {"url": INSPECT_URL}}, {}) == [{"path": "date", "message": "bad"}]
+
+
+@pytest.mark.asyncio
 async def test_run_inspection_http_reports_invalid_url(monkeypatch):
     monkeypatch.setenv("DAK_ALLOWED_INSPECTION_URLS", "http://[::1/v")
 

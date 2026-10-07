@@ -280,7 +280,9 @@ def _verdict_errors(payload: Any, source: str) -> List[Dict[str, Any]]:
         return []
     errors = payload.get("errors") if isinstance(payload, Mapping) else None
     if isinstance(errors, list) and errors:
-        return [e if isinstance(e, Mapping) and isinstance(e.get("message"), str)
+        # `unavailable` is DAK's own mark (`_unavailable`): not the caller's to set.
+        return [{k: v for k, v in e.items() if k != "unavailable"}
+                if isinstance(e, Mapping) and isinstance(e.get("message"), str)
                 else {"path": str(e.get("path", "")) if isinstance(e, Mapping) else "",
                       "message": (json.dumps(e, ensure_ascii=False) if isinstance(e, Mapping) else str(e))[:200]}
                 for e in errors]
