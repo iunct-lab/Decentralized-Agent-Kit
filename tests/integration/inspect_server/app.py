@@ -5,7 +5,7 @@ from collections import deque
 from typing import Any, Dict, List
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
 
 app = FastAPI(title="Inspect Server")
@@ -42,8 +42,8 @@ def get_requests():
 
 
 @app.post("/validate")
-def validate(body: Any = None):
-    _requests_log.append(body)
+async def validate(request: Request):
+    _requests_log.append(await request.json())
     return _verdicts.popleft() if _verdicts else {"valid": True, "errors": []}
 
 
