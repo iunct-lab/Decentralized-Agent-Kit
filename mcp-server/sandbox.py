@@ -119,14 +119,20 @@ class SandboxManager:
         with self._lock:
             self._dispose(session_key)
 
-    def exec_in_session(self, session_key: str, command: list[str]) -> subprocess.CompletedProcess:
-        """Run an argv in the session's environment (docker: inside its container)."""
+    def exec_in_session(self, session_key: str, command: list[str], input: str | None = None,
+                        text: bool = True) -> subprocess.CompletedProcess:
+        """Run an argv in the session's environment (docker: inside its container).
+
+        `input` goes to the command's stdin; `text=False` returns stdout as bytes (a tar stream).
+        """
         entry = self.ensure_session(session_key)
         if entry["mode"] == "docker":
             # `timeout` inside the container: killing the docker CLI alone leaves the process running.
-            command = ["docker", "exec", "-w", DOCKER_WORKDIR, entry["container_name"], "timeout", "60", *command]
+            stdin = ["-i"] if input is not None else []
+            command = ["docker", "exec", *stdin, "-w", DOCKER_WORKDIR, entry["container_name"],
+                       "timeout", "60", *command]
         return self._run(command, cwd=entry["workdir"] if entry["mode"] == "inproc" else None,
-                         capture_output=True, text=True, timeout=65)
+                         input=input, capture_output=True, text=text, timeout=65)
 
     def reap_expired(self, now: float | None = None) -> list[str]:
         """Destroy the sessions idle for longer than the TTL; return their keys."""

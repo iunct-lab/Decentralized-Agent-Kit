@@ -1,16 +1,19 @@
 import asyncio
 import contextlib
+import io
 import os
+import posixpath
 import re
 import subprocess
 import glob
+import tarfile
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.routing import Mount
 import uvicorn
 
-from sandbox import DOCKER_SOCKET, SANDBOX_TTL_SECONDS, SandboxManager, check_socket_exposure
+from sandbox import DOCKER_SOCKET, DOCKER_WORKDIR, SANDBOX_TTL_SECONDS, SandboxManager, check_socket_exposure
 
 # DNS rebinding protection: since mcp 1.23 FastMCP auto-enables it for its
 # default host (127.0.0.1) and then accepts only localhost Host headers, which
@@ -90,9 +93,9 @@ def _session(ctx: Context | None) -> tuple[str, dict]:
 def _session_path(ctx: Context | None, path: str) -> str:
     """Where a file tool's path points for this session; raises ValueError outside it."""
     if _sandbox.mode == "docker":
-        # The workspace lives only inside the container; never fall back to this server's
-        # files, and do not start a container for a call that is refused anyway.
-        raise ValueError("file tools are not available in SANDBOX_MODE=docker yet (docs/design/session-sandbox.md)")
+        # The workspace lives only inside the container: docker goes through _docker_*,
+        # never this server's files.
+        raise ValueError("SANDBOX_MODE=docker has no workspace on this server")
     _, entry = _session(ctx)
     if entry["workdir"] is None:
         return path
@@ -101,6 +104,68 @@ def _session_path(ctx: Context | None, path: str) -> str:
     if resolved != root and not resolved.startswith(root + os.sep):
         raise ValueError(f"{path} is outside the session workspace")
     return resolved
+
+
+def _docker_path(path: str) -> str:
+    """A file tool's path inside the session container, relative to its /workspace; raises ValueError outside it."""
+    rel = posixpath.normpath(path)
+    if posixpath.isabs(rel) or rel == ".." or rel.startswith("../"):
+        raise ValueError(f"{path} is outside the session workspace")
+    return rel
+
+
+def _docker_exec(ctx: Context | None, command: list[str], input: str | None = None, text: bool = True):
+    """Run a command in the caller's session container; its stdout, or OSError with its stderr."""
+    key, _ = _session(ctx)
+    result = _sandbox.exec_in_session(key, command, input=input, text=text)
+    if result.returncode != 0:
+        err = result.stderr if text else result.stderr.decode("utf-8", errors="replace")
+        raise OSError(err.strip() or f"exit code {result.returncode}")
+    return result.stdout
+
+
+# The file tools' I/O. In docker mode it runs in the session container with tools
+# every image has (cat, sh, ls, tar), not Python: SANDBOX_IMAGE can be anything.
+def _read_text(ctx: Context | None, path: str) -> str:
+    if _sandbox.mode == "docker":
+        return _docker_exec(ctx, ["cat", "--", _docker_path(path)])
+    with open(_session_path(ctx, path), "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _write_text(ctx: Context | None, path: str, content: str) -> None:
+    if _sandbox.mode == "docker":
+        script = 'mkdir -p -- "$(dirname -- "$1")" && cat > "$1"'
+        _docker_exec(ctx, ["sh", "-c", script, "sh", _docker_path(path)], input=content)
+        return
+    target = _session_path(ctx, path)
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def _list_dir(ctx: Context | None, path: str) -> list[str]:
+    if _sandbox.mode == "docker":
+        # The trailing / makes ls fail on a file, as os.listdir does.
+        return _docker_exec(ctx, ["ls", "-A1", "--", _docker_path(path) + "/"]).splitlines()
+    return os.listdir(_session_path(ctx, path))
+
+
+def _docker_tree(ctx: Context | None, path: str) -> tuple[str, list[tuple[str, bytes]]]:
+    """The regular files under `path` in the session container, read with one tar.
+
+    Returns the resolved base and (path, content) pairs, both under /workspace, for _shown.
+    """
+    rel = _docker_path(path)
+    data = _docker_exec(ctx, ["tar", "-cf", "-", "--", rel], text=False)
+    files = []
+    with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+        for member in tar:
+            if member.isfile():
+                name = posixpath.join(DOCKER_WORKDIR, posixpath.normpath(member.name))
+                files.append((name, tar.extractfile(member).read()))
+    return posixpath.normpath(posixpath.join(DOCKER_WORKDIR, rel)), files
 
 
 def _shown(path: str, base: str, found: str) -> str:
@@ -129,8 +194,7 @@ async def read_file(path: str, offset: int = 0, limit: int = 0, ctx: Context | N
         limit: Maximum number of lines to return (default: 0 = to the end of the file).
     """
     try:
-        with open(_session_path(ctx, path), "r", encoding="utf-8") as f:
-            content = f.read()
+        content = _read_text(ctx, path)
     except Exception as e:
         return f"Error reading file: {e}"
     lines = content.splitlines(keepends=True)
@@ -153,11 +217,7 @@ async def write_file(path: str, content: str, ctx: Context | None = None) -> str
         content: The content to write.
     """
     try:
-        target = _session_path(ctx, path)
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        with open(target, "w", encoding="utf-8") as f:
-            f.write(content)
+        _write_text(ctx, path, content)
         return f"Successfully wrote to {path}"
     except Exception as e:
         return f"Error writing file: {e}"
@@ -170,7 +230,7 @@ async def list_files(path: str = ".", ctx: Context | None = None) -> str:
         path: The directory path to list (default: current directory).
     """
     try:
-        items = sorted(os.listdir(_session_path(ctx, path)))
+        items = sorted(_list_dir(ctx, path))
         return _cap_entries(items, "List a subdirectory or use search_files with a pattern.")
     except Exception as e:
         return f"Error listing files: {e}"
@@ -217,6 +277,11 @@ async def search_files(pattern: str, path: str = ".", ctx: Context | None = None
         path: The root path to search in.
     """
     try:
+        if _sandbox.mode == "docker":
+            base, tree = _docker_tree(ctx, path)
+            matches = [_shown(path, base, name) for name, _ in tree
+                       if glob.fnmatch.fnmatch(posixpath.basename(name), pattern)]
+            return _cap_entries(matches, "Use a more specific pattern or path.")
         base = _session_path(ctx, path)
         matches = []
         for root, _, files in os.walk(base):
@@ -243,27 +308,40 @@ async def grep(pattern: str, path: str = ".", glob_pattern: str = "*", ignore_ca
         regex = re.compile(pattern, flags)
         matches = []
         hint = "Narrow the search (a more specific pattern, path or glob_pattern)."
-        base = _session_path(ctx, path)
-        if os.path.isfile(base):
-            files = [base]
+
+        def scan(shown: str, lines) -> bool:
+            """Collect the matching lines; True once the cap is reached."""
+            for line_no, line in enumerate(lines, start=1):
+                if regex.search(line):
+                    matches.append(f"{shown}:{line_no}: {line.rstrip()}")
+                    if len(matches) >= MAX_GREP_MATCHES:
+                        return True
+            return False
+
+        if _sandbox.mode == "docker":
+            base, tree = _docker_tree(ctx, path)
+            for name, content in sorted(tree):
+                if name != base and not glob.fnmatch.fnmatch(posixpath.basename(name), glob_pattern):
+                    continue
+                if scan(_shown(path, base, name), content.decode("utf-8", errors="replace").splitlines()):
+                    break
         else:
-            files = []
-            for root, _, file_names in os.walk(base):
-                for name in file_names:
-                    if glob.fnmatch.fnmatch(name, glob_pattern):
-                        files.append(os.path.join(root, name))
-        for file in sorted(files):
-            try:
-                with open(file, "r", encoding="utf-8", errors="replace") as f:
-                    for line_no, line in enumerate(f, start=1):
-                        if regex.search(line):
-                            matches.append(f"{_shown(path, base, file)}:{line_no}: {line.rstrip()}")
-                            if len(matches) >= MAX_GREP_MATCHES:
-                                break
-            except Exception:
-                continue
-            if len(matches) >= MAX_GREP_MATCHES:
-                break
+            base = _session_path(ctx, path)
+            if os.path.isfile(base):
+                files = [base]
+            else:
+                files = []
+                for root, _, file_names in os.walk(base):
+                    for name in file_names:
+                        if glob.fnmatch.fnmatch(name, glob_pattern):
+                            files.append(os.path.join(root, name))
+            for file in sorted(files):
+                try:
+                    with open(file, "r", encoding="utf-8", errors="replace") as f:
+                        if scan(_shown(path, base, file), f):
+                            break
+                except Exception:
+                    continue
         if not matches:
             return "No matches found."
         if len(matches) >= MAX_GREP_MATCHES:
@@ -288,9 +366,7 @@ async def edit_file(path: str, old_string: str, new_string: str, replace_all: bo
                      occurrence must be unique or the edit is refused.
     """
     try:
-        target = _session_path(ctx, path)
-        with open(target, "r", encoding="utf-8") as f:
-            content = f.read()
+        content = _read_text(ctx, path)
     except Exception as e:
         return f"Error reading file: {e}"
     count = content.count(old_string)
@@ -303,8 +379,7 @@ async def edit_file(path: str, old_string: str, new_string: str, replace_all: bo
         )
     new_content = content.replace(old_string, new_string)
     try:
-        with open(target, "w", encoding="utf-8") as f:
-            f.write(new_content)
+        _write_text(ctx, path, new_content)
     except Exception as e:
         return f"Error writing file: {e}"
     if replace_all:

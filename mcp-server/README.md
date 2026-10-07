@@ -100,7 +100,7 @@ share the session `default`). Design: `docs/design/session-sandbox.md`.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SANDBOX_MODE` | `off` | `off`: no isolation, every tool uses the shared `/projects` as before. `inproc`: a temporary directory per session; file-tool paths outside it are refused. Not a security boundary: `run_command` starts there but can reach anything. `docker`: a disposable container per session; `run_command` runs inside it (file tools are not available in this mode yet). An unknown value stops the server. |
+| `SANDBOX_MODE` | `off` | `off`: no isolation, every tool uses the shared `/projects` as before. `inproc`: a temporary directory per session; file-tool paths outside it are refused. Not a security boundary: `run_command` starts there but can reach anything. `docker`: a disposable container per session; `run_command` and the file tools run inside it (`docker exec`). An unknown value stops the server. |
 | `SANDBOX_IMAGE` | `python:3.12-slim` | Image of the `docker` mode containers |
 | `SANDBOX_TTL_SECONDS` | `900` | A session unused this long is destroyed; all are destroyed when the server stops |
 | `SANDBOX_CPUS` | `1` | `docker run --cpus` |
