@@ -328,17 +328,20 @@ async def test_servers_are_probed_concurrently(monkeypatch):
 async def test_a_call_that_will_be_refused_does_not_probe(monkeypatch):
     from google.adk.sessions.state import State
 
-    get_tools = AsyncMock(return_value=[])
-    agent = _probe_agent(monkeypatch, get_tools)
-    context = MagicMock()
-    context.state = State(value={}, delta={})
-    context._invocation_context.agent = agent.model_copy()
-    with patch("dak_agent.call_config.resolve_dak_settings",
-               return_value={"dak:model": "not-allowed", "dak:tools": {"mcp_servers": [{"url": CALLER_MCP}]}}):
-        content = await agent._restore_session_config(context)
+    monkeypatch.delenv("DAK_ALLOWED_INSPECTION_URLS", raising=False)
+    for refused, error in (({"dak:model": "not-allowed"}, "model_not_allowed"),
+                           ({"dak:inspection": {"http": {"url": "http://caller/v"}}}, "inspection_url_not_allowed")):
+        get_tools = AsyncMock(return_value=[])
+        agent = _probe_agent(monkeypatch, get_tools)
+        context = MagicMock()
+        context.state = State(value={}, delta={})
+        context._invocation_context.agent = agent.model_copy()
+        with patch("dak_agent.call_config.resolve_dak_settings",
+                   return_value={**refused, "dak:tools": {"mcp_servers": [{"url": CALLER_MCP}]}}):
+            content = await agent._restore_session_config(context)
 
-    assert "model_not_allowed" in content.parts[0].text
-    get_tools.assert_not_called()
+        assert error in content.parts[0].text
+        get_tools.assert_not_called()
 
 
 def test_a_malformed_tools_error_in_state_is_ignored(monkeypatch):
