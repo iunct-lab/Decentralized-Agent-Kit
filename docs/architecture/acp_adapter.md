@@ -36,7 +36,7 @@ PBI #314 / Task #315。Zed や JetBrains など Agent Client Protocol（ACP）�
 
 - 会話は ADK の `POST /run_sse`（`"streaming": false`）。`dak-cli` の `run_task` が使う `POST /run` と同じ本文で、イベントを 1 つずつ SSE の `data:` 行として返す。`/run` は全部のイベントをターンの終わりにまとめて返すので、エディタに進み具合（文の断片・ツール呼び出し）を順に見せられない
 - セッションは ADK の `POST /apps/dak_agent/users/{user}/sessions`（`AgentClient._ensure_session` と同じ）
-- 承認の答えは `POST /approvals/{id}/reply`（`agent/dak_agent/server.py`）。`docs/design/approval-queue.md` の 3 のとおり、`/run` に `adk_request_confirmation` の functionResponse を直接送る答え方は、同じ承認への二重の答え（ツールが 2 回動く）を止められないので、CLI も #405 で `/approvals` に移った。ACP の窓口も同じ経路で答える。#317 の手順 1 の「`run_task` の `tool_approval` の分岐と同じ形の functionResponse を `stream_events` で送る」は、この分岐が #405 で無くなっているため、`AgentClient.reply_approval`（`mode` は `once` / `reject`）に置き換える
+- 承認の答えは `POST /approvals/{id}/reply`（`agent/dak_agent/server.py`）。`docs/design/approval-queue.md` の 3 のとおり、`/run` に `adk_request_confirmation` の functionResponse を直接送る答え方は、同じ承認への二重の答え（ツールが 2 回動く）を止められないので、CLI も #405 で `/approvals` に移った。ACP の窓口も同じ経路で答える。#317 の手順 1 の「`run_task` の `tool_approval` の分岐と同じ形の functionResponse を `stream_events` で送る」は、この分岐が #405 で無くなっているため、`AgentClient.reply_approval`（`mode` は `once` / `reject`）に置き換える。`reply_approval` は次の確認があると events の配列ではなく `{"status": "needs_approval", …, "response": <events>}` を返すので、その `response` を events として読む（`cli/src/client.py` の `_needs_approval`）
 - A2A を使わない理由: DAK の承認は ADK のセッションのイベント（`adk_request_confirmation`）と `/approvals` の上にあり（#100・#101）、A2A の窓口からは答えられない。要望 #117 の「ACP = 人が使う IDE 面、A2A = エージェント間」のとおり、A2A はエージェント間の窓口として分けたままにする
 
 ## 3. 対応表
@@ -52,7 +52,7 @@ PBI #314 / Task #315。Zed や JetBrains など Agent Client Protocol（ACP）�
 | イベントの text の part（author がエージェント、`partial` でない） | A→C | `session/update` の `agent_message_chunk`（`content` は text の block）。`content` の無いイベント（ターンの最初の `stateDelta` だけのものなど）は何も送らない | §5 (a) |
 | イベントの text の part で `thought: true` | A→C | `agent_thought_chunk` | ADK の `Part.thought` |
 | `functionCall`（`adk_request_confirmation` 以外） | A→C | `tool_call`: `toolCallId` = functionCall の `id`、`title` = ツール名、`kind` は `other`、`status: in_progress`、`rawInput` = `args` | §5 (b) |
-| `functionResponse`（同じ `id`） | A→C | `tool_call_update`: `toolCallId` = functionResponse の `id`、`status` は `completed`（`response` に `error` があれば `failed`）、`rawOutput` = `response`、`content` に結果の先頭（文字。MCP のツールは `response.content[].text`、組み込みのツールは `response.result`）。ただし、同じイベントの `actions.requestedToolConfirmations` にその `id` があるもの（確認待ちの `{"error": "This tool call requires confirmation, …"}`）は `failed` にせず `pending` のままにする | §5 (b)(c)、仕様の Tool Calls（「All fields except toolCallId are optional in updates」） |
+| `functionResponse`（同じ `id`） | A→C | `tool_call_update`: `toolCallId` = functionResponse の `id`、`status` は `completed`。`response` に `error` か `observation`（`denied_by_policy`・`denied_by_user`・`unknown_tool` など、実行されなかった印）があるか、MCP の `isError` が `true` なら `failed`、`rawOutput` = `response`、`content` に結果の先頭（文字。MCP のツールは `response.content[].text`、組み込みのツールは `response.result`）。ただし、同じイベントの `actions.requestedToolConfirmations` にその `id` があるもの（確認待ちの `{"error": "This tool call requires confirmation, …"}`）は `failed` にせず `pending` のままにする | §5 (b)(c)、仕様の Tool Calls（「All fields except toolCallId are optional in updates」） |
 | `functionCall` が `adk_request_confirmation` | A→C | `tool_call` は出さない（元の呼び出しの `tool_call` はその前の `functionCall` で出ている）。確認の `id` と元の呼び出しの `id`（`args.originalFunctionCall.id`）を覚えておき、SSE が閉じたら（§3.3）`GET /approvals` で保留を確かめ、`session/request_permission` を送る（`toolCall` は元の呼び出しの `toolCallId` に `status: pending`、選択肢は §3.1） | §5 (c)、`docs/design/approval-queue.md` の 1 |
 | `session/request_permission` の答え `selected` | C→A | 選ばれた `optionId` を `POST /approvals/{id}/reply` の `mode` にする（`allow` → `once`、`reject` → `reject`、理由は空）。応答の events（`/run` と同じ形の配列）を同じ変換で `session/update` にする。元のツールの `functionResponse`（許可なら実行結果、拒否なら `{"observation": "denied_by_user", …}`）で `tool_call_update` が `completed`（拒否なら `failed`）になる。応答にまた確認があれば §3.3 を繰り返す | §5 (c)、`agent/dak_agent/server.py` の `reply` |
 | `session/request_permission` の答え `cancelled` | C→A | 答えない（§3.2）。ターンは `cancelled` で終える | 仕様の Prompt Turn（「Client … MUST respond to all pending session/request_permission requests with the cancelled outcome」） |
@@ -87,6 +87,9 @@ DAK の側では、取り消しが来る時点で 2 通りある:
 2. SSE が閉じたら、このターンで確認を見たときだけ `GET /approvals` を読む。保留の承認（`kind: "approval"`）の最初の 1 件について `session/request_permission` を送る
 3. 答えを `POST /approvals/{id}/reply` に送る。同じ時点で保留の他の承認は、reply が `reject`（理由 `approvals.UNANSWERED_REASON`）で一緒に片づける（#406）。その元の呼び出しは `tool_call_update` の `failed` になり、必要ならモデルがもう一度呼ぶ（そのときまた確認が出る）。エディタに複数の承認を一度に並べないのはこのため
 4. reply の応答を変換して送り、その中にまた確認があれば 2 に戻る。無ければ `end_turn`
+5. reply が断られたとき（`AgentClient.reply_approval` の `ApprovalError`）:
+   - `409`（期限切れ。既定 900 秒、`DAK_APPROVAL_TIMEOUT_SECONDS`）: agent は答えの代わりに `timed_out` を流してターンを最後まで進めている（`approval-queue.md` の 4）。応答に events は無いので、元の呼び出しを `tool_call_update` の `failed` にし、「承認の期限が切れ、エージェントは先へ進んだ」旨の文の断片を送って `end_turn`。その続きでモデルが返した文はエディタに届かない（BFF や `GET /apps/…/sessions/…` では見える）。答え直さない
+   - `404`（もう保留に無い。別のクライアントが先に答えた、など）: 同じく `failed` と、その旨の文の断片を送って `end_turn`
 
 ## 4. 使わない機能と理由
 
