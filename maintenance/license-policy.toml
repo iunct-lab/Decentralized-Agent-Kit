@@ -33,7 +33,7 @@ allow = [
 "The Unlicense (Unlicense)" = "Unlicense"
 
 # 表記だけでは決められず、LICENSE ファイル（または配布元）を読んで確かめた SPDX の式。
-# 例外ではない（許容の一覧で判定する）。記録した版で、License-Expression（PEP 639）が無いときだけ使う。
+# 例外ではない（許容の一覧で判定する）。記録した版で、License-Expression（PEP 639）が無く、自由記述の欄が決まらないか許容のときだけ使う。
 # 版が変われば確かめ直す（表記で決まらなければ CI が「不明」で止まる）
 [[verified]]
 package = "fastuuid"

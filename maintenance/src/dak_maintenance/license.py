@@ -211,16 +211,16 @@ def _judge(component: str, pkg: dict, policy: Policy) -> Finding:
     if pkg.get("Error"):  # PyPI に問い合わせられなかった行は、記録や例外より先に不明で止める
         return Finding(component, pkg["Name"], version, "不明", "unknown",
                        f"PyPI に問い合わせられない: {pkg['Error']}"[:200])
-    declared = normalize(pkg.get(FIELDS[0]), policy.aliases)
-    if declared is None and (name, version) in policy.verified:
-        # 記録した版では、自由記述の欄より LICENSE ファイルで確かめた式を採る。PEP 639 の式があればそちら
+    expr, source = next(
+        ((n, f) for f in FIELDS
+         if (n := normalize(pkg.get(f), policy.aliases, None if f == FIELDS[0] else policy.allow))),
+        (None, ""),
+    )
+    if (name, version) in policy.verified and source != FIELDS[0] and (
+            expr is None or evaluate_expression(expr, policy.allow)):
+        # 記録した版では、自由記述の欄が決まらないか許容のときだけ、LICENSE ファイルで確かめた式を採る
+        # （分類子が PSF だけの pywin32 の BSD の部分を落とさない）。PEP 639 の式と、欄が言う許容外は隠さない
         expr, source = policy.verified[(name, version)], "方針の verified（LICENSE ファイルで確認）"
-    else:
-        expr, source = next(
-            ((n, f) for f in FIELDS
-             if (n := normalize(pkg.get(f), policy.aliases, None if f == FIELDS[0] else policy.allow))),
-            (None, ""),
-        )
     exc = _exception_for(policy, component, name)
     if exc and expr is not None and expr != exc["license"] and not evaluate_expression(expr, policy.allow):
         # 例外は認めたときのライセンスに対してだけ。表記がそろえられて別の許容外のライセンスになったら止める

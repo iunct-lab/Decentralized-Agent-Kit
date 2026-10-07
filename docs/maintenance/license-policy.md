@@ -108,6 +108,8 @@ CI（Linux）の環境の一覧だけではこの 3 件が見えないので、`
 | `The Unlicense (Unlicense)` | `Unlicense` |
 | 分類子の `; ` | `AND` とみなす（緩い方に倒さない） |
 
+確かめた SPDX は `maintenance/license-policy.toml` の `[[verified]]` に版つきで記録する。判定は、記録した版で `License-Expression` が無く、`License-Metadata` と分類子が決まらないか許容のときだけ、欄の代わりにこれを採る（欄が許容外を言えば隠さない。`pywin32` は分類子が PSF だけで BSD の部分が落ちるので記録を採る）。
+
 表記だけでは決められないもの（`BSD License`, `BSD`, `Dual License`, `LGPL with exceptions`, ライセンス本文, 空）は、3 つの欄の採る順で `License-Expression` → `License-Metadata` を見たあとでも決まらなければ「不明」にする。棚卸しでは次の 11 件がそうなった。配布物の LICENSE ファイル（または配布元のリポジトリ）を読んで確かめた結果:
 
 | パッケージ（版） | コンポーネント | 欄の値 | LICENSE ファイルで確かめた SPDX |

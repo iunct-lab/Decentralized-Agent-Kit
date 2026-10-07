@@ -109,6 +109,11 @@ def test_verified_record_wins_over_free_text_fields_of_its_version(policy):
     assert (f.license, f.status) == ("BSD-3-Clause", "ok")
 
 
+def test_verified_record_does_not_hide_disallowed_free_text(policy):
+    [f] = check("bff", [_pkg("Jinja2", metadata="GPL-3.0-only", version="3.1.6")], policy)
+    assert (f.status, f.license) == ("denied", "GPL-3.0-only")
+
+
 def test_verified_record_does_not_hide_a_new_version_or_a_declared_license(policy):
     [newer] = check("bff", [_pkg("Jinja2", classifier="BSD License", version="3.2.0")], policy)
     [declared] = check("bff", [_pkg("Jinja2", expression="GPL-3.0-only", version="3.1.6")], policy)
