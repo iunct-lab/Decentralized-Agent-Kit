@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 import tomllib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import httpx
@@ -191,8 +191,9 @@ def pypi_entry(name: str, version: str, info: dict) -> dict:
 
 
 def add_lock_only(packages: list[dict], lock: list[tuple[str, str]],
-                  fetch: Callable[[str, str], dict] = fetch_pypi) -> list[dict]:
-    """lock にあって環境の一覧に無い (名前, 版) を、PyPI から取った行として足す。取れなければ欄は空（不明）。"""
+                  fetch: Callable[[str, str], dict] | None = None) -> list[dict]:
+    """lock にあって環境の一覧に無い (名前, 版) を、PyPI から取った行として足す。取れなければ不明にする。"""
+    fetch = fetch or fetch_pypi
     installed = {(canonical_name(p["Name"]), p.get("Version", "")) for p in packages}
     added = []
     for name, version in lock:
@@ -205,42 +206,49 @@ def add_lock_only(packages: list[dict], lock: list[tuple[str, str]],
     return packages + added
 
 
-def check(component: str, packages: list[dict], policy: Policy, exclude: set[str] = frozenset()) -> list[Finding]:
-    """pip-licenses の一覧を判定する。`exclude` はコンポーネント自身のパッケージ名。"""
-    excluded = {canonical_name(n) for n in exclude}
-    findings = []
-    for pkg in sorted(packages, key=lambda p: canonical_name(p["Name"])):
-        name = canonical_name(pkg["Name"])
-        if name in excluded:
-            continue
-        version = pkg.get("Version", "")
+def _judge(component: str, pkg: dict, policy: Policy) -> Finding:
+    name, version = canonical_name(pkg["Name"]), pkg.get("Version", "")
+    if pkg.get("Error"):  # PyPI に問い合わせられなかった行は、記録や例外より先に不明で止める
+        return Finding(component, pkg["Name"], version, "不明", "unknown",
+                       f"PyPI に問い合わせられない: {pkg['Error']}"[:200])
+    declared = normalize(pkg.get(FIELDS[0]), policy.aliases)
+    if declared is None and (name, version) in policy.verified:
+        # 記録した版では、自由記述の欄より LICENSE ファイルで確かめた式を採る。PEP 639 の式があればそちら
+        expr, source = policy.verified[(name, version)], "方針の verified（LICENSE ファイルで確認）"
+    else:
         expr, source = next(
             ((n, f) for f in FIELDS
              if (n := normalize(pkg.get(f), policy.aliases, None if f == FIELDS[0] else policy.allow))),
             (None, ""),
         )
-        if expr is None and (name, version) in policy.verified:  # 欄で決まらないときだけ。版が変われば確かめ直す
-            expr, source = policy.verified[(name, version)], "方針の verified（LICENSE ファイルで確認）"
-        if pkg.get("Source") == "PyPI":  # 環境に無く、PyPI の JSON から取った行
-            source = f"PyPI {source}".strip()
-        exc = _exception_for(policy, component, name)
-        if exc and expr is not None and expr != exc["license"] and not evaluate_expression(expr, policy.allow):
-            # 例外は認めたときのライセンスに対してだけ。表記がそろえられて別の許容外のライセンスになったら止める
-            findings.append(Finding(component, pkg["Name"], version, expr, "denied",
-                                    f"例外は {exc['license']} で認めたが、今は {expr}。{source}"))
-        elif exc:
-            findings.append(Finding(component, pkg["Name"], version, exc["license"], "exception",
-                                    f"{exc['reason']}（確認 {exc['reviewed']}）"))
-        elif expr is None:
-            raw = pkg.get("Error") and f"PyPI に問い合わせられない: {pkg['Error']}"[:200] \
-                or " / ".join(f"{f}={pkg.get(f, '')!r}"[:80] for f in FIELDS)
-            findings.append(Finding(component, pkg["Name"], version, "不明", "unknown", raw))
-        elif evaluate_expression(expr, policy.allow):
-            findings.append(Finding(component, pkg["Name"], version, expr, "ok", source))
-        else:
-            denied = ", ".join(_denied_ids(expr, policy.allow))
-            findings.append(Finding(component, pkg["Name"], version, expr, "denied",
-                                    f"{denied} が許容の一覧に無い。{source}"))
+    exc = _exception_for(policy, component, name)
+    if exc and expr is not None and expr != exc["license"] and not evaluate_expression(expr, policy.allow):
+        # 例外は認めたときのライセンスに対してだけ。表記がそろえられて別の許容外のライセンスになったら止める
+        return Finding(component, pkg["Name"], version, expr, "denied",
+                       f"例外は {exc['license']} で認めたが、今は {expr}。{source}")
+    if exc:
+        return Finding(component, pkg["Name"], version, exc["license"], "exception",
+                       f"{exc['reason']}（確認 {exc['reviewed']}）")
+    if expr is None:
+        raw = " / ".join(f"{f}={pkg.get(f, '')!r}"[:80] for f in FIELDS)
+        return Finding(component, pkg["Name"], version, "不明", "unknown", raw)
+    if evaluate_expression(expr, policy.allow):
+        return Finding(component, pkg["Name"], version, expr, "ok", source)
+    denied = ", ".join(_denied_ids(expr, policy.allow))
+    return Finding(component, pkg["Name"], version, expr, "denied", f"{denied} が許容の一覧に無い。{source}")
+
+
+def check(component: str, packages: list[dict], policy: Policy, exclude: set[str] = frozenset()) -> list[Finding]:
+    """pip-licenses の一覧を判定する。`exclude` はコンポーネント自身のパッケージ名。"""
+    excluded = {canonical_name(n) for n in exclude}
+    findings = []
+    for pkg in sorted(packages, key=lambda p: canonical_name(p["Name"])):
+        if canonical_name(pkg["Name"]) in excluded:
+            continue
+        f = _judge(component, pkg, policy)
+        if pkg.get("Source") == "PyPI":  # 環境に無く、PyPI の JSON から取った行。どの判定でも見分けられるように
+            f = replace(f, reason=f"PyPI: {f.reason}")
+        findings.append(f)
     return findings
 
 
