@@ -10,7 +10,7 @@ from starlette.applications import Starlette
 from starlette.routing import Mount
 import uvicorn
 
-from sandbox import SANDBOX_TTL_SECONDS, SandboxManager
+from sandbox import DOCKER_SOCKET, SANDBOX_TTL_SECONDS, SandboxManager, check_socket_exposure
 
 # DNS rebinding protection: since mcp 1.23 FastMCP auto-enables it for its
 # default host (127.0.0.1) and then accepts only localhost Host headers, which
@@ -77,6 +77,7 @@ def _cap_entries(entries: list, hint: str, limit: int = MAX_LIST_ENTRIES) -> str
 # default, keeps every tool on the shared /projects exactly as before; an
 # unknown SANDBOX_MODE stops the server here.
 _sandbox = SandboxManager()
+check_socket_exposure(_sandbox.mode, os.path.exists("/.dockerenv"), os.path.exists(DOCKER_SOCKET))
 
 
 def _session(ctx: Context | None) -> tuple[str, dict]:

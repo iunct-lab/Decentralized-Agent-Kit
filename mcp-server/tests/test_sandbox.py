@@ -209,5 +209,25 @@ class TestSandboxManager(unittest.TestCase):
         self.assertEqual(removed, {manager._container_name("a"), manager._container_name("b")})
 
 
+class TestSocketExposure(unittest.TestCase):
+    """A container that sees the Docker socket must not run tools outside SANDBOX_MODE=docker."""
+
+    def test_socket_in_container_is_refused_unless_docker_mode(self):
+        for mode in ("off", "inproc"):
+            with self.subTest(mode=mode), self.assertRaises(RuntimeError):
+                sandbox.check_socket_exposure(mode, in_container=True, socket_visible=True)
+
+    def test_socket_in_container_is_allowed_in_docker_mode(self):
+        sandbox.check_socket_exposure("docker", in_container=True, socket_visible=True)
+
+    def test_socket_on_the_host_is_allowed(self):
+        # Run directly on a developer's machine (uv run main.py): the socket is
+        # usually there, and the default mode must keep working.
+        sandbox.check_socket_exposure("off", in_container=False, socket_visible=True)
+
+    def test_no_socket_in_container_is_allowed(self):
+        sandbox.check_socket_exposure("off", in_container=True, socket_visible=False)
+
+
 if __name__ == "__main__":
     unittest.main()
