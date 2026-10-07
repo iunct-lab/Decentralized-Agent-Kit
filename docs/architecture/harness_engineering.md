@@ -212,6 +212,14 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 - リセットの材料は `harness.build_reset_compaction(events, handoff_text, original_request_text)`。渡したイベントの範囲全体を覆う ADK の `EventCompaction` を返し、中身は `User request: <元の依頼>` と handoff の文だけ。これを `actions.compaction` に持つイベントをセッションに足すと、以降のリクエストはその範囲の生の履歴（ツールの結果も）の代わりにこの 2 つから組まれる。新しいリセットの仕組みは作らず、自動の圧縮と同じ ADK の圧縮イベントを使う。呼び出す口（`new_context` ツール）は #113。
 - 検証: `test_adaptive_agent.py::test_saved_handoff_reaches_a_resumed_session_in_a_new_process_verbatim`、`test_adaptive_agent.py::test_saved_handoff_reaches_a_turn_that_comes_over_a2a`、`test_adaptive_agent.py::test_handoff_written_mid_invocation_reaches_the_next_model_call`、`test_harness.py::test_reset_compaction_lets_the_scripted_task_complete_from_handoff_alone`、`test_harness.py::test_build_reset_compaction_covers_full_range`。
 
+### プロジェクトの指示（`get_project_instructions`、#115）
+
+- 作業ツリーの `AGENTS.md` / `CLAUDE.md` / `CONTEXT.md` を、mcp-server のツール `get_project_instructions(path=".")` が読む。ワークスペースのルート（`/projects`）から `path` へ降りながら、各ディレクトリで `AGENTS.md` → `CLAUDE.md` → `CONTEXT.md` の最初の 1 件を採り、`--- <dir>/<file> ---` の区切りでルート側から連結する（深い方が後ろ＝優先）。合計 `MCP_INSTRUCTIONS_MAX_BYTES`（既定 32768 バイト）で切り、`[truncated: …]` を付ける。
+- 信頼: `MCP_TRUSTED_WORKSPACE_PREFIXES`（`/projects` からの相対、`:` 区切り、既定 `.` = マウント全体）の外のパス、ワークスペースの外（`..`、絶対パス、外へ向くシンボリックリンク）は何も開かず `[not read: …]` を返す。プレフィックスの外にある祖先ディレクトリの指示ファイルも読まない。読むのはいつもサーバの `/projects` で、`SANDBOX_MODE` のセッションのワークスペース（モデルが書いたファイル）は読まない。
+- agent は毎 invocation の始め（`before_agent_callback` の `_restore_session_config`、指示を組む前）に既定の MCP サーバのこのツールを 1 回だけ自分で呼び（モデルには選ばせない）、結果を state の `dak_project_instructions` に置く。`[not read` で始まる結果や空なら消し、呼び出しの失敗では前の値を残す（invocation は落とさない）。ツールの無い古い mcp-server や、既定の MCP サーバを持たない agent では何もしない。
+- 指示には計画の前に `# Project Instructions` として入る。ファイルの文なので `{var}` 置換を通さない。長さは計画と同じ上限（`HarnessSettings.plan_chars`）で切り、切ったら `[truncated — call get_project_instructions for the full text]` を付ける。`dak:instruction` を渡した呼び出しには入れない。
+- 検証: `mcp-server/tests/test_project_instructions.py`、`test_adaptive_agent.py -k project_instructions`。
+
 ### 調査サブエージェント（`dak_explorer`、#85）
 
 - 広い調査（多数のファイルの走査・要約）を、読み取り専用のサブエージェント `dak_explorer` に委譲できる（`agent/dak_agent/explorer.py`）。ADK の `AgentTool` で包んで `root_agent` のツールに入れ、指示の末尾に「広い調査は `dak_explorer` に委譲する」の 1 文を足す。呼び出し元が `dak:tools` でツールを絞ったときは、名指ししたときだけ使える。

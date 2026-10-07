@@ -20,7 +20,7 @@ import inspect
 from . import builtin_tools, call_config, plan_mode, remote_tools, skill_tools
 from .config import get_litellm_model_name, load_agent_config
 from .errors import PaymentRequiredError
-from .harness import HarnessSettings
+from .harness import HarnessSettings, _result_text
 from .handlers.payment_handler import PaymentHandler
 from .mode_manager import ModeManager
 from .skill_registry import SkillRegistry
@@ -37,6 +37,9 @@ CALLER_MCP_PROBE_TIMEOUT_S = 30.0
 # Per-invocation (ADK drops `temp:` state after the invocation): the tool names
 # each reachable caller MCP server listed on this call, {url: [names]}.
 STATE_CALLER_MCP_TOOLS = "temp:dak_caller_mcp_tools"
+# The project's instruction files (mcp-server's get_project_instructions),
+# read at the start of every invocation and sent with its instruction.
+STATE_PROJECT_INSTRUCTIONS = "dak_project_instructions"
 # What DAK asks the model when its reply failed `dak:output_schema` / `dak:inspection`.
 INSPECTION_RETRY_PROMPT = ("Your previous response failed validation.\nValidation errors:\n{errors}\n\n"
                            "Produce a corrected response only, in the exact format required.")
@@ -232,9 +235,11 @@ class AdaptiveAgent(LlmAgent):
 
     def _verbatim_sections(self, state: MutableMapping[str, Any]) -> str:
         """The instruction's tail built from text the user or the model wrote
-        (the plan, the original request, the handoff): sent as is, never
+        (the project's instruction files, the plan, the original request, the
+        handoff): sent as is, never
         through ADK's `{var}` session-state injection."""
-        return self._plan_section(state) + self._original_request_section(state) + self._handoff_section(state)
+        return (self._project_instructions_section(state) + self._plan_section(state)
+                + self._original_request_section(state) + self._handoff_section(state))
 
     @staticmethod
     def _tools_error_section(state: MutableMapping[str, Any]) -> str:
@@ -270,6 +275,19 @@ class AdaptiveAgent(LlmAgent):
         state[STATE_CALLER_MCP_TOOLS] = listed
         if errors or state.get(call_config.STATE_TOOLS_ERROR):
             state[call_config.STATE_TOOLS_ERROR] = errors or None
+
+    def _project_instructions_section(self, state: MutableMapping[str, Any]) -> str:
+        """The workspace's AGENTS.md / CLAUDE.md / CONTEXT.md, root first (a
+        later section overrides an earlier one). Capped like the plan;
+        get_project_instructions has it all."""
+        text = state.get(STATE_PROJECT_INSTRUCTIONS)
+        if not isinstance(text, str) or not text:
+            return ""
+        max_chars = HarnessSettings(context_window=self._mode_manager.max_context_tokens).plan_chars
+        if len(text) > max_chars:
+            marker = "\n[truncated — call get_project_instructions for the full text]"
+            text = text[: max_chars - len(marker)] + marker
+        return f"\n\n# Project Instructions\n{text}"
 
     def _plan_section(self, state: MutableMapping[str, Any]) -> str:
         """The session's plan (`write_todos`), rebuilt from state every turn so
@@ -307,6 +325,28 @@ class AdaptiveAgent(LlmAgent):
             marker = "\n[truncated — call read_handoff for the full text]"
             text = text[: max_chars - len(marker)] + marker
         return f"\n\n# Handoff\n{text}"
+
+    async def _inject_project_instructions(self, callback_context: CallbackContext) -> None:
+        """Read the workspace's instruction files from the default MCP server
+        once per invocation (the agent calls the tool itself, the model does
+        not choose to). The server answers "[not read: …]" for an untrusted
+        workspace: then nothing is kept. A failure keeps the last text and
+        never fails the invocation."""
+        if not self._has_default_mcp_toolset:
+            return
+        try:
+            toolset = self._cached_mcp_toolset(self._mcp_url, "http", set())
+            tools = await toolset.get_tools()
+            tool = next((t for t in tools if getattr(t, "name", None) == "get_project_instructions"), None)
+            if tool is None:  # an older mcp-server
+                return
+            text = _result_text(await tool.run_async(args={"path": "."}, tool_context=callback_context))
+            if not text or text.startswith("[not read"):
+                callback_context.state.pop(STATE_PROJECT_INSTRUCTIONS, None)
+            else:
+                callback_context.state[STATE_PROJECT_INSTRUCTIONS] = text
+        except Exception as e:
+            logger.warning(f"Could not read the project instructions: {e}")
 
     @staticmethod
     def _capture_original_request(context: CallbackContext) -> None:
@@ -529,6 +569,8 @@ class AdaptiveAgent(LlmAgent):
             callback_context.state[call_config.STATE_TOOLS_ERROR] = None  # stale: not about this call
         try:
             self._capture_original_request(callback_context)
+            # Before the instruction is built, so this invocation already has them.
+            await self._inject_project_instructions(callback_context)
             error = self._apply_session_config(callback_context)
         except Exception as e:
             logger.error(f"CRITICAL ERROR restoring session config: {e}", exc_info=True)
