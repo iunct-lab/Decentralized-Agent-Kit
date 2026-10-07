@@ -245,8 +245,8 @@ echo "== done"
 
 - 理由: `SandboxManager` への変更が `--runtime` 1 つで済み、独立コンテナの原則（mcp-server は Docker の API を呼ぶだけ）を崩さない。KVM が要らないので、クラウドの VM や arm64 のホストでも使える。上乗せは `run_command` のタイムアウト（60 秒）に比べて小さい
 - #20 の既定（`SANDBOX_MODE=off`、`docker` は明示の opt-in、`session-sandbox.md`）と矛盾しない形: `SANDBOX_RUNTIME`（既定 `runc`）のような設定を足し、`docker` モードのときだけ `docker run --runtime=<値>` を付ける。指定したランタイムがホストの Docker に無いときは、素の runc に黙って戻さず、起動時にエラーで止める（隔離を強めたつもりで強まっていない状態を作らない。`SANDBOX_MODE` の不正な値と同じ扱い）
-- 実装の前に確かめること（その PBI の最初の Task）: 要件どおりのカーネル（5.6 以上）で cgroups のある root の Docker の上で、既定の設定での起動、`docker exec`、`docker rm -f` が runc と同じように動くか。今回の計測先（カーネル 4.14）ではどれも動かなかった（4 節）。確かめる先のホストは、その PBI で決める
-- `--pids-limit` がスレッドに効かないことは、文書に制限として書く（プロセスの数の上限は別に見る）
+- 実装の前に確かめること（その PBI の最初の Task）: 要件どおりのカーネル（5.6 以上）で cgroups のある root の Docker の上で、既定の設定での起動、`docker exec`、`docker rm -f` が runc と同じように動くか。今回の計測先（カーネル 4.14）では、既定の設定では起動せず（`--overlay2=root:memory` で起動した）、`docker exec` は失敗し、`docker rm -f` は約 10 秒かかった（4 節）。確かめる先のホストは、その PBI で決める
+- 上限が効くことも同じ Task で確かめる。#20 は CPU・メモリ・PID の上限を docker モードの要件にしている（`session-sandbox.md`）。今回、gVisor では `--pids-limit` がスレッドに効かず、`--cpus` は確かめきれなかった（4 節）。要件どおりのカーネルでも効かなければ、gVisor を採るには #20 の上限の要件を変えるか、別の手段で上限をかける必要がある。その判断はその PBI で利用者に聞く
 
 ### 見送る案
 
