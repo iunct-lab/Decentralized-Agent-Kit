@@ -59,14 +59,16 @@ def test_acp_round_trip(fake_llm, tmp_path):
 
 
 def test_acp_tool_call(fake_llm, tmp_path):
+    """A tool of the default MCP server (list_files is allowed without confirmation)."""
     fake_llm.clear(MODEL)
-    fake_llm.script(MODEL, [fake_llm.tool_call("list_skills"), fake_llm.text("Here is what I can do.")])
+    fake_llm.script(MODEL, [fake_llm.tool_call("enable_skill", skill_name="list_files"),
+                            fake_llm.tool_call("list_files", path="cli"), fake_llm.text("Listed cli/.")])
 
-    _, response, editor = asyncio.run(_one_turn(tmp_path, "What can you do?"))
+    _, response, editor = asyncio.run(_one_turn(tmp_path, "What is in cli/?"))
 
     assert response.stop_reason == "end_turn"
-    assert editor.kinds() == ["tool_call", "tool_call_update", "agent_message_chunk"]
-    call, done, _ = editor.updates
-    assert (call.title, call.status) == ("list_skills", "in_progress")
+    assert editor.kinds() == ["tool_call", "tool_call_update", "tool_call", "tool_call_update", "agent_message_chunk"]
+    call, done = editor.updates[2], editor.updates[3]
+    assert (call.title, call.status, call.raw_input) == ("list_files", "in_progress", {"path": "cli"})
     assert (done.tool_call_id, done.status) == (call.tool_call_id, "completed")
-    assert "Curated Skills" in done.content[0].content.text
+    assert "pyproject.toml" in done.content[0].content.text

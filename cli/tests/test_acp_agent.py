@@ -71,6 +71,18 @@ def test_mcp_result_text_and_failures():
         assert update.status == "failed", response
 
 
+def test_hook_rewrite_is_judged_by_the_result_it_wraps():
+    rewritten = {"observation": "hook_rewrote_output",
+                 "result": {"content": [{"type": "text", "text": "[redacted]"}], "isError": False}}
+    [update] = events_to_updates(_result(rewritten))
+    assert (update.status, update.content[0].content.text) == ("completed", "[redacted]")
+
+    blocked = {"observation": "hook_rewrote_input", "original_args": {}, "updated_args": {},
+               "result": {"error": "boom"}}
+    [update] = events_to_updates(_result(blocked))
+    assert update.status == "failed"
+
+
 def test_confirmation_is_not_a_tool_call_and_the_waiting_call_stays_pending():
     assert events_to_updates(CONFIRMATION) == []
     [update] = events_to_updates(WAITING)
