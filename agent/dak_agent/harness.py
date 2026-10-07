@@ -322,6 +322,12 @@ class BudgetedEventSummarizer(LlmEventSummarizer):
     * Any other model failure is logged and compaction is skipped for this call
       (returns ``None``): the request guard keeps the next model call inside the
       window, and the failure surfaces there if it is persistent.
+
+    Prompt cache: the summary request is a one-off prompt whose content changes
+    every time and shares no prefix with later requests, so it asks for no cache
+    write (``cache_config`` stays ``None`` even when the app enables one; pinned by
+    ``tests/test_context_cache_interaction.py``). Per-provider controls such as
+    ``cache_control`` belong to #94.
     """
 
     def __init__(self, llm: Any, settings: HarnessSettings, prompt_template: Optional[str] = None):
