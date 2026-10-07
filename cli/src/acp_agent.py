@@ -72,6 +72,8 @@ def events_to_updates(event: Dict[str, Any]) -> List[Any]:
                 updates.append(update_tool_call(
                     result["id"], status="failed" if _failed(response) else "completed",
                     content=[tool_content(text_block(_result_text(response)))], raw_output=response))
+    if event.get("errorCode") or event.get("errorMessage"):  # the model answered with an error
+        updates.append(update_agent_message_text(f"[error {event.get('errorCode', '')}] {event.get('errorMessage', '')}"))
     return updates
 
 
@@ -119,7 +121,9 @@ class DakAcpAgent(Agent):
         return NewSessionResponse(session_id=client.session_id)
 
     async def prompt(self, prompt, session_id: str, **kwargs):
-        client = self._clients[session_id]
+        client = self._clients.get(session_id)
+        if client is None:
+            raise RequestError.invalid_params({"message": f"unknown session {session_id}"})
         loop = asyncio.get_running_loop()
         events: asyncio.Queue = asyncio.Queue()
 
@@ -131,14 +135,20 @@ class DakAcpAgent(Agent):
                 loop.call_soon_threadsafe(events.put_nowait, None)
 
         reading = loop.run_in_executor(None, pump)
-        asked = []
+        asked, failure = [], None
         while (event := await events.get()) is not None:
+            if "error" in event and "author" not in event:  # the runner raised; ADK's last data: line says what
+                failure = event["error"]
+                continue
             asked += _confirmations(event)
             for update in events_to_updates(event):
                 await self._conn.session_update(session_id=session_id, update=update)
         await reading  # raises what the stream raised
+        if failure:
+            raise RequestError.internal_error({"message": failure})
         for call in asked:  # answering comes with #317; until then say why the tool did not run
             name = call.get("args", {}).get("originalFunctionCall", {}).get("name")
             await self._conn.session_update(session_id=session_id, update=update_agent_message_text(
-                f"{name} needs approval, which dak-cli acp cannot give yet; it did not run."))
+                f"{name} needs approval, which dak-cli acp cannot give yet; it was not run from here "
+                "and still waits (the BFF or `dak-cli approve` can answer it)."))
         return PromptResponse(stop_reason="end_turn")
