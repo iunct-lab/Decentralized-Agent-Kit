@@ -223,7 +223,7 @@ async def answer_approval(fc_id: str, mode: str = Form(...), session_id: str = F
                 headers=headers,
             )
             if response.status_code in APPROVAL_REPLY_NOTICES:
-                return HTMLResponse(f'<div class="chat-message system">{APPROVAL_REPLY_NOTICES[response.status_code]}</div>\n')
+                return HTMLResponse(f'<div class="chat-message system">{html.escape(APPROVAL_REPLY_NOTICES[response.status_code])}</div>\n')
             response.raise_for_status()
             data = response.json()
     except Exception as e:

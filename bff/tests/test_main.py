@@ -163,7 +163,7 @@ def test_expired_approval_says_the_agent_moved_on():
 
     assert response.status_code == 200
     assert 'class="chat-message system"' in response.text
-    assert "expired" in response.text and "timed out" in response.text
+    assert "expired" in response.text and "timed out" in response.text and "moved on" in response.text
 
 
 @respx.mock
