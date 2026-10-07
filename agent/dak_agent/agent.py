@@ -80,7 +80,7 @@ formatted_model_name = get_litellm_model_name(model_name)
 model = LiteLlm(model=formatted_model_name)
 
 # --- Read-only investigation sub-agent (its tool output stays out of this session) ---
-root_agent_tools.append(make_explorer_tool(model, mcp_url))
+root_agent_tools.append(make_explorer_tool(mcp_url))
 
 # --- Context harness (compaction + tool-output budget + request guard) ---
 use_harness = harness_enabled()

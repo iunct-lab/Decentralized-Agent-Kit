@@ -5,7 +5,8 @@ and the tool results it sees never enter the parent's session: the parent gets
 only the sub-agent's final answer as the tool's result (#85).
 
 The sub-agent gets only the default MCP server's read-only tools; it cannot
-write files or run commands.
+write files or run commands. It runs on the model the calling agent uses in
+that call (a caller's `dak:model` too), so delegated reads go to that model.
 """
 from google.adk.agents import LlmAgent
 from google.adk.tools.agent_tool import AgentTool
@@ -26,7 +27,14 @@ DELEGATION_INSTRUCTION = (
 )
 
 
-def make_explorer_tool(model, mcp_url: str) -> AgentTool:
+class _ExplorerTool(AgentTool):
+    async def run_async(self, *, args, tool_context):
+        model = tool_context._invocation_context.agent.canonical_model
+        explorer = AgentTool(agent=self.agent.clone(update={"model": model}))  # a copy per call: sessions run at once
+        return await explorer.run_async(args=args, tool_context=tool_context)
+
+
+def make_explorer_tool(mcp_url: str) -> AgentTool:
     """The read-only investigation sub-agent wrapped as a tool for the root agent."""
     toolset = McpToolset(
         connection_params=StreamableHTTPConnectionParams(url=mcp_url),
@@ -35,9 +43,8 @@ def make_explorer_tool(model, mcp_url: str) -> AgentTool:
     )
     explorer = LlmAgent(
         name=EXPLORER_NAME,
-        model=model,
         description="Investigates files read-only and returns only its conclusions.",
         instruction=EXPLORER_INSTRUCTION,
         tools=[toolset],
     )
-    return AgentTool(agent=explorer)
+    return _ExplorerTool(agent=explorer)
