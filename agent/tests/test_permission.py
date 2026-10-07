@@ -147,6 +147,18 @@ def test_rules_are_keyed_by_source():
         assert evaluate(DEFAULT_RULES, "default", "grep", {"pattern": ".", "path": path}) == "ask"
 
 
+@pytest.mark.parametrize("tool", ["read_file", "list_files", "search_files", "grep"])
+@pytest.mark.parametrize("path", ["/etc/passwd", "/etc", "..", "../secrets.txt", "docs/../../secrets.txt"])
+def test_reading_outside_the_workspace_asks(tool, path):
+    assert evaluate(DEFAULT_RULES, "default", tool, {"path": path}) == "ask"
+
+
+@pytest.mark.parametrize("tool", ["read_file", "list_files", "search_files", "grep"])
+@pytest.mark.parametrize("path", ["README.md", ".", "agent/dak_agent", "..hidden/notes.txt", "a..b.txt"])
+def test_reading_inside_the_workspace_is_still_allowed(tool, path):
+    assert evaluate(DEFAULT_RULES, "default", tool, {"path": path}) == "allow"
+
+
 # --- PermissionPlugin through ADK's Runner (#177) ---
 
 DEFAULT_URL = "http://mcp-server:8000/mcp"
