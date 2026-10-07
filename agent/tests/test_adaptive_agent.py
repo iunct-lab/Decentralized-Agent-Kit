@@ -7,7 +7,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dak_agent import builtin_tools, plan_mode
-from dak_agent.adaptive_agent import PLAN_MODE_REMINDER, AdaptiveAgent
+from dak_agent.adaptive_agent import PLAN_MODE_REMINDER, STATE_PROJECT_INSTRUCTIONS, AdaptiveAgent
 from dak_agent.mode_manager import ModeManager, FIRST_TURN_DONE_KEY
 from google.adk.tools import FunctionTool
 
@@ -744,6 +744,120 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(requests), 1)
         self.assertIn("# Handoff\nObjective: ship", requests[0].config.system_instruction)
         self.assertIn("Next steps:\n- deploy", requests[0].config.system_instruction)
+
+    def _project_instructions_agent(self, result=None, names=("get_project_instructions",)):
+        """An agent with the default MCP toolset whose cached toolset lists
+        `names` and whose get_project_instructions returns `result`."""
+        from unittest.mock import AsyncMock
+
+        default_mcp = MagicMock()
+        type(default_mcp).__name__ = "McpToolset"
+        agent = AdaptiveAgent(model="test-model", name="test_agent", instruction="Hello {greeting}.",
+                              tools=[default_mcp])
+        tools = []
+        for name in names:
+            tool = MagicMock()
+            tool.name = name
+            tool.run_async = AsyncMock(return_value=result)
+            tools.append(tool)
+        toolset = MagicMock()
+        toolset.get_tools = AsyncMock(return_value=tools)
+        return agent, toolset, tools
+
+    async def test_inject_project_instructions_stores_state_from_mcp_tool(self):
+        """PBI #115 criterion 2: the agent itself calls get_project_instructions
+        once and keeps the text in session state."""
+        agent, toolset, tools = self._project_instructions_agent(
+            {"content": [{"type": "text", "text": "root rules"}]})
+        state = {}
+        context = self._session_context(agent, state)
+
+        with patch.object(AdaptiveAgent, "_cached_mcp_toolset", return_value=toolset) as cached:
+            await agent._inject_project_instructions(context)
+
+        cached.assert_called_once_with(agent._mcp_url, "http", set())
+        tools[0].run_async.assert_awaited_once_with(args={"path": "."}, tool_context=context)
+        self.assertEqual(state[STATE_PROJECT_INSTRUCTIONS], "root rules")
+
+    async def test_inject_project_instructions_skips_untrusted_marker(self):
+        agent, toolset, _ = self._project_instructions_agent(
+            {"content": [{"type": "text", "text": "[not read: path is outside the trusted workspace]"}]})
+        state = {STATE_PROJECT_INSTRUCTIONS: "stale rules"}
+
+        with patch.object(AdaptiveAgent, "_cached_mcp_toolset", return_value=toolset):
+            await agent._inject_project_instructions(self._session_context(agent, state))
+
+        self.assertNotIn(STATE_PROJECT_INSTRUCTIONS, state)
+
+    async def test_inject_project_instructions_missing_tool_is_noop(self):
+        """An older mcp-server without the tool: nothing changes, nothing fails."""
+        agent, toolset, tools = self._project_instructions_agent("x", names=("read_file",))
+        state = {}
+
+        with patch.object(AdaptiveAgent, "_cached_mcp_toolset", return_value=toolset):
+            await agent._inject_project_instructions(self._session_context(agent, state))
+
+        tools[0].run_async.assert_not_awaited()
+        self.assertEqual(state, {})
+
+    async def test_inject_project_instructions_keeps_the_last_text_when_the_server_fails(self):
+        agent, toolset, _ = self._project_instructions_agent()
+        toolset.get_tools.side_effect = ConnectionError("mcp-server is down")
+        state = {STATE_PROJECT_INSTRUCTIONS: "root rules"}
+
+        with patch.object(AdaptiveAgent, "_cached_mcp_toolset", return_value=toolset):
+            await agent._inject_project_instructions(self._session_context(agent, state))
+
+        self.assertEqual(state[STATE_PROJECT_INSTRUCTIONS], "root rules")
+
+    async def test_inject_project_instructions_needs_the_default_mcp_server(self):
+        """An agent built without the default MCP toolset does not connect to it."""
+        agent = AdaptiveAgent(model="test-model", name="test_agent", instruction="x", tools=self.mock_tools)
+
+        with patch.object(AdaptiveAgent, "_cached_mcp_toolset") as cached:
+            await agent._inject_project_instructions(self._session_context(agent, {}))
+
+        cached.assert_not_called()
+
+    def test_resolve_session_instruction_includes_project_instructions_when_present(self):
+        agent = AdaptiveAgent(model="test-model", name="test_agent",
+                              instruction="Initial instruction", tools=self.mock_tools)
+
+        instruction = agent._resolve_session_instruction({STATE_PROJECT_INSTRUCTIONS: "root rules"}, {})
+
+        self.assertTrue(instruction.startswith("Initial instruction"))
+        self.assertIn("# Project Instructions\nroot rules", instruction)
+        self.assertNotIn("# Project Instructions", agent._resolve_session_instruction({}, {}))
+
+    def test_project_instructions_section_is_capped_by_the_window(self):
+        agent = AdaptiveAgent(model="test-model", name="test_agent",
+                              instruction="Initial instruction", tools=self.mock_tools)
+        agent._mode_manager.max_context_tokens = 8192  # plan_chars == 1,000
+
+        instruction = agent._resolve_session_instruction({STATE_PROJECT_INSTRUCTIONS: "p" * 5_000}, {})
+
+        section = instruction.split("# Project Instructions\n", 1)[1]
+        self.assertLessEqual(len(section), 1_000)
+        self.assertIn("get_project_instructions", section)  # where the rest is
+
+    async def test_project_instructions_reach_the_same_invocation_verbatim(self):
+        """Read at the start of the invocation, before the instruction is
+        built, so the first model call already has them; and `{name}` in the
+        file must not go through ADK's session-state injection."""
+        agent, toolset, _ = self._project_instructions_agent(
+            {"content": [{"type": "text", "text": "--- ./AGENTS.md ---\nkeep {braces}\n"}]})
+        state = {"greeting": "operator"}
+        context = self._session_context(agent, state)
+
+        with patch.object(AdaptiveAgent, "_cached_mcp_toolset", return_value=toolset):
+            await agent._restore_session_config(context)
+
+        provider = context._invocation_context.agent.instruction
+        with patch("google.adk.utils.instructions_utils.inject_session_state",
+                   side_effect=lambda text, ctx: text.replace("{greeting}", "operator")):
+            system = await provider(MagicMock())
+        self.assertIn("Hello operator.", system)
+        self.assertIn("# Project Instructions\n--- ./AGENTS.md ---\nkeep {braces}", system)
 
     def _tools_agent(self):
         from dak_agent.builtin_tools import switch_mode
