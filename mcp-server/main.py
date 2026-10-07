@@ -398,7 +398,6 @@ async def edit_file(path: str, old_string: str, new_string: str, replace_all: bo
     return f"Replaced 1 occurrence in {path}"
 
 
-
 def _workspace_relpath(path: str) -> str:
     """`path` relative to the workspace root, symlinks resolved (".." or "../…" when it leaves it)."""
     return os.path.relpath(os.path.realpath(path), os.path.realpath("."))
