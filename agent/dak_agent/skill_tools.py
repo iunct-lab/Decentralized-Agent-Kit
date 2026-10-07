@@ -12,7 +12,7 @@ from typing import Iterable, List, Optional, Tuple
 
 from google.adk.tools import FunctionTool
 from google.adk.tools.mcp_tool import McpToolset, StreamableHTTPConnectionParams
-import httpx
+import httpx2
 
 from . import call_config
 from .mcp_headers import session_key_header
@@ -101,11 +101,12 @@ def load_local_tools_from_skill(
     return local_tools, mcp_fallback
 
 
-def _no_redirect_http_client(headers=None, timeout=None, auth=None) -> httpx.AsyncClient:
+def _no_redirect_http_client(headers=None, timeout=None, auth=None) -> httpx2.AsyncClient:
     """Like the MCP SDK's default client (30 s, 300 s to read a stream), but
-    refusing HTTP redirects."""
-    return httpx.AsyncClient(headers=headers, auth=auth, follow_redirects=False,
-                             timeout=timeout or httpx.Timeout(30.0, read=300.0))
+    refusing HTTP redirects. An httpx2 client: mcp 2.x does not work with an
+    httpx one (it fails quietly, server messages stop arriving)."""
+    return httpx2.AsyncClient(headers=headers, auth=auth, follow_redirects=False,
+                              timeout=timeout or httpx2.Timeout(30.0, read=300.0))
 
 
 def make_mcp_toolset(

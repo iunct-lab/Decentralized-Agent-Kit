@@ -3,7 +3,6 @@ import asyncio
 from unittest.mock import MagicMock, patch
 from dak_agent.adaptive_agent import AdaptiveAgent
 from google.adk.tools import FunctionTool
-from mcp.server.fastmcp import FastMCP
 
 # We need to test the interaction between AdaptiveAgent and a real/mocked MCP server
 # Since spinning up a real server in unit tests is complex, we will mock the McpToolset response

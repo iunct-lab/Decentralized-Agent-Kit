@@ -1,6 +1,6 @@
 """Spike #328: can ADK's McpToolset answer a server's ``elicitation/create`` (old-spec MCP)?
 
-A small mcp 1.x FastMCP server runs in this test (mcp-server/ is not used). Its ``confirm_probe``
+A small mcp 2.x MCPServer runs in this test (mcp-server/ is not used). Its ``confirm_probe``
 asks for confirmation with ``ctx.elicit()`` and reports whether it would have run.
 """
 import asyncio
@@ -18,8 +18,8 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.tools.mcp_tool import McpToolset, StreamableHTTPConnectionParams
 from google.genai import types
-from mcp.server.fastmcp import Context, FastMCP
-from mcp.shared.context import RequestContext
+from mcp.client.session import ClientRequestContext
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import ElicitResult
 from pydantic import BaseModel
 
@@ -30,8 +30,8 @@ class ConfirmAnswer(BaseModel):
     proceed: bool
 
 
-def _probe_server(json_response: bool) -> FastMCP:
-    mcp = FastMCP("probe", json_response=json_response)
+def _probe_server() -> MCPServer:
+    mcp = MCPServer("probe")
 
     @mcp.tool()
     async def confirm_probe(path: str, ctx: Context) -> str:
@@ -48,7 +48,7 @@ def _serve(json_response):
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
     server = uvicorn.Server(uvicorn.Config(
-        _probe_server(json_response).streamable_http_app(), host="127.0.0.1", port=port, log_level="error"))
+        _probe_server().streamable_http_app(json_response=json_response), host="127.0.0.1", port=port, log_level="error"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     deadline = time.monotonic() + 10
@@ -67,7 +67,7 @@ def server_url():
 
 @pytest.fixture
 def json_response_url():
-    """Like DAK's mcp-server: FastMCP(..., json_response=True)."""
+    """Like DAK's mcp-server: a server answering with JSON bodies (json_response=True)."""
     yield from _serve(json_response=True)
 
 
@@ -127,7 +127,7 @@ def test_accept_runs_the_tool(server_url):
     response = _call_probe(server_url, accept)
     assert _text(response) == "executed"
     assert [p.message for p in seen] == [QUESTION]
-    assert set(seen[0].requestedSchema["properties"]) == {"proceed"}
+    assert set(seen[0].requested_schema["properties"]) == {"proceed"}
 
 
 def test_decline_does_not_run_the_tool(server_url):
@@ -141,10 +141,10 @@ def test_decline_does_not_run_the_tool(server_url):
     assert seen == [QUESTION]
 
 
-def test_callback_gets_no_tool_context(server_url):
-    """The callback is per toolset, not per call: it gets the MCP request context, and the
-    ADK ToolContext of the waiting call is not reachable from it (it runs in the session's
-    receive loop, not in the tool call's task)."""
+def test_callback_runs_in_the_tool_calls_task(server_url):
+    """The callback is per toolset, not per call: it gets the MCP request context. With
+    mcp 2.x it runs in the waiting tool call's task, so the ADK ToolContext of that call
+    is reachable from it (with mcp 1.x it ran in the session's receive loop and was not)."""
     seen = []
 
     async def record(context, params):
@@ -153,8 +153,8 @@ def test_callback_gets_no_tool_context(server_url):
 
     assert _text(_call_probe(server_url, record)) == "executed"
     [(context, caller)] = seen
-    assert isinstance(context, RequestContext)
-    assert caller is None
+    assert isinstance(context, ClientRequestContext)
+    assert caller is not None
 
 
 def test_open_call_is_bounded_by_sse_read_timeout(server_url):
@@ -167,17 +167,18 @@ def test_open_call_is_bounded_by_sse_read_timeout(server_url):
         await asyncio.sleep(5)
         return ElicitResult(action="accept", content={"proceed": True})
 
-    started = time.monotonic()
     response = _call_probe(server_url, slow, sse_read_timeout=1.0)
     assert len(entered) == 1
-    assert "Waited 1.0 seconds" in response["error"]
-    assert time.monotonic() - started < 5  # ended by the timeout, not by the answer
+    assert "timed out" in response["error"]
+    # Ended by the timeout, not by the answer. Timed from the question: setting up the
+    # turn can itself take seconds (google.auth probing for a metadata server).
+    assert time.monotonic() - entered[0] < 5
 
 
 def test_json_response_server_cannot_elicit(json_response_url):
     """With json_response=True (as in mcp-server/main.py) the question never reaches the
     client: the POST answers with one JSON body, so there is no stream for elicitation/create.
-    The call hangs until the read timeout."""
+    mcp 2.x says so at once (NoBackChannelError) instead of hanging until the read timeout."""
     seen = []
 
     async def accept(context, params):
@@ -186,4 +187,4 @@ def test_json_response_server_cannot_elicit(json_response_url):
 
     response = _call_probe(json_response_url, accept, sse_read_timeout=2.0)
     assert seen == []
-    assert "Timed out" in response["error"]
+    assert "no back-channel" in response["error"]
