@@ -89,6 +89,26 @@ def test_confirmation_is_not_a_tool_call_and_the_waiting_call_stays_pending():
     assert (update.tool_call_id, update.status) == ("call_11accb99", "pending")
 
 
+def test_model_error_becomes_a_message():
+    event = {"author": "dak_agent", "errorCode": "SAFETY", "errorMessage": "blocked by the model"}
+    [update] = events_to_updates(event)
+    assert update.session_update == "agent_message_chunk"
+    assert update.content.text == "[error SAFETY] blocked by the model"
+
+
+def test_a_failed_turn_is_a_json_rpc_error():
+    agent, conn, _ = _agent_with([TEXT, {"error": "RuntimeError: backend down", "error_details": {}}])
+    with pytest.raises(RequestError) as e:
+        asyncio.run(agent.prompt(prompt=[text_block("hi")], session_id="s1"))
+    assert "backend down" in str(e.value.data)
+
+
+def test_unknown_session_is_invalid_params():
+    with pytest.raises(RequestError) as e:
+        asyncio.run(DakAcpAgent().prompt(prompt=[text_block("hi")], session_id="nope"))
+    assert e.value.code == RequestError.invalid_params().code
+
+
 @patch("src.client.requests.post")
 @patch("src.client.ConfigManager")
 def test_stream_events_reads_sse_data_lines(mock_config_class, mock_post):

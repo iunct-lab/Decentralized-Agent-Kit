@@ -58,6 +58,9 @@ PBI #314 / Task #315。Zed や JetBrains など Agent Client Protocol（ACP）�
 | `session/request_permission` の答え `cancelled` | C→A | 答えない（§3.2）。ターンは `cancelled` で終える | 仕様の Prompt Turn（「Client … MUST respond to all pending session/request_permission requests with the cancelled outcome」） |
 | `session/prompt` の応答 | A→C | SSE（承認の後は reply の応答）が終わり、答えていない確認が残っていなければ `stopReason: end_turn`。取り消されたら `cancelled`。DAK に `max_tokens` などの区別は無いので、ほかの値は返さない | 仕様の Prompt Turn |
 | `session/cancel` | C→A | §3.2 | 仕様の Prompt Turn、§5 (d) |
+| イベントの `errorCode` / `errorMessage`（モデルがエラーで答えた） | A→C | `agent_message_chunk` に `[error <code>] <message>` を送り、ターンはふつうに終える | ADK の `LlmResponse.error_code` / `error_message` |
+| SSE の `data: {"error": …}`（ターンの途中で例外。ADK の `/run_sse` が最後に送る） | A→C | `session/prompt` を JSON-RPC のエラー（internal error、`data.message` にその文）で答える。空のまま `end_turn` にしない | google-adk 2.8.0 `api_server.py` の `event_generator` |
+| 知らない `sessionId` の `session/prompt` | C→A | JSON-RPC の invalid params（`loadSession: false` なので、前のプロセスのセッションは使えない） | — |
 | `session/update` の `plan` | A→C | 送らない。DAK の `planner`（Enforcer Mode の計画）はツール呼び出しとして `tool_call` に出る。`plan` に写すのは別 PBI | — |
 
 ### 3.1 承認の選択肢
