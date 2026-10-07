@@ -58,6 +58,10 @@ class FakeLlm:
     def clear(self, model: str):
         httpx.delete(f"{self.base_url}/script/{model}", timeout=10.0)
 
+    def requests(self, model: str) -> list:
+        """What the model received, oldest first: [{"messages": [...], "tools": [...]}]."""
+        return httpx.get(f"{self.base_url}/requests/{model}", timeout=10.0).json()
+
     @staticmethod
     def text(content: str) -> dict:
         return {"text": content}
@@ -148,3 +152,16 @@ def function_responses(events: list) -> list:
             if part.get("functionResponse"):
                 responses.append(part["functionResponse"])
     return responses
+
+
+# --- Fake-LLM request helpers (an entry of FakeLlm.requests) ---
+
+def system_instruction(entry: dict) -> str:
+    for message in entry["messages"]:
+        if message.get("role") == "system":
+            return message.get("content") or ""
+    return ""
+
+
+def tool_names(entry: dict) -> list:
+    return [t["function"]["name"] for t in entry.get("tools", [])]
