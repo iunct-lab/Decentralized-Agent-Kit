@@ -124,6 +124,7 @@ CI（Linux）の環境の一覧だけではこの 3 件が見えないので、`
 | `python-dateutil` 2.9.0.post0 | agent, maintenance | メタデータ `Dual License` | `Apache-2.0 AND BSD-3-Clause`（2017-12 以降の寄与は両方、それ以前は BSD-3-Clause） |
 | `tiktoken` 0.12.0 | agent | メタデータにライセンス本文 | `MIT` |
 | `jsonalias` 0.1.1 | agent | どの欄も空 | `MIT`（配布物に LICENSE が無い。配布元 [kevinheavey/jsonalias](https://github.com/kevinheavey/jsonalias/blob/master/LICENSE) が MIT） |
+| `agent-client-protocol` 0.12.1 | cli | どの欄も空（PyPI も空） | `Apache-2.0`（wheel の `dist-info/licenses/LICENSE` が Apache License 2.0。2026-10-07、#554） |
 | `psycopg2-binary` 2.9.13 | agent | 分類子 `GNU Library or Lesser General Public License (LGPL)`、メタデータ `LGPL with exceptions` | `LGPL-3.0-or-later`（LICENSE が LGPL 3 以降と、OpenSSL との結合を認める例外を書く） |
 
 ### 判断が要る依存
