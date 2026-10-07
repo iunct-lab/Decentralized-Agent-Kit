@@ -29,17 +29,15 @@
 
 ## 初期セットアップ（一度だけ）
 
-1. **Project 作成**: `bash scripts/setup/bootstrap_project.sh`
-   → 出力された URL を登録:
+1. **Project 作成**: GitHub Project を作り、フィールド Status（`Backlog` を含む）・Area・Kind・Priority・Phase・Story Points を持たせる。Area と Phase の選択肢は root の `ops.config.json`。URL を `ops.config.json` の `projectUrl` に書き、次を登録:
    - `gh variable set DAK_PROJECT_URL --body "<URL>"`
    - `gh secret set DAK_PROJECT_TOKEN --body "<project スコープ付き PAT>"`（`project-autoadd` と `scripts/setup/request_issue.py` が user-level Project に書くため、既定 `GITHUB_TOKEN` では不可）
-   - Project の設定で、Status の選択肢に `Backlog` を足す（新しい Project の既定は Todo / In Progress / Done だけ。新しい Issue と定期実行の要望は Status=Backlog で載るので、無いと失敗する）
-2. **バックログ投入**: `bash scripts/setup/seed_backlog.sh`（Phase 2-4 を Issue 化）
-3. **ラベル同期**: `labels.yml` を main に push（`labels.yml` ワークフローが反映）
-4. **リポジトリ設定**:
+   - Status の選択肢に `Backlog` が要る（新しい Project の既定は Todo / In Progress / Done だけ。新しい Issue と定期実行の要望は Status=Backlog で載るので、無いと失敗する）
+2. **ラベル同期**: `labels.yml` を main に push（`labels.yml` ワークフローが反映）
+3. **リポジトリ設定**:
    - Settings → General → Pull Requests → **Allow auto-merge** を ON
    - Settings → Branches → `main` の branch protection で **CI を必須チェック** に
-5. **LLM プロバイダ設定（provider 中立・実行時選択）**: reasoning 系ワークフロー
+4. **LLM プロバイダ設定（provider 中立・実行時選択）**: reasoning 系ワークフロー
    （tech-watch / feature-sync / charter-review）と triage の LLM リスク評価は、以下の
    env で任意のプロバイダを選ぶ（Gemini / Ollama / OpenAI / Anthropic すべて OpenAI 互換で叩ける）:
    - `gh variable set MAINT_LLM_BASE_URL --body "<base url>"`

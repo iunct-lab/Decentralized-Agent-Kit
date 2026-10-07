@@ -1,0 +1,7 @@
+{
+  "projectUrl": "https://github.com/orgs/iunct-lab/projects/3",
+  "fields": {
+    "area": ["agent", "mcp", "bff", "cli", "infra"],
+    "phase": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 4"]
+  }
+}

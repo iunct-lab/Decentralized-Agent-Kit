@@ -183,4 +183,3 @@ def test_missing_backlog_option_says_how_to_add_it(tmp_path, monkeypatch, capsys
     assert request_issue.main([str(_proposals(tmp_path, [PROPOSAL])), "--source", "x"]) == 1
     err = capsys.readouterr().err
     assert "Add option 'Backlog'" in err
-    assert "bootstrap_project.sh" not in err

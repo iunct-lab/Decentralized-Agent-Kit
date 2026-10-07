@@ -66,8 +66,6 @@ tests/integration/
   test_golden_replay.py     golden を fake-LLM で再生
   tools/capture_golden.py   実LLMセッション → golden 変換
 scripts/setup/
-  bootstrap_project.sh      Project v2 作成 + フィールド
-  seed_backlog.sh           Phase2-4 を Issue 化して Project 投入
   request_issue.py          定期実行の提案を要望 Issue として起票し Backlog に載せる
 ```
 
@@ -144,21 +142,19 @@ fake-LLM がモデル名ごとに応答をスクリプトできること（`/scr
 
 ## 6. GitHub Project を単一の真実に（要件1）
 
-- `scripts/setup/bootstrap_project.sh` が Project v2 とカスタムフィールド（Status/Area/Type/Priority）を冪等作成。
-- `scripts/setup/seed_backlog.sh` が Phase2-4 の作業を Issue 化して Project に投入。
+- Project v2 のフィールドは Status/Area/Kind/Priority/Phase/Story Points。DAK 固有の値（Project の URL、Area・Phase の選択肢）は root の `ops.config.json`。
 - `project-autoadd.yml` が以後の新 Issue/PR を自動追加し、新しい Issue の Status を Backlog にする（未設定時はスキップして CI を汚さない）。定期実行の提案は `scripts/setup/request_issue.py` が要望 Issue として起票し、自分で Backlog に載せる。
 - すべての自動化アウトプット（auto-merge PR・レビュー要求・各種提案 Issue）が Project に集約される。
 
 ## 7. セットアップ（マージ後・コード外の手動作業）
 
-1. `bash scripts/setup/bootstrap_project.sh` → `gh variable set DAK_PROJECT_URL` / `gh secret set DAK_PROJECT_TOKEN`
-2. `bash scripts/setup/seed_backlog.sh`
-3. Settings: **Allow auto-merge** ON、`main` の branch protection で CI を必須チェックに
-4. **LLM プロバイダを選択**（provider 中立）: `MAINT_LLM_BASE_URL` / `MAINT_LLM_MODEL`（variables）
+1. Project を作り（フィールドは §6）、`gh variable set DAK_PROJECT_URL` / `gh secret set DAK_PROJECT_TOKEN`
+2. Settings: **Allow auto-merge** ON、`main` の branch protection で CI を必須チェックに
+3. **LLM プロバイダを選択**（provider 中立）: `MAINT_LLM_BASE_URL` / `MAINT_LLM_MODEL`（variables）
    と `MAINT_LLM_API_KEY`（secret）を設定。Gemini なら既存 `GOOGLE_API_KEY` を流用（プリセットは README 参照）。
    triage で LLM 評価も使うなら **Dependabot secrets/variables にも**登録。未設定でも
    reasoning 系は提案 0 件・triage は heuristic で失敗しない。
-5. **Web 検索**: `TAVILY_API_KEY` を登録（`tech-watch`/`charter-review` に必須。未登録だと提案 0 件）。
+4. **Web 検索**: `TAVILY_API_KEY` を登録（`tech-watch`/`charter-review` に必須。未登録だと提案 0 件）。
    規約遵守のため HTML スクレイピングのフォールバックは持たない。
 
 ## 8. 設計上のトレードオフ・既知の制約
