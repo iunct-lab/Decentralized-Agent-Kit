@@ -40,7 +40,7 @@ body:
     attributes:
       label: 派生 PBI
       description: PBI を切ったら追記（`- #N 題 — Priority`）。全部 Done でこの Issue を閉じる。
-      value: （PBI を作ったら追記）
+      value: 未起票。採否と価値を検討してから PBI にする。
   - type: textarea
     id: notes
     attributes:
