@@ -60,7 +60,7 @@ agent/skills/dependency_maintenance/   要件5: 同じ判定を DAK エージェ
 docs/
   CHARTER.md                目的憲章（判断軸）
   maintenance/{README,DESIGN,architecture.drawio}
-  eval/{README.md,history.jsonl}
+  eval/README.md            夜間評価の記録はリリース eval-history の asset
 tests/integration/
   golden/*.json             決定論回帰コーパス（増える）
   test_golden_replay.py     golden を fake-LLM で再生
@@ -126,7 +126,7 @@ Dependabot PR
 1. **決定論 golden replay**（PR CI・高速・実LLM不要）
    `golden/*.json` を fake-LLM の制御API（`/script`）で再生し、ツール呼び出しの回帰を検出。
 2. **nightly 実LLM eval**（夜間・小型 Ollama・寛容アサーション）
-   小型モデルで gated スモークを実行し pass-rate を `history.jsonl` に追記（PR ゲートではない傾向シグナル）。
+   小型モデルで gated スモークを実行し pass-rate をリリース `eval-history` の asset `history.jsonl` に追記（PR ゲートではない傾向シグナル）。
 
 **育つ仕組み**:
 

@@ -42,7 +42,7 @@
         <mxCell id="O2" value="needs-human-review&#10;label + risk comment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1"><mxGeometry x="770" y="155" width="200" height="45" as="geometry" /></mxCell>
         <mxCell id="O3" value="Proposal Issues&#10;feature-sync / tech-watch / charter" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1"><mxGeometry x="770" y="230" width="200" height="50" as="geometry" /></mxCell>
         <mxCell id="O4" value="golden/*.json&#10;deterministic regression (grows)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1"><mxGeometry x="770" y="335" width="200" height="45" as="geometry" /></mxCell>
-        <mxCell id="O5" value="docs/eval/history.jsonl&#10;pass-rate over time" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1"><mxGeometry x="770" y="390" width="200" height="45" as="geometry" /></mxCell>
+        <mxCell id="O5" value="release eval-history / history.jsonl&#10;pass-rate over time" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1"><mxGeometry x="770" y="390" width="200" height="45" as="geometry" /></mxCell>
 
         <!-- ===== Dogfood skill ===== -->
         <mxCell id="D1" value="agent/skills/dependency_maintenance&#10;(DAK agent runs the same policy)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="500" y="430" width="210" height="45" as="geometry" /></mxCell>
