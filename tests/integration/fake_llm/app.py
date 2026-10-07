@@ -10,6 +10,10 @@ Scripted response items:
 
 When a model's queue is empty, a canned text response is returned so the
 agent loop always terminates.
+
+GET /requests/{model} returns each received request as {"messages": [...],
+"tools": [...]} (the tool definitions; [] when none were sent), oldest first;
+DELETE /script/{model} clears them with the script.
 """
 import json
 import time
@@ -91,7 +95,7 @@ def _build_message(item: Dict[str, Any]) -> (dict, str):
 @app.post("/v1/chat/completions")
 async def chat_completions(body: dict):
     model = _normalize_model(body.get("model", "unknown"))
-    _requests_log[model].append({"messages": body.get("messages", []), "tools": body.get("tools")})
+    _requests_log[model].append({"messages": body.get("messages", []), "tools": body.get("tools", [])})
 
     queue = _scripts[model]
     item = queue.popleft() if queue else {"text": DEFAULT_TEXT}
