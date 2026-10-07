@@ -81,6 +81,22 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 - 利点: 呼び出し元が Lambda なら、同じ仕組みで配置・運用できる。
 - 欠点: A2A の task を複数回の呼び出しにまたがって保持できない。ジョブ管理を自前で作る。
 
+### S1 の実測（#252、2026-10-07）
+
+`agent/Dockerfile` に AWS Lambda Web Adapter を足した dev 用イメージ（arm64、メモリ 1,536 MB、タイムアウト 15 分）を ECR に置き、東京の Lambda に配置して、us-east-1 の Nemotron Super 3 120B（`bedrock/converse/nvidia.nemotron-super-3-120b`）を呼んだ。MCP サーバは置かず（`MCP_SERVER_URL` は届かない先）、セッションは `/tmp` の SQLite。関数・イメージ・ログは測り終えて削除した。
+
+| 確かめたこと | 結果 |
+|---|---|
+| 1 ターンの実行 | 成功。`/run` が Nemotron の応答を返した（初回 15 秒、2 回目 0.8 秒。初回は MCP に届かない待ちを含む） |
+| コールドスタート | 初回の呼び出しは 18.7 秒（Init 約 8.6 秒 + セッション作成）。最初の Init は Lambda の Init 上限 10 秒に当たって一度打ち切られ、呼び出し時に再実行された（Init 8.6 秒）。Web Adapter + ADK + 依存の読み込みが 10 秒近い |
+| 30 秒を超えるターン（同期 Invoke） | 約 2,500 語の出力を求めて 379 秒、HTTP 200 で完了。直接の `Invoke` は API Gateway の 30 秒に縛られない |
+| 30 秒を超えるターン（非同期 Event） | `InvokeFunction` が 0.85 秒で 202 を返し、ターンは約 86 秒で完了した |
+| 完了の受け取り（ポーリング） | **そのままでは受け取れない。** ターンの実行中は別のコンテナが次の呼び出しを受けるので、`GET /apps/.../sessions/<id>` が 404（セッションがコンテナの `/tmp` にある）。完了後に同じコンテナへ届いた 1 回だけ 200。複数コンテナで共有するセッションの保存先（DB など）か、完了通知の仕組みが要る |
+| IAM 認証の呼び出し | `lambda:InvokeFunction` を持つロールは成功（200）、持たないロールは AccessDeniedException。別の Lambda からの呼び出しは、実行ロールを新しく作れないため試していない |
+| 費用 | Lambda の実行は約 490 秒 × 1.5 GB で約 0.01 USD。モデルのトークン数は計測していない |
+
+イメージは、読み取り専用のルートファイルシステムで動かすために `entrypoint.sh` が起動時に書く `agent.json` をビルド時に作り、`uv run` を使わず venv の uvicorn を直接起動した（`/tmp` 以外に書かない）。本番の構成（#135）では、この 2 点とセッションの保存先を決める必要がある。
+
 ### S2: Bedrock AgentCore Runtime（v2、東京対応）
 
 - A2A または HTTP のプロトコルで配置する。呼び出し元は SigV4 で `InvokeAgentRuntime` を呼ぶ。セッションは microVM に固定され、長時間の実行もストリーミングも扱える。
