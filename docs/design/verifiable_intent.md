@@ -82,7 +82,7 @@ PBI #301（元要望 #44・#48・#54）。利用者が自分の鍵で署名し�
 | 何か | DAK 独自の実装の流れ。仕様書は無い | 公開の仕様（v0.2） |
 | 流れ | 有料ツールが `PaymentRequiredError`（`agent/dak_agent/errors.py`）を出す → Observation になる → エージェントが `send_sol_payment` で SOL を送る → 送金のハッシュを付けて再試行 | 利用者が Checkout / Payment Mandate（SD-JWT）に署名し、エージェント・加盟店・決済ネットワークがそれを検証する |
 | 認可の証明 | 無い（送金のハッシュは「払った」証明で、「払ってよい」証明ではない） | Mandate の署名チェーン |
-| #301 との関係 | 検証を差し込む先（`send_sol_payment` の前段） | 制約の考え方は同じ。名前は VI に合わせる（下の「決定」で確認） |
+| #301 との関係 | 検証を差し込む先（`send_sol_payment` の前段） | 制約の考え方は同じ。名前は VI に合わせる（下の「決定」） |
 
 #301 は Google AP2 にも VI にも「準拠」しない。VI の L2 の形を借りて、DAK の支払いの流れの送金の前に検証を 1 つ足すだけ。
 
@@ -149,4 +149,8 @@ PBI #301 の決定ログどおり、ADK の `before_tool_callback` を `Adaptive
 
 ## 決定
 
-（利用者の回答を待っている。PBI #301 の決定ログに引用する）
+2026-10-07、利用者の回答（#302 の `## 判断待ち` への回答「#302 は推奨どおりです。a-1 採用、l-1 cryptography だけで自前で書く、n-1 VI の名前（payment.amount / payment.allowed_payee）」）:
+
+1. **採用する**。範囲は上の「DAK で検証する範囲（案）」と「仕様との差」のとおり（L2 だけ、支払いの mandate 1 つだけの DAK のプロファイル、既定は無効）
+2. **ライブラリは自前**（`cryptography` だけ）。参照実装は入れない
+3. **制約の名前は VI v0.1 のもの**（`payment.amount` / `payment.allowed_payee`）。PBI #301 と #303 の本文もこの名前に直す
