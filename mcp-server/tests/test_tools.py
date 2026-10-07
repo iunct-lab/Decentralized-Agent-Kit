@@ -328,6 +328,30 @@ class TestSessionSandboxRouting(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await main.search_files("*.txt", ".", ctx=_ctx("s2")), "")
             self.assertEqual(await main.grep("bye", ".", ctx=_ctx("s2")), "No matches found.")
 
+    async def test_docker_search_and_grep_match_the_local_files(self):
+        # A hard link is a link entry in tar; a vertical tab is not a line break for open().
+        with tempfile.TemporaryDirectory() as root, \
+                patch.object(main, "_sandbox", SandboxManager(mode="docker", run=_fake_docker(root))):
+            await main.write_file("a.txt", "alpha\x0bbeta\n", ctx=_ctx("s1"))
+            workdir = os.path.join(root, main._sandbox._container_name("s1"))
+            os.link(os.path.join(workdir, "a.txt"), os.path.join(workdir, "b.txt"))
+            self.assertEqual(await main.search_files("b.txt", ".", ctx=_ctx("s1")), "./b.txt")
+            self.assertEqual(await main.grep("beta", ".", glob_pattern="b.txt", ctx=_ctx("s1")),
+                             "./b.txt:1: alpha\x0bbeta")
+
+    async def test_edit_file_bare_name_in_off_mode(self):
+        with tempfile.TemporaryDirectory() as d:
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                with open("a.txt", "w") as f:
+                    f.write("hello")
+                self.assertEqual(await main.edit_file("a.txt", "hello", "bye"), "Replaced 1 occurrence in a.txt")
+                with open("a.txt") as f:
+                    self.assertEqual(f.read(), "bye")
+            finally:
+                os.chdir(cwd)
+
     async def test_docker_paths_outside_the_workspace_are_refused(self):
         run = MagicMock()
         with patch.object(main, "_sandbox", SandboxManager(mode="docker", run=run)):
