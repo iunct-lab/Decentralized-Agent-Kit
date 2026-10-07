@@ -1,8 +1,10 @@
+import html
 import json
 import os
 import uuid
 import httpx
 import logging
+from urllib.parse import quote
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -95,69 +97,9 @@ async def chat(request: Request, prompt: str = Form(...), session_id: str = Form
                 # Remove loading indicator
                 yield '<div id="loading-indicator" hx-swap-oob="true"></div>\n'
                 
-                # Parse response into Thoughts and Final Answer
-                thoughts = []
-                response_text = ""
-                
                 # Normalize data to list
                 events = data if isinstance(data, list) else [data]
-                
-                for event in events:
-                    # Handle standard ADK event format
-                    if "content" in event and "parts" in event["content"]:
-                        for part in event["content"]["parts"]:
-                            # 1. Direct Text (Model thought or answer)
-                            if "text" in part:
-                                response_text += part["text"]
-                            
-                            # 2. Tool Calls (Thoughts/Actions)
-                            elif "functionCall" in part:
-                                fc = part["functionCall"]
-                                name = fc.get("name", "unknown")
-                                args = json.dumps(fc.get("args", {}))
-                                thoughts.append(f'<div class="thought-item"><span class="thought-label">Action:</span> Called <strong>{name}</strong></div>')
-                                thoughts.append(f'<div class="thought-args">{args}</div>')
-                            
-                            # 3. Tool Responses (Observations)
-                            elif "functionResponse" in part:
-                                func_resp = part["functionResponse"]
-                                name = func_resp.get("name", "unknown")
-                                
-                                # Special handling for user-facing tools
-                                if name in ["ask_question", "attempt_answer"]:
-                                    if "response" in func_resp and "result" in func_resp["response"]:
-                                        response_text += str(func_resp["response"]["result"]) + "\n"
-                                else:
-                                    # Internal tool results go to thoughts
-                                    result = "No result"
-                                    if "response" in func_resp:
-                                        result = json.dumps(func_resp["response"])
-                                    
-                                    # Highlight Payment Errors
-                                    if "Payment Required" in result:
-                                        thoughts.append(f'<div class="thought-item error"><span class="thought-label">System:</span> <strong>Payment Required</strong></div>')
-                                    
-                                    thoughts.append(f'<div class="thought-item"><span class="thought-label">Observation:</span> {name} returned: {result[:200]}...</div>')
-
-                # Construct HTML
-                html_output = '<div class="chat-message assistant">'
-                
-                # Add Thoughts block if exists
-                if thoughts:
-                    html_output += f'''
-                    <details class="thoughts">
-                        <summary>Thinking Process ({len(thoughts)} steps)</summary>
-                        <div class="thought-content">
-                            {"".join(thoughts)}
-                        </div>
-                    </details>
-                    '''
-                
-                # Add Final Answer
-                html_output += f'<div class="message-content">{response_text}</div>'
-                html_output += '</div>\n'
-                
-                yield html_output
+                yield _render_agent_turn_html(events, current_session_id, current_user_id)
 
         except Exception as e:
             logger.error(f"Error in chat: {e}")
@@ -165,3 +107,116 @@ async def chat(request: Request, prompt: str = Form(...), session_id: str = Form
             yield '<div id="loading-indicator" hx-swap-oob="true"></div>\n'
 
     return StreamingResponse(event_generator(), media_type="text/html")
+
+
+# A tool call the agent holds for the user's answer (docs/design/approval-queue.md)
+REQUEST_CONFIRMATION = "adk_request_confirmation"
+
+
+def _render_agent_turn_html(events: list, session_id: str, user_id: str) -> str:
+    """One agent turn (ADK events, as `/run` returns them) as chat HTML."""
+    thoughts = []
+    response_text = ""
+    approval_card = ""
+
+    for event in events:
+        if approval_card:
+            break  # the turn waits for the answer; nothing after it is shown
+        # Handle standard ADK event format
+        if "content" in event and "parts" in event["content"]:
+            for part in event["content"]["parts"]:
+                # 1. Direct Text (Model thought or answer)
+                if "text" in part:
+                    response_text += part["text"]
+
+                # 2. Tool Calls (Thoughts/Actions)
+                elif "functionCall" in part:
+                    fc = part["functionCall"]
+                    if fc.get("name") == REQUEST_CONFIRMATION:
+                        approval_card = _render_approval_card(fc, session_id, user_id)
+                        break
+                    name = fc.get("name", "unknown")
+                    args = json.dumps(fc.get("args", {}))
+                    thoughts.append(f'<div class="thought-item"><span class="thought-label">Action:</span> Called <strong>{name}</strong></div>')
+                    thoughts.append(f'<div class="thought-args">{args}</div>')
+
+                # 3. Tool Responses (Observations)
+                elif "functionResponse" in part:
+                    func_resp = part["functionResponse"]
+                    name = func_resp.get("name", "unknown")
+
+                    # Special handling for user-facing tools
+                    if name in ["ask_question", "attempt_answer"]:
+                        if "response" in func_resp and "result" in func_resp["response"]:
+                            response_text += str(func_resp["response"]["result"]) + "\n"
+                    else:
+                        # Internal tool results go to thoughts
+                        result = "No result"
+                        if "response" in func_resp:
+                            result = json.dumps(func_resp["response"])
+
+                        # Highlight Payment Errors
+                        if "Payment Required" in result:
+                            thoughts.append(f'<div class="thought-item error"><span class="thought-label">System:</span> <strong>Payment Required</strong></div>')
+
+                        thoughts.append(f'<div class="thought-item"><span class="thought-label">Observation:</span> {name} returned: {result[:200]}...</div>')
+
+    # Construct HTML
+    html_output = '<div class="chat-message assistant">'
+
+    # Add Thoughts block if exists
+    if thoughts:
+        html_output += f'''
+        <details class="thoughts">
+            <summary>Thinking Process ({len(thoughts)} steps)</summary>
+            <div class="thought-content">
+                {"".join(thoughts)}
+            </div>
+        </details>
+        '''
+
+    # Add Final Answer
+    html_output += f'<div class="message-content">{response_text}</div>'
+    html_output += '</div>\n'
+    return html_output + approval_card
+
+
+def _render_approval_card(fc: dict, session_id: str, user_id: str) -> str:
+    """Approve / Reject buttons for one held call. The values come from the
+    model and the page, so they are escaped."""
+    original = fc.get("args", {}).get("originalFunctionCall", {})
+    fc_id = html.escape(quote(str(fc.get("id")), safe=""))
+    tool_name = html.escape(str(original.get("name", "unknown")))
+    tool_args = html.escape(json.dumps(original.get("args", {})))
+    session_id, user_id = html.escape(session_id), html.escape(user_id)
+    return (
+        '<div class="chat-message system approval-card">'
+        f'<div>Tool: <strong>{tool_name}</strong></div><div class="thought-args">{tool_args}</div>'
+        f'<form hx-post="/chat/approvals/{fc_id}" hx-target="#chat-history" hx-swap="beforeend">'
+        f'<input type="hidden" name="session_id" value="{session_id}">'
+        f'<input type="hidden" name="user_id" value="{user_id}">'
+        '<button type="submit" name="mode" value="once" class="approve">Approve</button>'
+        '<button type="submit" name="mode" value="reject" class="reject">Reject</button>'
+        '</form></div>\n'
+    )
+
+
+@app.post("/chat/approvals/{fc_id}")
+async def answer_approval(fc_id: str, mode: str = Form(...), session_id: str = Form(...), user_id: str = Form(...)):
+    """Answer a held call through the agent's /approvals (the route every client
+    uses) and show the turn it resumes."""
+    headers = {"Content-Type": "application/json", "X-User-ID": user_id, "X-Session-ID": session_id}
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                f"{AGENT_URL}/approvals/{quote(fc_id, safe='')}/reply",
+                json={"user_id": user_id, "session_id": session_id, "mode": mode},
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as e:
+        logger.error(f"Error answering approval: {e}")
+        return HTMLResponse(f'<div class="chat-message error">Error: {html.escape(str(e))}</div>\n')
+    events = data if isinstance(data, list) else [data]
+    return HTMLResponse(_render_agent_turn_html(events, session_id, user_id))
