@@ -108,7 +108,7 @@
 - 試行は最初の応答を含めて最大 `max_llm_calls`（`dak:max_llm_calls` と運用者の `DAK_MAX_LLM_CALLS` の小さい方）、どちらも無ければ 3 回
 - `dak:inspection` の検査は、応答を JSON として読んでから順にかけ、エラーをつなげる
   - `json_schema`: JSON Schema（`dak:output_schema` と同じ検証。構造化出力の指定はしない）
-  - `http`: 呼び出し元のエンドポイントに応答を JSON で POST する。答えは `{"valid": true}` か `{"valid": false, "errors": [{"path": "...", "message": "..."}]}`。2xx 以外・接続できない・JSON でない答えは、検査に落ちた扱い
+  - `http`: 呼び出し元のエンドポイントに応答を JSON で POST する。答えは `{"valid": true}` か `{"valid": false, "errors": [{"path": "...", "message": "..."}]}`。2xx 以外・接続できない・JSON でない答えは、検査が動かなかった扱い（下）
   - `mcp`: 呼び出し元の MCP サーバ（streamable HTTP）のツール `tool` を `{"data": <応答>}` で 1 回呼ぶ。ツールのテキストの答えは `http` と同じ形
   - `timeout_seconds` は 1 回の検査の上限（既定 10、最大 60）
 - 検査そのものが動かなかったとき（エンドポイントに繋がらない・時間切れ・答えが読めない・MCP のツールのエラー）は、作り直しても直らないので作り直さず、そのエラーで失敗を返す。そのエラーには `"unavailable": true` が付く
