@@ -311,6 +311,10 @@ MRTR（MCP 2026-07-28、SEP-2322）との対応: 保留の 1 件 ↔ `InputRequi
 | P3 | **プロンプトキャッシュ** | `ContextCacheConfig`（Gemini/Anthropic）でコストと遅延を下げる | #94 |
 | P3 | **サンドボックス** | ファイル・コマンド系ツールの分離 | #20, #31, #43, #80 |
 
+P3 の「プロンプトキャッシュ」について決めたこと（既定で有効にするかは `docs/design/prompt_cache_evaluation.md`、#94。先頭の安定は #105）:
+
+- **圧縮の要約リクエストはキャッシュを書かない**（#266）: 要約器（`BudgetedEventSummarizer`）が送るのは毎回内容が変わる一回限りのプロンプトで、後のリクエストと先頭を共有しない。書き込んでも再利用されず、書き込みの割増しだけが乗る。今の要約器は自分で `LlmRequest` を組むので、App がキャッシュを有効にしても `cache_config` は `None` のまま（`agent/tests/test_context_cache_interaction.py` の `test_cache_config_survives_compaction` が固定）。プロバイダごとの指定（`cache_control` など）で明示的に抑える必要が出たら #94 で扱う
+
 ## 5. 2 度目の発端: 圧縮の要約リクエスト自身が窓を超えた（2026-09-14）
 
 §3 のハーネスを入れた後、外部のクライアントから llama.cpp（Qwen3 27B, `n_ctx=32768`）の DAK に
