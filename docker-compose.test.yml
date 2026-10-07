@@ -97,6 +97,32 @@ services:
       retries: 30
       start_period: 20s
 
+  # tests/integration/test_request_snapshot.py: the sliding-window compaction
+  # runs every 3 invocations (the fake LLM's usage never reaches the token threshold).
+  agent-harness-eval:
+    build: ./agent
+    ports:
+      - "8012:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://username:password@postgres:5432/postgres
+      - SESSION_SERVICE_URI=postgresql+asyncpg://username:password@postgres:5432/postgres
+      - MCP_SERVER_URL=http://mcp-server:8000/mcp
+      - MODEL_NAME=openai/fake-harness
+      - OPENAI_API_BASE=http://fake-llm:8080/v1
+      - OPENAI_API_KEY=dummy
+      - MODEL_CONTEXT_WINDOW=4000
+      - DAK_COMPACTION_INTERVAL=3
+    depends_on:
+      - postgres
+      - fake-llm
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/list-apps')"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+
   mcp-server:
     healthcheck:
       # GET /mcp answers 4xx without a proper MCP handshake; any HTTP response means the server is up

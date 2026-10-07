@@ -13,6 +13,7 @@ import pytest
 AGENT_URL = os.getenv("DAK_AGENT_URL", "http://localhost:8000")
 AGENT_ENFORCER_URL = os.getenv("DAK_AGENT_ENFORCER_URL", "http://localhost:8010")
 AGENT_AP2_URL = os.getenv("DAK_AGENT_AP2_URL", "http://localhost:8011")
+AGENT_HARNESS_EVAL_URL = os.getenv("DAK_AGENT_HARNESS_EVAL_URL", "http://localhost:8012")
 MCP_URL = os.getenv("DAK_MCP_URL", "http://localhost:8001/mcp")
 BFF_URL = os.getenv("DAK_BFF_URL", "http://localhost:8002")
 FAKE_LLM_URL = os.getenv("DAK_FAKE_LLM_URL", "http://localhost:8089")
@@ -123,6 +124,11 @@ def agent_enforcer():
 @pytest.fixture
 def agent_ap2():
     return AgentClient(AGENT_AP2_URL)
+
+
+@pytest.fixture
+def agent_harness_eval():
+    return AgentClient(AGENT_HARNESS_EVAL_URL)
 
 
 # --- Event helpers ---

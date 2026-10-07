@@ -1,0 +1,13 @@
+[
+  "planner",
+  "switch_mode",
+  "write_todos",
+  "read_plan",
+  "read_original_request",
+  "write_handoff",
+  "read_handoff",
+  "plan_exit",
+  "read_tool_output",
+  "list_skills",
+  "enable_skill"
+]
