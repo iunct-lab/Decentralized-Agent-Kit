@@ -77,10 +77,10 @@ class TestProjectInstructions(unittest.IsolatedAsyncioTestCase):
 
     async def test_truncates_at_bytes_without_splitting_a_character(self):
         self._write("AGENTS.md", "あ" * 30)  # 3 bytes each
-        with patch.object(main, "MAX_INSTRUCTIONS_BYTES", 32):
+        with patch.object(main, "MAX_INSTRUCTIONS_BYTES", 34):  # 20 + 12 bytes + 2 of a 5th
             result = await main.get_project_instructions(".")
         body = result.split("\n\n[truncated", 1)[0]
-        self.assertEqual(body, "--- ./AGENTS.md ---\n" + "あ" * 4)  # 20 + 12 bytes
+        self.assertEqual(body, "--- ./AGENTS.md ---\n" + "あ" * 4)
 
     async def test_untrusted_path_returns_not_read_marker(self):
         os.makedirs("other")
@@ -119,7 +119,6 @@ class TestProjectInstructions(unittest.IsolatedAsyncioTestCase):
         result = await main.get_project_instructions("link")
         self.assertTrue(result.startswith("[not read"))
 
-
     async def test_instruction_file_symlinked_outside_the_workspace_is_not_read(self):
         outside = tempfile.TemporaryDirectory()
         self.addCleanup(outside.cleanup)
@@ -128,6 +127,7 @@ class TestProjectInstructions(unittest.IsolatedAsyncioTestCase):
         os.symlink(os.path.join(outside.name, "secret.md"), "sub/AGENTS.md")
         result = await main.get_project_instructions("sub")
         self.assertEqual(result, "--- ./AGENTS.md ---\nroot rules\n")
+
 
 if __name__ == "__main__":
     unittest.main()
