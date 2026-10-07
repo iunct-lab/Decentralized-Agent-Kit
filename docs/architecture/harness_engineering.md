@@ -77,6 +77,9 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
      （`tool_output_<tool>_<call_id>.txt`）へ退避する。エージェントは
      `read_tool_output(artifact_name, offset, limit, pattern)` で続きを読んだり、
      正規表現で絞り込んだりできる。
+   - プレビューの先頭には `[truncated: original N chars / L lines; kept head H chars + tail T chars; artifact=<name>]`
+     の見出しを付け、間の省略は `... [X chars / Y lines omitted] ...` と書く（退避できなかったときは
+     `artifact=` を付けない）。モデルが切り詰めを全出力と取り違えないため。
    - MCP 結果で `structuredContent` が本文の複製になっている場合は落とす（全 MCP 呼び出しで
      約半分の節約になる）。
 2. **ADK の token-threshold compaction**（`EventsCompactionConfig`）

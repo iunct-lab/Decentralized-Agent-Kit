@@ -338,13 +338,32 @@ class TestToolOutputBudget:
 
         assert result["truncated"] is True
         assert result["original_chars"] == len(text)
-        assert len(result["result"]) < 2100
-        assert result["result"].startswith("line 0\n")
-        assert result["result"].rstrip().endswith("line 1999")
+        assert len(result["result"]) < 2300
+        header, body = result["result"].split("\n", 1)
+        assert header == ("[truncated: original 18890 chars / 2000 lines; kept head 1400 chars + tail 600 chars; "
+                          "artifact=tool_output_read_file_call-1.txt]")
+        assert body.startswith("line 0\n")
+        assert body.endswith("line 1999\n")
         assert result["full_output_artifact"] == "tool_output_read_file_call-1.txt"
         saved_name, saved_part = ctx.save_artifact.call_args.args
         assert saved_name == result["full_output_artifact"]
         assert saved_part.text == text
+
+    def test_preview_header_reports_original_size_and_kept_ranges(self):
+        text = "abcdefghij\n" * 10  # 110 chars / 10 lines
+
+        preview = harness._preview(text, 20, "tool_output_x.txt")
+
+        assert preview == (
+            "[truncated: original 110 chars / 10 lines; kept head 14 chars + tail 6 chars; "
+            "artifact=tool_output_x.txt]\n"
+            "abcdefghij\nabc\n\n... [90 chars / 8 lines omitted] ...\n\nfghij\n")
+
+    def test_preview_header_omits_artifact_when_none(self):
+        preview = harness._preview("x" * 100, 20, None)
+
+        assert preview.startswith("[truncated: original 100 chars / 1 lines; kept head 14 chars + tail 6 chars]\n")
+        assert "artifact=" not in preview
 
     @pytest.mark.asyncio
     async def test_without_artifact_service_still_truncates(self):
