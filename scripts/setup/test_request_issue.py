@@ -94,6 +94,8 @@ def test_feature_request_template_uses_request_sections():
     for label in ("label: 要望\n", "label: 出典\n", "label: 派生 PBI\n"):
         assert label in template
     assert "原文" not in template
+    derived = request_issue.request_body("x", "y").split("## 派生 PBI\n\n")[1].split("。")[0]
+    assert f"value: {derived}。" in template  # same "not filed yet" marker as the scheduled requests
 
 
 @pytest.mark.parametrize("title", ["要望: Adopt X", "要望:Adopt X", "要望:   Adopt X"])
