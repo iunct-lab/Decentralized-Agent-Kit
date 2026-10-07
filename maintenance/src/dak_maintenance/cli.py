@@ -268,11 +268,13 @@ def cmd_license_check(args: argparse.Namespace) -> int:
     try:
         policy = license.load_policy(args.policy)
         packages = json.loads(Path(args.input).read_text(encoding="utf-8"))
+        lock = license.read_lock(Path(args.lock).read_text(encoding="utf-8")) if args.lock else []
     except (OSError, ValueError, KeyError) as e:
         print(f"error: 方針か一覧が読めない: {e}", file=sys.stderr)
         return 2
     try:
-        findings = license.check(args.component, packages, policy, exclude=set(args.exclude))
+        findings = license.check(args.component, license.add_lock_only(packages, lock), policy,
+                                 exclude=set(args.exclude))
     except (ValueError, KeyError, TypeError) as e:  # 方針の値が SPDX の式でない、必須の欄が無いなど
         print(f"error: 方針か一覧の形が違う: {e!r}", file=sys.stderr)
         return 2
@@ -353,6 +355,7 @@ def build_parser() -> argparse.ArgumentParser:
     lc.add_argument("--component", required=True)
     lc.add_argument("--input", required=True, help="pip-licenses --from=all --format=json の出力")
     lc.add_argument("--policy", default="license-policy.toml")
+    lc.add_argument("--lock", default="", help="uv export --frozen --no-dev の出力。環境に無い依存を PyPI の JSON で判定する")
     lc.add_argument("--exclude", action="append", default=[], help="コンポーネント自身のパッケージ名（繰り返し可）")
     lc.add_argument("--markdown-out", default="", help="全件の表を書く先（CI の成果物）")
     lc.set_defaults(func=cmd_license_check)

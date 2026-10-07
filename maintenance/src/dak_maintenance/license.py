@@ -2,6 +2,7 @@
 
 入力は `pip-licenses --from=all --format=json` の一覧。欄は `License-Expression`（PEP 639）→
 `License-Metadata` → `License-Classifier` の順に、SPDX の式にそろえられた最初のものを採る。
+環境に入らない依存（Windows でだけ入るものなど）は、`uv export` の lock と突き合わせて PyPI の JSON から同じ形の行を作る。
 方針と取り方の理由は `docs/maintenance/license-policy.md`。
 """
 
@@ -9,8 +10,11 @@ from __future__ import annotations
 
 import re
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+import httpx
 
 FIELDS = ("License-Expression", "License-Metadata", "License-Classifier")
 _OPERATORS = {"AND", "OR", "WITH"}
@@ -165,6 +169,42 @@ def _exception_for(policy: Policy, component: str, package: str) -> dict | None:
     return None
 
 
+def read_lock(text: str) -> list[tuple[str, str]]:
+    """`uv export --format requirements-txt` の出力から (名前, 版) を読む。`-e .` と `--hash` の行は飛ばす。"""
+    return [(m[1], m[2]) for line in text.splitlines()
+            if (m := re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)", line))]
+
+
+def fetch_pypi(name: str, version: str) -> dict:
+    r = httpx.get(f"https://pypi.org/pypi/{name}/{version}/json", timeout=10.0)
+    r.raise_for_status()
+    return r.json()["info"]
+
+
+def pypi_entry(name: str, version: str, info: dict) -> dict:
+    """PyPI の JSON の `info` を pip-licenses の 3 つの欄の形に写す。"""
+    classifiers = [c.split(" :: ")[-1] for c in info.get("classifiers") or [] if c.startswith("License ::")]
+    return {"Name": name, "Version": version, "Source": "PyPI",
+            "License-Expression": info.get("license_expression") or "UNKNOWN",
+            "License-Metadata": info.get("license") or "UNKNOWN",
+            "License-Classifier": "; ".join(classifiers) or "UNKNOWN"}
+
+
+def add_lock_only(packages: list[dict], lock: list[tuple[str, str]],
+                  fetch: Callable[[str, str], dict] = fetch_pypi) -> list[dict]:
+    """lock にあって環境の一覧に無い (名前, 版) を、PyPI から取った行として足す。取れなければ欄は空（不明）。"""
+    installed = {(canonical_name(p["Name"]), p.get("Version", "")) for p in packages}
+    added = []
+    for name, version in lock:
+        if (canonical_name(name), version) in installed:
+            continue
+        try:
+            added.append(pypi_entry(name, version, fetch(name, version)))
+        except (httpx.HTTPError, KeyError, ValueError) as e:
+            added.append({"Name": name, "Version": version, "Source": "PyPI", "Error": repr(e)})
+    return packages + added
+
+
 def check(component: str, packages: list[dict], policy: Policy, exclude: set[str] = frozenset()) -> list[Finding]:
     """pip-licenses の一覧を判定する。`exclude` はコンポーネント自身のパッケージ名。"""
     excluded = {canonical_name(n) for n in exclude}
@@ -181,6 +221,8 @@ def check(component: str, packages: list[dict], policy: Policy, exclude: set[str
         )
         if expr is None and (name, version) in policy.verified:  # 欄で決まらないときだけ。版が変われば確かめ直す
             expr, source = policy.verified[(name, version)], "方針の verified（LICENSE ファイルで確認）"
+        if pkg.get("Source") == "PyPI":  # 環境に無く、PyPI の JSON から取った行
+            source = f"PyPI {source}".strip()
         exc = _exception_for(policy, component, name)
         if exc and expr is not None and expr != exc["license"] and not evaluate_expression(expr, policy.allow):
             # 例外は認めたときのライセンスに対してだけ。表記がそろえられて別の許容外のライセンスになったら止める
@@ -190,7 +232,8 @@ def check(component: str, packages: list[dict], policy: Policy, exclude: set[str
             findings.append(Finding(component, pkg["Name"], version, exc["license"], "exception",
                                     f"{exc['reason']}（確認 {exc['reviewed']}）"))
         elif expr is None:
-            raw = " / ".join(f"{f}={pkg.get(f, '')!r}"[:80] for f in FIELDS)
+            raw = pkg.get("Error") and f"PyPI に問い合わせられない: {pkg['Error']}"[:200] \
+                or " / ".join(f"{f}={pkg.get(f, '')!r}"[:80] for f in FIELDS)
             findings.append(Finding(component, pkg["Name"], version, "不明", "unknown", raw))
         elif evaluate_expression(expr, policy.allow):
             findings.append(Finding(component, pkg["Name"], version, expr, "ok", source))
