@@ -30,7 +30,7 @@ jobs:
         id: add
         with:
           # Project の URL を Variables に登録して使う（root の ops.config.json の projectUrl と同じ）。
-          # 例: gh variable set DAK_PROJECT_URL --body "https://github.com/users/teeppp/projects/N"
+          # 例: gh variable set DAK_PROJECT_URL --body "$(jq -r .projectUrl ops.config.json)"
           project-url: ${{ vars.DAK_PROJECT_URL }}
           github-token: ${{ secrets.DAK_PROJECT_TOKEN }}
       # 新しい Issue の Status を Backlog にする（Status 未設定のときだけ。
