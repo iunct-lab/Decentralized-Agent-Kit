@@ -8,7 +8,7 @@
 
 | # | 要件 | 実現手段 |
 |---|------|----------|
-| 1 | GitHub Project / Issue を活用 | Issue/PR テンプレ・labels・CODEOWNERS・**Project を単一の真実**にする自動投入 + bootstrap/seed |
+| 1 | GitHub Project / Issue を活用 | Issue/PR テンプレ・labels・CODEOWNERS・**Project を単一の真実**にする自動投入 + 固有の値の `ops.config.json` |
 | 2 | 脆弱性更新の自動判定・自動更新 | Dependabot → `dependency-triage` が **semver×CI×リスク** で判定し安全なものだけ auto-merge |
 | 3 | 機能更新の迅速な取り込み | `feature-sync` が release notes の**新機能**を要約し、取り込みの要望 Issue を起票 |
 | 4 | 新技術の目的ベース提案・目的の定期見直し | `docs/CHARTER.md`（憲章）+ `tech-watch`（隔週）+ `charter-review`（四半期） |

@@ -48,7 +48,7 @@
         <mxCell id="D1" value="agent/skills/dependency_maintenance&#10;(DAK agent runs the same policy)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1"><mxGeometry x="500" y="430" width="210" height="45" as="geometry" /></mxCell>
 
         <!-- ===== Hub ===== -->
-        <mxCell id="HUB" value="GitHub Project — single source of truth (Phase 1)&#10;Issue/PR templates · labels · CODEOWNERS · project-autoadd · bootstrap/seed scripts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=3;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="250" y="540" width="720" height="60" as="geometry" /></mxCell>
+        <mxCell id="HUB" value="GitHub Project — single source of truth (Phase 1)&#10;Issue/PR templates · labels · CODEOWNERS · project-autoadd · ops.config.json" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=3;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="250" y="540" width="720" height="60" as="geometry" /></mxCell>
 
         <!-- ===== Edges ===== -->
         <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;" edge="1" parent="1" source="T1" target="W1"><mxGeometry relative="1" as="geometry" /></mxCell>
