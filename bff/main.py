@@ -114,7 +114,9 @@ REQUEST_CONFIRMATION = "adk_request_confirmation"
 
 
 def _render_agent_turn_html(events: list, session_id: str, user_id: str) -> str:
-    """One agent turn (ADK events, as `/run` returns them) as chat HTML."""
+    """One agent turn (ADK events, as `/run` returns them) as chat HTML. Text
+    and tool calls come from the model, so they are escaped: a script among
+    them could press the Approve button of the card below."""
     thoughts = []
     response_text = ""
     approval_card = ""
@@ -127,7 +129,7 @@ def _render_agent_turn_html(events: list, session_id: str, user_id: str) -> str:
             for part in event["content"]["parts"]:
                 # 1. Direct Text (Model thought or answer)
                 if "text" in part:
-                    response_text += part["text"]
+                    response_text += html.escape(part["text"])
 
                 # 2. Tool Calls (Thoughts/Actions)
                 elif "functionCall" in part:
@@ -135,20 +137,20 @@ def _render_agent_turn_html(events: list, session_id: str, user_id: str) -> str:
                     if fc.get("name") == REQUEST_CONFIRMATION:
                         approval_card = _render_approval_card(fc, session_id, user_id)
                         break
-                    name = fc.get("name", "unknown")
-                    args = json.dumps(fc.get("args", {}))
+                    name = html.escape(str(fc.get("name", "unknown")))
+                    args = html.escape(json.dumps(fc.get("args", {})))
                     thoughts.append(f'<div class="thought-item"><span class="thought-label">Action:</span> Called <strong>{name}</strong></div>')
                     thoughts.append(f'<div class="thought-args">{args}</div>')
 
                 # 3. Tool Responses (Observations)
                 elif "functionResponse" in part:
                     func_resp = part["functionResponse"]
-                    name = func_resp.get("name", "unknown")
+                    name = html.escape(str(func_resp.get("name", "unknown")))
 
                     # Special handling for user-facing tools
                     if name in ["ask_question", "attempt_answer"]:
                         if "response" in func_resp and "result" in func_resp["response"]:
-                            response_text += str(func_resp["response"]["result"]) + "\n"
+                            response_text += html.escape(str(func_resp["response"]["result"])) + "\n"
                     else:
                         # Internal tool results go to thoughts
                         result = "No result"
@@ -159,7 +161,7 @@ def _render_agent_turn_html(events: list, session_id: str, user_id: str) -> str:
                         if "Payment Required" in result:
                             thoughts.append(f'<div class="thought-item error"><span class="thought-label">System:</span> <strong>Payment Required</strong></div>')
 
-                        thoughts.append(f'<div class="thought-item"><span class="thought-label">Observation:</span> {name} returned: {result[:200]}...</div>')
+                        thoughts.append(f'<div class="thought-item"><span class="thought-label">Observation:</span> {name} returned: {html.escape(result[:200])}...</div>')
 
     # Construct HTML
     html_output = '<div class="chat-message assistant">'
