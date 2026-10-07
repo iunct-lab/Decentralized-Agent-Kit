@@ -182,12 +182,15 @@ def test_inspection_retries_once_then_succeeds(agent, fake_llm):
     _script_inspection(DATE_MISSING)  # then valid
     fake_llm.script(MODEL, [fake_llm.text('{"note": "missing date"}'), fake_llm.text('{"date": "2026-09-22"}')])
 
-    events = _run(agent, agent.create_session(), "when?", {"dak:inspection": {"http": {"url": INSPECT_URL}}})
+    inspection = {"json_schema": DATE_SCHEMA, "http": {"url": INSPECT_URL}}
+    events = _run(agent, agent.create_session(), "when?", {"dak:inspection": inspection})
 
     assert json.loads(event_texts(events)[-1]) == {"date": "2026-09-22"}, f"events: {events}"
     requests = httpx.get(f"{FAKE_LLM_URL}/requests/{MODEL}", timeout=10.0).json()
     assert len(requests) == 2
-    assert "date is missing" in json.dumps(requests[1]["messages"])  # the inspection's error, sent back
+    # Both checks' errors are sent back: the JSON Schema's and the endpoint's.
+    retry = json.dumps(requests[1]["messages"])
+    assert "date is missing" in retry and "is a required property" in retry
     assert _inspected() == [{"note": "missing date"}, {"date": "2026-09-22"}]
 
 
