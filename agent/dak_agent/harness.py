@@ -325,9 +325,10 @@ class BudgetedEventSummarizer(LlmEventSummarizer):
 
     Prompt cache: the summary request is a one-off prompt whose content changes
     every time and shares no prefix with later requests, so it asks for no cache
-    write (``cache_config`` stays ``None`` even when the app enables one; pinned by
-    ``tests/test_context_cache_interaction.py``). Per-provider controls such as
-    ``cache_control`` belong to #94.
+    write (``cache_config`` stays ``None`` even when the app enables one, so no
+    cache marks are sent; pinned by ``tests/test_context_cache_interaction.py``).
+    Caching a provider does on its own, without marks, is not suppressed here;
+    per-provider controls belong to #94.
     """
 
     def __init__(self, llm: Any, settings: HarnessSettings, prompt_template: Optional[str] = None):
