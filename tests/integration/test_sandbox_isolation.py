@@ -50,6 +50,18 @@ def _container(session_key: str) -> str:
     return "dak-sandbox-" + hashlib.sha256(session_key.encode()).hexdigest()[:16]
 
 
+def _docker_memory_bytes(size: str) -> int:
+    """What docker makes of a --memory value, read from a container created with it and never started."""
+    image = os.getenv("SANDBOX_IMAGE", "python:3.12-slim")
+    cid = subprocess.run(["docker", "create", "--memory", size, image, "true"],
+                         check=True, capture_output=True, text=True).stdout.strip()
+    try:
+        inspected = subprocess.run(["docker", "inspect", cid], check=True, capture_output=True, text=True)
+        return json.loads(inspected.stdout)[0]["HostConfig"]["Memory"]
+    finally:
+        subprocess.run(["docker", "rm", cid], capture_output=True)
+
+
 def _sandbox_containers() -> set[str]:
     out = subprocess.run(["docker", "ps", "-a", "--filter", "label=dak.sandbox=1", "--format", "{{.Names}}"],
                          check=True, capture_output=True, text=True).stdout
@@ -96,11 +108,7 @@ def test_resource_limits_are_applied():
     pids = int(os.getenv("SANDBOX_PIDS_LIMIT", "128"))
 
     assert host_config["NanoCpus"] == int(cpus * 1e9)
-    # SANDBOX_MEMORY is parsed by docker itself; only the default is compared here, and the
-    # cgroup check below shows that whatever docker made of it is enforced.
-    if "SANDBOX_MEMORY" not in os.environ:
-        assert host_config["Memory"] == 512 * 1024 ** 2
-    assert host_config["Memory"] > 0
+    assert host_config["Memory"] == _docker_memory_bytes(os.getenv("SANDBOX_MEMORY", "512m"))
     assert host_config["PidsLimit"] == pids
     assert host_config["NetworkMode"] == "none"
     assert host_config["ReadonlyRootfs"] is True
