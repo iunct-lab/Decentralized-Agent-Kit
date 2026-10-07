@@ -104,6 +104,11 @@ def test_verified_record_resolves_an_ambiguous_label(policy):
     assert (f.license, f.status) == ("BSD-3-Clause", "ok")
 
 
+def test_verified_record_wins_over_free_text_fields_of_its_version(policy):
+    [f] = check("bff", [_pkg("Jinja2", metadata="MIT", version="3.1.6")], policy)
+    assert (f.license, f.status) == ("BSD-3-Clause", "ok")
+
+
 def test_verified_record_does_not_hide_a_new_version_or_a_declared_license(policy):
     [newer] = check("bff", [_pkg("Jinja2", classifier="BSD License", version="3.2.0")], policy)
     [declared] = check("bff", [_pkg("Jinja2", expression="GPL-3.0-only", version="3.1.6")], policy)
@@ -229,7 +234,7 @@ def test_only_lock_entries_missing_from_the_environment_are_fetched(policy):
     findings = check("cli", add_lock_only(env, read_lock(LOCK), fetch), policy)
     assert asked == [("colorama", "0.4.6")]
     [colorama] = [f for f in findings if f.package == "colorama"]
-    assert (colorama.status, colorama.license, colorama.reason) == ("ok", "MIT", "PyPI License-Expression")
+    assert (colorama.status, colorama.license, colorama.reason) == ("ok", "MIT", "PyPI: License-Expression")
 
 
 def test_lock_only_entry_without_a_clear_license_is_unknown(policy):
@@ -246,6 +251,49 @@ def test_pypi_failure_is_unknown_with_the_error(policy):
     assert f.status == "unknown" and "PyPI に問い合わせられない" in f.reason and "404" in f.reason
 
 
-def test_repository_policy_resolves_colorama_from_pypi():
-    [f] = check("cli", add_lock_only([], [("colorama", "0.4.6")], lambda n, v: COLORAMA_INFO), load_policy(REPO_POLICY))
-    assert (f.status, f.license) == ("ok", "BSD-3-Clause")
+def test_pypi_failure_is_unknown_even_with_a_record_or_an_exception(policy):
+    def fetch(name, version):
+        raise httpx.ConnectError("offline")
+
+    lock = [("Jinja2", "3.1.6"), ("psycopg2-binary", "2.9.13")]
+    assert [(f.package, f.status) for f in check("agent", add_lock_only([], lock, fetch), policy)] == [
+        ("Jinja2", "unknown"), ("psycopg2-binary", "unknown"),
+    ]
+    missing_info = add_lock_only([], [("x", "1.0")], lambda n, v: (_ for _ in ()).throw(KeyError("info")))
+    assert check("agent", missing_info, policy)[0].status == "unknown"
+
+
+def test_every_pypi_finding_says_pypi(policy):
+    lock = [("psycopg2-binary", "2.9.13"), ("nolicense", "1.0")]
+    findings = check("agent", add_lock_only([], lock, lambda n, v: {}), policy)
+    assert [(f.status, f.reason.startswith("PyPI: ")) for f in findings] == [("unknown", True), ("exception", True)]
+
+
+def test_another_version_of_an_installed_package_is_fetched(policy):
+    asked = []
+    env = [_pkg("click", metadata="BSD-3-Clause", version="8.3.1")]
+    add_lock_only(env, [("click", "8.1.8"), ("click", "8.3.1")], lambda n, v: asked.append((n, v)) or {})
+    assert asked == [("click", "8.1.8")]
+
+
+def test_cli_lock_option_checks_lock_only_packages(tmp_path, capsys, monkeypatch):
+    (tmp_path / "policy.toml").write_text(POLICY_TOML, encoding="utf-8")
+    (tmp_path / "in.json").write_text(json.dumps([_pkg("rich", metadata="MIT", version="14.0.0")]))
+    (tmp_path / "lock.txt").write_text(LOCK, encoding="utf-8")
+    monkeypatch.setattr("dak_maintenance.license.fetch_pypi",
+                        lambda n, v: {"license_expression": "GPL-3.0-only"} if n == "colorama" else {"license": "BSD-3-Clause"})
+    args = ["license-check", "--component", "cli", "--input", str(tmp_path / "in.json"),
+            "--lock", str(tmp_path / "lock.txt"), "--policy", str(tmp_path / "policy.toml")]
+    assert main(args) == 1
+    assert capsys.readouterr().out == ("cli: colorama 0.4.6 のライセンス GPL-3.0-only は許容の一覧に無い"
+                                       "（PyPI: GPL-3.0-only が許容の一覧に無い。License-Expression）\n")
+
+
+def test_repository_policy_resolves_windows_only_packages_from_pypi():
+    pywin32 = {"license": "PSF", "classifiers": ["License :: OSI Approved :: Python Software Foundation License"]}
+    infos = {"colorama": COLORAMA_INFO, "pywin32": pywin32}
+    lock = [("colorama", "0.4.6"), ("pywin32", "311")]
+    findings = check("agent", add_lock_only([], lock, lambda n, v: infos[n]), load_policy(REPO_POLICY))
+    assert [(f.package, f.status, f.license) for f in findings] == [
+        ("colorama", "ok", "BSD-3-Clause"), ("pywin32", "ok", "PSF-2.0 AND BSD-3-Clause"),
+    ]

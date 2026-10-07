@@ -33,7 +33,8 @@ allow = [
 "The Unlicense (Unlicense)" = "Unlicense"
 
 # 表記だけでは決められず、LICENSE ファイル（または配布元）を読んで確かめた SPDX の式。
-# 例外ではない（許容の一覧で判定する）。3 つの欄で決まらないときだけ使い、版が変われば確かめ直す（CI が「不明」で止まる）
+# 例外ではない（許容の一覧で判定する）。記録した版で、License-Expression（PEP 639）が無いときだけ使う。
+# 版が変われば確かめ直す（表記で決まらなければ CI が「不明」で止まる）
 [[verified]]
 package = "fastuuid"
 version = "0.14.0"
@@ -92,6 +93,12 @@ reviewed = "2026-10-01"
 package = "colorama"
 version = "0.4.6"
 license = "BSD-3-Clause"
+reviewed = "2026-10-01"
+
+[[verified]]
+package = "pywin32"
+version = "311"
+license = "PSF-2.0 AND BSD-3-Clause"
 reviewed = "2026-10-01"
 
 [[verified]]
