@@ -13,7 +13,13 @@ on:
         default: "llama3.1:8b"
 
 permissions:
-  contents: write # history.jsonl 追記コミット用（main が保護されている場合は soft fail）
+  contents: write # リリース eval-history の asset（history.jsonl）の差し替え用
+
+# 記録は git の外のリリース eval-history の asset に持つ（docs/eval/README.md）。
+# 取得 → 追記 → 差し替えの間に別の実行が割り込むと行が消えるので、1 本ずつ回す。
+concurrency:
+  group: nightly-eval-history
+  cancel-in-progress: false
 
 env:
   # llama3.2:3b was the original default but has never produced a passing
@@ -93,23 +99,19 @@ jobs:
           uv run pytest -q test_smoke_real_llm.py --junitxml=eval-report.xml
 
       - name: Summarize and append history
+        id: record
         if: always()
         working-directory: maintenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HISTORY: ${{ github.workspace }}/eval-history/history.jsonl
         run: |
+          gh release download eval-history -R "$GITHUB_REPOSITORY" -p history.jsonl -D "$(dirname "$HISTORY")"
           uv sync
           uv run dak-maint eval-record --junit ../tests/integration/eval-report.xml \
-            --history ../docs/eval/history.jsonl --model "$MODEL"
+            --history "$HISTORY" --model "$MODEL"
 
-      - name: Commit history (soft-fail if main protected)
-        if: always()
-        continue-on-error: true
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/eval/history.jsonl
-          git commit -m "chore(eval): nightly pass-rate [skip ci]" || echo "nothing to commit"
-          git push || echo "push failed (protected branch?) — artifact に残ります"
-
+      # 差し替えに失敗したときは、この写しから asset を戻す（docs/eval/README.md）
       - name: Upload eval artifacts
         if: always()
         uses: actions/upload-artifact@v7
@@ -117,8 +119,14 @@ jobs:
           name: nightly-eval
           path: |
             tests/integration/eval-report.xml
-            docs/eval/history.jsonl
+            eval-history/history.jsonl
             ollama.log
+
+      - name: Publish history
+        if: always() && steps.record.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload eval-history -R "$GITHUB_REPOSITORY" eval-history/history.jsonl --clobber
 
       - name: Tear down
         if: always()
