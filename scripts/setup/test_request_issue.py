@@ -84,6 +84,17 @@ def test_request_body_is_a_tidy_request_not_a_verbatim_quote():
         assert old not in body
 
 
+def test_feature_request_template_uses_request_sections():
+    """The hand-written request has the same sections as request_body (## 要望 / ## 出典 / ## 派生 PBI)."""
+    template = (Path(__file__).resolve().parents[2] / ".github/ISSUE_TEMPLATE/feature_request.yml").read_text()
+
+    assert 'labels: ["type:request"]' in template
+    assert 'title: "要望: "' in template
+    for label in ("label: 要望\n", "label: 出典\n", "label: 派生 PBI\n"):
+        assert label in template
+    assert "原文" not in template
+
+
 @pytest.mark.parametrize("title", ["要望: Adopt X", "要望:Adopt X", "要望:   Adopt X"])
 def test_title_that_already_says_request_is_normalized_not_prefixed_twice(tmp_path, monkeypatch, title):
     """Same normalization as the workflows' dedupe (`sub("^要望: *"; "")`)."""
