@@ -1,4 +1,4 @@
-"""nightly-eval の結果の記録（docs/eval/history.jsonl）と、経路ごとの月の実行回数の上限。
+"""nightly-eval の結果の記録（リリース eval-history の asset history.jsonl）と、経路ごとの月の実行回数の上限。
 
 `provider` は経路（ollama / bedrock …）、`runner` は実行環境。`provider` の無い古い行は ollama とみなす。
 """

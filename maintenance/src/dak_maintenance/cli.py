@@ -7,7 +7,7 @@ Subcommands:
   collect-deps   マージ済み deps PR の本文（標準入力の JSON）から依存の一覧を出力
   charter-review 憲章の見直し提案 JSON を出力
   compare-models 固定の入力で複数のモデルに保守のプロンプトを投げ、結果を Markdown の表にする
-  eval-record    nightly-eval の JUnit XML を docs/eval/history.jsonl に 1 行追記する
+  eval-record    nightly-eval の JUnit XML を history.jsonl に 1 行追記する
   eval-budget    経路ごとの今月の実行回数を数え、上限に達していれば allowed=false を出す
   license-check  pip-licenses の一覧を方針（license-policy.toml）と照らし、許容外か不明なら exit 1
 
@@ -339,14 +339,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     r = sub.add_parser("eval-record", help="nightly-eval の結果を history.jsonl に 1 行追記する")
     r.add_argument("--junit", required=True)
-    r.add_argument("--history", required=True, help="docs/eval/history.jsonl のパス")
+    r.add_argument("--history", required=True, help="history.jsonl のパス（リリース eval-history の asset を落としたもの）")
     r.add_argument("--model", required=True)
     r.add_argument("--provider", default="ollama")
     r.add_argument("--runner", default="github-hosted")
     r.set_defaults(func=cmd_eval_record)
 
     b = sub.add_parser("eval-budget", help="今月の実行回数を数えて上限を判定する")
-    b.add_argument("--history", required=True, help="docs/eval/history.jsonl のパス")
+    b.add_argument("--history", required=True, help="history.jsonl のパス（リリース eval-history の asset を落としたもの）")
     b.add_argument("--provider", required=True)
     b.add_argument("--limit", type=_non_negative_int, required=True)
     b.set_defaults(func=cmd_eval_budget)
