@@ -80,7 +80,7 @@ DAK の側では、取り消しが来る時点で 2 通りある:
 1. **`/run_sse` を読んでいる間**: SSE の接続を閉じ、`cancelled` を返す。`dak-cli` は `requests` で SSE を読み、読み取りのスレッドは次の行が来るまで止まっている。別のスレッドから応答を閉じてもその読み取りは起きない（2026-10-07 に手元で確かめた）ので、取り消しの印を立て、**次のイベントを受けた時点で**読み取りをやめて接続を閉じ、それまでに来たイベントはエディタに送らない（#317、`cli/src/acp_agent.py` の `_stream`）。ADK の `/run_sse` は、接続が切れると `runner.run_async` を `Aclosing` で閉じる（google-adk 2.8.0 `api_server.py` の `run_agent_sse` の `event_generator` が `GeneratorExit` / `CancelledError` を受けて閉じる。`/run` も `http.disconnect` を見て `worker_task.cancel()` する）。§5 (d) では、最初のイベントを読んだところで接続を閉じると、モデルは 1 回も呼ばれず（fake-LLM への要求 0 件）、セッションにもその後のイベントが残らなかった。ただし閉じるのは次の `await` の時点なので、すでに走っている LLM の呼び出しやツールの実行は、その 1 つが終わるまで止まらないことがある（fake-LLM はすぐ答えるので、この場合は確かめていない）
 2. **`session/request_permission` の答えを待っている間**: ターンは確認待ちですでに終わっている（§3.3 の 2。SSE は閉じている）。止めるものは無いので、**承認には答えず**に `cancelled` を返す。拒否を送らないのは、拒否の答えが invocation を再開させ、モデルをもう一度呼ぶから（仕様の「言語モデルへの要求を止める」に反する）。答えなかった承認は保留のまま残り、次の `session/prompt`（新しい発言）で捨てられる（`approval-queue.md` の 1 の最後の点）。それまでのあいだは BFF や `dak-cli approve` からも答えられる（#100 の「どのクライアントからでも答えられる」のとおり）
 
-承認の答えを `/approvals/{id}/reply` に送った後（その中で `/run` がターンの続きを最後まで実行する）に取り消しが来たときは、応答を読むのをやめて `cancelled` を返すが、agent 側の続きは止まらない（`/approvals` の reply は agent の中で ADK の `/run` を `httpx.ASGITransport` で呼び、外の接続が切れたかを見ていないので、中の実行は切れないと読める。コードを読んだ判断で、動かしてはいない）。サーバ側で止めるのはこの PBI の範囲外。
+承認の答えを `/approvals/{id}/reply` に送った後（その中で `/run` がターンの続きを最後まで実行する）に取り消しが来たときは、reply の応答が返るまで待ち（続きが終わるまで。`reply_approval` の上限は 300 秒）、その events は送らずに `cancelled` を返す。agent 側の続きは止まらない（`/approvals` の reply は agent の中で ADK の `/run` を `httpx.ASGITransport` で呼び、外の接続が切れたかを見ていないので、中の実行は切れないと読める。コードを読んだ判断で、動かしてはいない）。サーバ側で止めるのはこの PBI の範囲外。
 
 ### 3.3 確認待ちの流れ
 

@@ -151,7 +151,7 @@ def _agent_with(events, answer="allow"):
     conn = _Conn(answer)
     agent.on_connect(conn)
     client = MagicMock()
-    client.stream_events.return_value = iter(events)
+    client.stream_events.return_value = (e for e in events)  # a generator, as stream_events is
     agent._clients["s1"] = client
     return agent, conn, client
 
