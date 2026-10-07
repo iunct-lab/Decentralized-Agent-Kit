@@ -556,7 +556,11 @@ def _preview(text: str, max_chars: int, artifact: Optional[str]) -> str:
     tail = max_chars - head
     omitted_chars = len(text) - head - tail
     total_lines = text.count("\n") + (0 if not text or text.endswith("\n") else 1)
-    omitted_lines = max(0, total_lines - text[:head].count("\n") - text[-tail:].count("\n"))
+    # Only lines with no character shown: the line the head cuts through ends
+    # in the middle but is partly kept, and so is the line the tail starts in.
+    middle = text[head:len(text) - tail]
+    cut_line = 1 if head and text[head - 1] != "\n" and "\n" in middle else 0
+    omitted_lines = middle.count("\n") - cut_line
     header = (f"[truncated: original {len(text)} chars / {total_lines} lines; "
               f"kept head {head} chars + tail {tail} chars"
               + (f"; artifact={artifact}" if artifact else "") + "]\n")
@@ -1160,9 +1164,10 @@ class ContextHarnessPlugin(BasePlugin):
             logger.info("Context harness: could not offload %s output: %s", tool_name, e)
             artifact = None
 
-        logger.info("Context harness: truncated %s output %d -> %d chars", tool_name, len(text), max_chars)
+        preview = _preview(text, max_chars, artifact)
+        logger.info("Context harness: truncated %s output %d -> %d chars", tool_name, len(text), len(preview))
         replacement = {
-            "result": _preview(text, max_chars, artifact),
+            "result": preview,
             "truncated": True,
             "original_chars": len(text),
         }

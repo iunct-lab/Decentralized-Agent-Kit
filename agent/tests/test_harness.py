@@ -357,13 +357,14 @@ class TestToolOutputBudget:
         assert preview == (
             "[truncated: original 110 chars / 10 lines; kept head 14 chars + tail 6 chars; "
             "artifact=tool_output_x.txt]\n"
-            "abcdefghij\nabc\n\n... [90 chars / 8 lines omitted] ...\n\nfghij\n")
+            "abcdefghij\nabc\n\n... [90 chars / 7 lines omitted] ...\n\nfghij\n")
 
     def test_preview_header_omits_artifact_when_none(self):
         preview = harness._preview("x" * 100, 20, None)
 
         assert preview.startswith("[truncated: original 100 chars / 1 lines; kept head 14 chars + tail 6 chars]\n")
         assert "artifact=" not in preview
+        assert "[80 chars / 0 lines omitted]" in preview  # head and tail both show part of the one line
 
     @pytest.mark.asyncio
     async def test_without_artifact_service_still_truncates(self):
@@ -372,6 +373,7 @@ class TestToolOutputBudget:
             tool=_tool(), tool_args={}, tool_context=ctx, result="x" * 10_000)
         assert result["truncated"] is True
         assert "full_output_artifact" not in result
+        assert result["result"].startswith("[truncated: original 10000 chars / 1 lines; kept head 1400 chars + tail 600 chars]\n")
         assert "narrow the tool call" in result["hint"]
 
     @pytest.mark.asyncio
