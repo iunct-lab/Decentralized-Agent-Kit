@@ -3,7 +3,7 @@
 保守の定期実行（`tech-watch` / `feature-sync` / `charter-review` / `dependency-triage` の LLM 評価）は、
 リポジトリの変数 `MAINT_LLM_BASE_URL` / `MAINT_LLM_MODEL` と secret `MAINT_LLM_API_KEY` でモデルを選ぶ
 （`maintenance/src/dak_maintenance/llm_client.py` の `make_complete`）。この文書は候補の価格・無料枠・月額の見積もりを比べ、
-切り替えと元に戻す手順を書く。同じ入力で出力を比べた実測は「結果」の節（PBI #348 の #351 で埋める）。
+切り替えと元に戻す手順を書く。どのモデルに決めたかは「結果」の節。
 
 ## 候補（価格は 1M トークンあたりの USD、入力 / 出力、標準、短いコンテキスト）
 
@@ -18,8 +18,8 @@
 | Ollama `llama3.1:8b` | $0 | $0 | —（自前のホスト） | 外に出ない | ホストの性能しだい | 自前で動かすので価格表なし。Actions から届くホストが要る |
 
 - 回数制限の一次資料は「Rate limits depend on a variety of factors (such as your usage tier) and can be viewed in Google AI Studio.」（[Rate limits](https://ai.google.dev/gemini-api/docs/rate-limits)、2026-09-02 更新）で、数値は載っていない。
-- 推論するモデルは、見えない推論のトークンも出力として課金されうる。下の見積もりは本文の出力だけで数えているので、推論の多いモデルほど実際は高い（#351 の実測で置き換える）。
-- `make_complete` は常に `temperature: 0` を送る。受け付けるかはモデルごとに違い未確認で、#351 で実際に呼んで確かめる。
+- 推論するモデルは、見えない推論のトークンも出力として課金されうる。下の見積もりは本文の出力だけで数えているので、推論の多いモデルほど実際は高い。
+- `make_complete` は常に `temperature: 0` を送る。受け付けるかはモデルごとに違い未確認で、切り替える前に 1 回呼んで確かめる（「切り替える」の 2）。Bedrock の経路は `temperature` を送らない。
 - Amazon Bedrock（IAM、API キー不要。`MAINT_LLM_MODEL=bedrock/<id>`）の道もある（`docs/maintenance/README.md` の「LLM プロバイダ設定」）。Bedrock 上の価格は未確認で、この表に入れていない。
 
 ## 月額の見積もり
@@ -81,4 +81,9 @@ Gemini の無料枠に収まれば $0 だが、回数制限が未確認なので
 
 ## 結果
 
-（#351 で、`dak-maint compare-models` を候補で回した表・所見・推奨を書く）
+保守の定期実行のモデルは、Amazon Bedrock の GPT-6 luna（`MAINT_LLM_MODEL=bedrock/global.openai.gpt-6-luna`、IAM（GitHub の OIDC）で呼ぶ）に決まっている。
+Gemini の利用枠切れ（429）で定期実行が止まったため、利用者の指示で決めた（PBI #157 の決定ログ 2026-09-26、コードは PR #384）。
+切り替えの準備は `docs/maintenance/README.md` の「Amazon Bedrock（IAM。API キー不要）」。
+
+上の候補を `dak-maint compare-models` で同じ入力で比べる実行はしていない。モデルが決まっているので不要と利用者が判断した（PBI #348 の決定ログ 2026-10-07）。
+`compare-models` は、また別のモデルを検討するときに使える。
