@@ -26,7 +26,7 @@ def test_area_labels_are_options_of_the_area_field():
     assert set(labels) <= set(_config()["fields"]["area"])
 
 
-def test_phase_options_are_numbered_from_zero():
+def test_phase_options_are_the_milestone_phases():
     phases = _config()["fields"]["phase"]
 
-    assert phases == [f"Phase {n}" for n in range(len(phases))]
+    assert phases == [f"Phase {n}" for n in range(5)]  # Milestones are "Phase 1 — …" … "Phase 4 — …"; Phase 0 is the groundwork
