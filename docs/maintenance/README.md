@@ -29,10 +29,9 @@
 
 ## 初期セットアップ（一度だけ）
 
-1. **Project 作成**: GitHub Project を作り、フィールド Status（`Backlog` を含む）・Area・Kind・Priority・Phase・Story Points を持たせる。Area と Phase の選択肢は root の `ops.config.json`。URL を `ops.config.json` の `projectUrl` に書き、次を登録:
-   - `gh variable set DAK_PROJECT_URL --body "<URL>"`
-   - `gh secret set DAK_PROJECT_TOKEN --body "<project スコープ付き PAT>"`（`project-autoadd` と `scripts/setup/request_issue.py` が user-level Project に書くため、既定 `GITHUB_TOKEN` では不可）
-   - Status の選択肢に `Backlog` が要る（新しい Project の既定は Todo / In Progress / Done だけ。新しい Issue と定期実行の要望は Status=Backlog で載るので、無いと失敗する）
+1. **Project 作成**: GitHub Project を作り、フィールド Status（`Backlog` を含む）・Area・Kind・Priority・Phase・Story Points を持たせる。各値の意味と `ops.config.json` は [issue-workflow.md](issue-workflow.md)。URL を `ops.config.json` の `projectUrl` に書き、次を登録:
+   - `gh variable set DAK_PROJECT_URL --body "$(jq -r .projectUrl ops.config.json)"`
+   - `gh secret set DAK_PROJECT_TOKEN --body "<Project の書き込み権限を持つ PAT>"`（`project-autoadd` と `scripts/setup/request_issue.py` が Project に書くため、既定 `GITHUB_TOKEN` では不可）
 2. **ラベル同期**: `labels.yml` を main に push（`labels.yml` ワークフローが反映）
 3. **リポジトリ設定**:
    - Settings → General → Pull Requests → **Allow auto-merge** を ON
