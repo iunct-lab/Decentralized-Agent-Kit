@@ -32,7 +32,38 @@ PBI #296 / Task #297。#20 の `SandboxManager`（`session-sandbox.md`）は、`
 
 ## 3. Docker Sandboxes を mcp-server から使うには（評価、実測しない）
 
-（#299 で書く）
+実測はしない（PBI #296 の決定ログ）。動くホストが Apple silicon の Mac、KVM の使える Ubuntu 24.04 以上、Windows 11 に限られ、`sbx login` に Docker アカウントのサインインが要るため。下は 2026-10-07 時点の公式の文書（v0.47.0）から読めることと、そこからの評価。
+
+### 作成・実行・破棄の手順（文書から）
+
+| 段階 | コマンド | 文書から読めること |
+|---|---|---|
+| 準備（1 回だけ） | `sbx login`、`sbx policy init <allow-all\|balanced\|deny-all>` | 全体のネットワークの方針は、最初のサンドボックスを作る前に 1 回決める（[policy init](https://docs.docker.com/reference/cli/sbx/policy/init/)） |
+| 作成 | `sbx create shell [PATH...]` | エージェントを起動しない汎用のサンドボックスを作れる。パスを省けばホストのファイルをマウントしない（[create shell](https://docs.docker.com/reference/cli/sbx/create/shell/)）。作成時に `--deny-network` でそのサンドボックスの拒否の規則を足せる |
+| 通信の制限 | `sbx policy allow\|deny network [--sandbox <name>] <host,cidr…>` | 全体またはサンドボックスごとに許可・拒否を足す（[policy allow network](https://docs.docker.com/reference/cli/sbx/policy/allow/network/)）。外向きの TCP はすべてホストのプロキシを通り、そこで方針をかける（[architecture](https://docs.docker.com/ai/sandboxes/architecture/)） |
+| 実行 | `sbx exec [-u <user>] [-w <dir>] <sandbox> <command>` | 振る舞いは `docker exec` に合わせてある。止まっていれば先に起動する。`-d`（切り離し）は使えない（[exec](https://docs.docker.com/reference/cli/sbx/exec/)） |
+| 破棄 | `sbx rm [-f] <sandbox>`、`sbx ls --json` | 中のもの（イメージ、入れたパッケージ、作ったファイル）は消すまで残る（[rm](https://docs.docker.com/reference/cli/sbx/rm/)、[architecture](https://docs.docker.com/ai/sandboxes/architecture/)） |
+
+`SandboxManager` の `docker run -d` → `docker exec` → `docker rm -f` には、`sbx create shell` → `sbx exec` → `sbx rm -f` がそのまま対応する。#283 の引数のうち、`--network none` は `sbx policy` で、`--cpus` / `--memory` は `sbx create` の同名のオプション（`--memory` の最小は 512 MiB）で置き換える見込み。`--read-only`、`--cap-drop`、`--pids-limit` に当たるものは文書に見当たらない（未確認）。`--cpus` は 0（ホストの全 CPU）、`--memory` はホストのメモリの 50%（512 MiB〜32 GiB）が既定。隔離の要は、サンドボックスごとに専用のカーネルを持つ microVM で、中の利用者は sudo のできる非 root（[isolation](https://docs.docker.com/ai/sandboxes/security/isolation/)）。
+
+### mcp-server のコンテナから呼ぶ方法
+
+`sbx` はホストで動く CLI で、ホストの `sandboxd` を操作する（[daemon](https://docs.docker.com/reference/cli/sbx/daemon/)）。ローカルの `sandboxd` の API やソケットの仕様は文書に無い。REST API と SDK はあるが、クラウドのサンドボックス向けで experimental（[Sandboxes API](https://docs.docker.com/ai/sandboxes-api/)）。mcp-server のコンテナから使う方法は次の 3 つが考えられる（どれも試していない）:
+
+| 方法 | ホスト側に要るもの | 独立コンテナの原則 | #16 の権限境界 |
+|---|---|---|---|
+| A. ホストに橋渡しのサービスを置き、mcp-server は HTTP で「作る・実行する・消す」を頼む。サービスがホストの `sbx` を呼ぶ | 新しい常駐サービス（DAK の外か、新しいコンポーネント）、`sbx login` 済みのホストの利用者 | 標準の口（HTTP）だけでつながるので合う。ただし部品が 1 つ増える | 橋渡しのサービスが「何を実行してよいか」を判断しないように作る必要がある（判断は agent の `before_tool_callback`） |
+| B. `sandboxd` のソケットを mcp-server のコンテナに渡し、コンテナの中の `sbx` から使う | ソケットの場所と、コンテナの中で `sbx` が使えるか（文書に無い） | 文書に無い内部の口に依存するので合わない | ソケットを持つ者はホストのサンドボックスを全部操作できる（今の Docker ソケット案と同じ種類の権限） |
+| C. mcp-server をコンテナに入れず、ホストで直接動かす（`cd mcp-server && uv run main.py`） | ホストに `sbx` と Python の環境 | mcp-server だけがコンテナの外になる。今の docker モードでも許している形（`session-sandbox.md`） | 変わらない |
+
+KVM の使える Ubuntu 24.04 以上の Linux なら、mcp-server と同じホストで `sbx` を動かせる（要件の上では）。macOS では、mcp-server を動かす Docker（Colima や Docker Desktop の VM の中）と `sbx` の microVM が別の層にあるので、A か C になる。
+
+### 評価
+
+- `SandboxManager` から見た手順は docker モードとほぼ同じ形で置き換えられる。一方で、呼び出し先がホストの CLI になり、コンテナの中から使う標準の口が無い。docker モードの「Docker ソケットを渡す」形（`--runtime` を足すだけの gVisor・Kata）に比べ、構成の変更が大きい
+- 運用の負担: `sbx login`（Docker アカウント）、全体のネットワークの方針の初期化、ホストに常駐する `sandboxd`。ライセンスはプロプライエタリで、ローカルの利用は無料（[FAQ](https://docs.docker.com/ai/sandboxes/faq/)）
+- 利点: microVM ごとの専用のカーネルと Docker デーモン、ホストのプロキシでの通信の制御と資格情報の差し込み。開発者の Mac で動く唯一の microVM の選択肢
+- 実測は未検証。採る方向になったら、作成から最初の `sbx exec` まで、`sbx exec` 1 回、破棄、4 節と同じ Python の処理を、上の要件を満たすホストで測る
 
 ## 4. 実測
 
