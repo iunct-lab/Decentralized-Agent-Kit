@@ -7,6 +7,7 @@
   "write_handoff",
   "read_handoff",
   "plan_exit",
+  "dak_explorer",
   "read_tool_output",
   "list_skills",
   "enable_skill"
