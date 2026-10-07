@@ -96,6 +96,59 @@ You: /exit
 Goodbye!
 ```
 
+## Use from an editor (Agent Client Protocol)
+
+`dak-cli acp` speaks the [Agent Client Protocol](https://agentclientprotocol.com) (version 1) on stdin/stdout,
+so an ACP editor such as Zed or a JetBrains IDE can start it and talk to DAK from its agent panel.
+How ACP maps onto DAK is in `docs/architecture/acp_adapter.md`.
+
+1. Log in once (`uv run dak-cli login`); the editor's `dak-cli acp` uses the same `~/.dak-cli/config.json`.
+   `DAK_AGENT_URL` in the agent's `env` overrides the stored URL.
+2. Register the command in the editor. Below, `/path/to/Decentralized-Agent-Kit` is where you cloned this repository;
+   the editor runs `uv`, so it must be on the editor's `PATH`.
+
+   **Zed** — `settings.json` (Agent Settings → External Agents → Add Agent → Add Custom Agent opens it),
+   then pick "DAK" from the new-thread menu:
+
+   ```json
+   {
+     "agent_servers": {
+       "DAK": {
+         "type": "custom",
+         "command": "uv",
+         "args": ["run", "--project", "/path/to/Decentralized-Agent-Kit/cli", "dak-cli", "acp"],
+         "env": {}
+       }
+     }
+   }
+   ```
+
+   **JetBrains IDEs** (AI Assistant) — `~/.jetbrains/acp.json` (AI Chat → ⋯ → Add Custom Agent opens it):
+
+   ```json
+   {
+     "agent_servers": {
+       "DAK": {
+         "command": "uv",
+         "args": ["run", "--project", "/path/to/Decentralized-Agent-Kit/cli", "dak-cli", "acp"],
+         "env": {}
+       }
+     }
+   }
+   ```
+
+What works: conversation (the reply as message chunks), DAK's tool calls and their results, Allow / Reject
+for a tool call that needs approval (each time; there is no "always"), and Stop (`session/cancel`).
+A stopped turn ends when the agent's next event arrives (a running model call or tool finishes first);
+a tool call that was waiting for approval is left unanswered, and the next prompt drops it.
+
+Not supported: loading past sessions, switching DAK's modes, images and audio, the editor's files and terminal
+(DAK's tools run in the mcp-server container on its `/projects`, not in the editor's folder), and MCP servers
+passed by the editor.
+
+The Zed and JetBrains settings above follow their documentation (2026-10); they have not been tried in the GUIs.
+The protocol itself is tested with the official ACP client (`tests/integration/test_acp.py`).
+
 ## Authentication
 
 The CLI sends requests with the configured `user_id`:
