@@ -47,6 +47,8 @@ def test_cli_mode_switch_preserves_confirmation_requirement(fake_llm, tmp_path):
     """PBI #21: the tools a mode switch rebuilds ask for confirmation the same
     way (agent's permission rules), so `dak-cli run` still asks before write_file."""
     written = os.path.join(REPO_ROOT, MODE_SWITCH_PATH)
+    if os.path.exists(written):
+        os.remove(written)  # a file left by an interrupted run would prove nothing
     fake_llm.clear(MODEL)
     fake_llm.script(MODEL, [
         fake_llm.tool_call("switch_mode", reason="need file tools", new_focus="write a file"),
@@ -79,7 +81,8 @@ def test_cli_mode_switch_preserves_confirmation_requirement(fake_llm, tmp_path):
         assert "Approval Required" in result.stdout
         assert "write_file" in result.stdout
         assert "Done, file written." in result.stdout
-        assert os.path.exists(written)
+        with open(written, encoding="utf-8") as f:
+            assert f.read() == "hello"  # the approved write ran
     finally:
         if os.path.exists(written):
             os.remove(written)
