@@ -1,4 +1,5 @@
 """Unit tests for the BFF. The agent API is mocked with respx."""
+import json
 import os
 import sys
 
@@ -102,3 +103,38 @@ def test_chat_reports_agent_error():
 
     assert response.status_code == 200  # errors are rendered into the stream
     assert 'class="chat-message error"' in response.text
+
+
+def confirmation_event(fc_id: str, tool: str, args: dict) -> dict:
+    return {"content": {"parts": [{"functionCall": {
+        "id": fc_id, "name": "adk_request_confirmation",
+        "args": {"originalFunctionCall": {"name": tool, "args": args}}}}]}}
+
+
+@respx.mock
+def test_chat_renders_confirmation_as_escaped_approval_card():
+    respx.get(f"{AGENT_URL}/apps/dak_agent/users/{USER_ID}/sessions/{SESSION_ID}").mock(
+        return_value=Response(200, json={"id": SESSION_ID})
+    )
+    events = [confirmation_event("fc-1", "write_file", {"content": "<script>x</script>"}), adk_text_event("after")]
+    respx.post(f"{AGENT_URL}/run").mock(return_value=Response(200, json=events))
+
+    response = post_chat("write")
+
+    assert 'hx-post="/chat/approvals/fc-1"' in response.text
+    assert f'name="session_id" value="{SESSION_ID}"' in response.text
+    assert "<script>x</script>" not in response.text  # the model's arguments are escaped
+    assert "after" not in response.text  # the turn ends at the confirmation
+
+
+@respx.mock
+def test_approval_answer_goes_to_agent_reply_route():
+    reply = respx.post(f"{AGENT_URL}/approvals/fc-1/reply").mock(
+        return_value=Response(200, json=[adk_text_event("resumed")])
+    )
+
+    response = client.post("/chat/approvals/fc-1", data={"mode": "reject", "session_id": SESSION_ID, "user_id": USER_ID})
+
+    assert response.status_code == 200
+    assert "resumed" in response.text
+    assert json.loads(reply.calls.last.request.content) == {"user_id": USER_ID, "session_id": SESSION_ID, "mode": "reject"}
