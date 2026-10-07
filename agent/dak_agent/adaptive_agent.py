@@ -493,11 +493,8 @@ class AdaptiveAgent(LlmAgent):
         # alongside tools).
         live.output_schema = call_settings.get(call_config.STATE_CALL_OUTPUT_SCHEMA)
         live.tools = [] if tools_error else self._resolve_session_tools(state, call_settings)
-        call_tools = call_settings.get(call_config.STATE_CALL_TOOLS)
-        if call_tools is not None and call_config.TRANSFER_TOOL not in (call_config.call_tool_names(call_tools) or []):
-            # ADK adds transfer_to_agent from sub_agents on its own; drop the
-            # A2A peers for this call unless the caller named that tool.
-            live.sub_agents = []
+        if not call_config.call_offers_transfer(call_settings):
+            live.sub_agents = []  # the caller's dak:tools leaves out transfer_to_agent
         live._active_skills = list(state.get(skill_tools.STATE_ACTIVE_SKILLS, []))
         skill_tools.invalidate_canonical_tools_cache(context)
         if model_error or tools_error:

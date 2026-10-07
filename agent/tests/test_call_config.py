@@ -54,6 +54,17 @@ def test_resolve_dak_settings_without_run_config_reads_state_only():
 DATE_SCHEMA = {"type": "object", "properties": {"date": {"type": "string"}}, "required": ["date"]}
 
 
+@pytest.mark.parametrize("call_settings, expected", [
+    ({}, True),                                                     # dak:tools not given: everything is offered
+    ({"dak:tools": ["read_file", "transfer_to_agent"]}, True),
+    ({"dak:tools": ["read_file"]}, False),
+    ({"dak:tools": {"names": ["transfer_to_agent"]}}, True),
+    ({"dak:tools": {"names": None}}, False),
+])
+def test_call_offers_transfer(call_settings, expected):
+    assert call_config.call_offers_transfer(call_settings) is expected
+
+
 def test_validate_call_output_returns_field_path_and_reason():
     parsed, issues = call_config.validate_call_output(DATE_SCHEMA, '{"note": "missing date"}')
 
