@@ -779,15 +779,57 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         tools[0].run_async.assert_awaited_once_with(args={"path": "."}, tool_context=context)
         self.assertEqual(state[STATE_PROJECT_INSTRUCTIONS], "root rules")
 
-    async def test_inject_project_instructions_skips_untrusted_marker(self):
-        agent, toolset, _ = self._project_instructions_agent(
-            {"content": [{"type": "text", "text": "[not read: path is outside the trusted workspace]"}]})
-        state = {STATE_PROJECT_INSTRUCTIONS: "stale rules"}
+    async def test_inject_project_instructions_clears_on_untrusted_marker_or_empty(self):
+        """With ADK's real State (no `pop`): the clear must reach the state
+        delta, so the next turns stop sending the stale text."""
+        from google.adk.sessions.state import State
+
+        for answer in ("[not read: path is outside the trusted workspace]", ""):
+            agent, toolset, _ = self._project_instructions_agent({"content": [{"type": "text", "text": answer}]})
+            state = State({STATE_PROJECT_INSTRUCTIONS: "stale rules"}, {})
+
+            with patch.object(AdaptiveAgent, "_cached_mcp_toolset", return_value=toolset):
+                await agent._inject_project_instructions(self._session_context(agent, state))
+
+            self.assertFalse(state.get(STATE_PROJECT_INSTRUCTIONS), answer)
+            self.assertIn(STATE_PROJECT_INSTRUCTIONS, state._delta)
+            self.assertNotIn("# Project Instructions", agent._resolve_session_instruction(state, {}))
+
+    async def test_inject_project_instructions_keeps_the_last_text_on_an_error_result(self):
+        from google.adk.sessions.state import State
+
+        for result in ({"content": [{"type": "text", "text": "Error executing tool"}], "isError": True},
+                       {"content": [{"type": "text", "text": "Error reading project instructions: denied"}]}):
+            agent, toolset, _ = self._project_instructions_agent(result)
+            state = State({STATE_PROJECT_INSTRUCTIONS: "root rules"}, {})
+
+            with patch.object(AdaptiveAgent, "_cached_mcp_toolset", return_value=toolset):
+                await agent._inject_project_instructions(self._session_context(agent, state))
+
+            self.assertEqual(state[STATE_PROJECT_INSTRUCTIONS], "root rules")
+            self.assertEqual(state._delta, {})
+
+    async def test_inject_project_instructions_records_no_delta_when_unchanged(self):
+        """Every turn re-reads the files: an unchanged text must not add a
+        state delta (32 KiB per turn in a persisted session)."""
+        from google.adk.sessions.state import State
+
+        agent, toolset, _ = self._project_instructions_agent({"content": [{"type": "text", "text": "root rules"}]})
+        state = State({STATE_PROJECT_INSTRUCTIONS: "root rules"}, {})
 
         with patch.object(AdaptiveAgent, "_cached_mcp_toolset", return_value=toolset):
             await agent._inject_project_instructions(self._session_context(agent, state))
 
-        self.assertNotIn(STATE_PROJECT_INSTRUCTIONS, state)
+        self.assertEqual(state._delta, {})
+
+    async def test_restore_session_config_skips_project_instructions_for_refused_or_replaced_instruction(self):
+        """No MCP round trip for a call that is refused before any model call,
+        or whose `dak:instruction` replaces the instruction anyway."""
+        agent, toolset, _ = self._project_instructions_agent()
+        for state in ({"dak:model": "openai/not-allowed"}, {"dak:instruction": "Only this."}):
+            with patch.object(AdaptiveAgent, "_cached_mcp_toolset", return_value=toolset) as cached:
+                await agent._restore_session_config(self._session_context(agent, state))
+            cached.assert_not_called()
 
     async def test_inject_project_instructions_missing_tool_is_noop(self):
         """An older mcp-server without the tool: nothing changes, nothing fails."""
