@@ -1,5 +1,6 @@
 import requests
-from typing import Dict, Any, List, Optional
+import json
+from typing import Dict, Any, Iterator, List, Optional
 import time
 import uuid
 from urllib.parse import quote
@@ -123,6 +124,23 @@ class AgentClient:
             return _needs_approval(response.json())
         except requests.RequestException as e:
             raise ConnectionError(f"Failed to communicate with agent: {e}")
+
+    def stream_events(self, new_message: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+        """ADK's events one by one as the turn runs (POST /run_sse, the body of
+        run_task's /run plus "streaming": false: whole events, not token deltas)."""
+        payload = {
+            "app_name": "dak_agent",
+            "user_id": self.username,
+            "session_id": self.session_id,
+            "new_message": new_message,
+            "streaming": False,
+        }
+        with requests.post(f"{self.base_url}/run_sse", json=payload, headers=self._get_headers(),
+                           stream=True, timeout=300) as response:
+            response.raise_for_status()
+            for line in response.iter_lines(decode_unicode=True):
+                if line and line.startswith("data:"):
+                    yield json.loads(line[len("data:"):])
 
     def _approvals_user(self, user_id: Optional[str]) -> str:
         if not (user_id or self.username):
