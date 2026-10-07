@@ -1,0 +1,95 @@
+# 依存のライセンスの方針（PBI #344）。決めた経緯と棚卸しは docs/maintenance/license-policy.md。
+# 判定は `dak-maint license-check`（src/dak_maintenance/license.py）。
+# 許容外か不明の依存が入ったら CI の license ジョブが止まる。例外を足すかは利用者が決める。
+
+# 許容するライセンス（SPDX の ID）。2026-10-07 に利用者が決めた
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "PSF-2.0",
+  "Python-2.0",
+  "CNRI-Python",
+  "Unlicense",
+  "0BSD",
+  "MPL-2.0",
+]
+
+# 表記 → SPDX の式（pip-licenses の 3 つの欄に出る表記）
+[aliases]
+"MIT License" = "MIT"
+"The MIT License (MIT)" = "MIT"
+"Apache Software License" = "Apache-2.0"
+"Apache 2.0" = "Apache-2.0"
+"Apache License 2.0" = "Apache-2.0"
+"Apache License, Version 2.0" = "Apache-2.0"
+"3-Clause BSD License" = "BSD-3-Clause"
+"ISC License (ISCL)" = "ISC"
+"ISC License" = "ISC"
+"Python Software Foundation License" = "PSF-2.0"
+"Mozilla Public License 2.0 (MPL 2.0)" = "MPL-2.0"
+"The Unlicense (Unlicense)" = "Unlicense"
+
+# 表記だけでは決められず、LICENSE ファイル（または配布元）を読んで確かめた SPDX の式。
+# 例外ではない（許容の一覧で判定する）
+[[verified]]
+package = "fastuuid"
+license = "BSD-3-Clause"
+reviewed = "2026-10-01"
+
+[[verified]]
+package = "Jinja2"
+license = "BSD-3-Clause"
+reviewed = "2026-10-01"
+
+[[verified]]
+package = "prompt_toolkit"
+license = "BSD-3-Clause"
+reviewed = "2026-10-01"
+
+[[verified]]
+package = "sqlparse"
+license = "BSD-3-Clause"
+reviewed = "2026-10-01"
+
+[[verified]]
+package = "wrapt"
+license = "BSD-2-Clause"
+reviewed = "2026-10-01"
+
+[[verified]]
+package = "pyasn1_modules"
+license = "BSD-2-Clause"
+reviewed = "2026-10-01"
+
+[[verified]]
+package = "packaging"
+license = "Apache-2.0 OR BSD-2-Clause"
+reviewed = "2026-10-01"
+
+[[verified]]
+package = "python-dateutil"
+license = "Apache-2.0 AND BSD-3-Clause"
+reviewed = "2026-10-01"
+
+[[verified]]
+package = "tiktoken"
+license = "MIT"
+reviewed = "2026-10-01"
+
+# 許容の一覧に無くても個別に認める依存。2026-10-07 に利用者が決めた
+[[exceptions]]
+package = "psycopg2-binary"
+license = "LGPL-3.0-or-later"
+components = ["agent"]
+reason = "改変せず、動的に読み込むライブラリとして使う。LGPL は一覧に入れず、このパッケージだけ認める"
+reviewed = "2026-10-07"
+
+[[exceptions]]
+package = "jsonalias"
+license = "MIT"
+components = ["agent"]
+reason = "配布物にライセンスのメタデータが無いが、配布元のリポジトリの LICENSE が MIT"
+reviewed = "2026-10-07"
