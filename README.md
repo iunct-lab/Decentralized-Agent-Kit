@@ -295,6 +295,21 @@ MODEL_NAME=ollama_chat/llama3.2
 # OLLAMA_API_BASE needs no setting: docker-compose.yml passes http://ollama:11434
 ```
 
+## Dependency Licenses
+
+Each component's runtime dependencies (dev dependencies excluded) are checked against the license policy in
+[`maintenance/license-policy.toml`](maintenance/license-policy.toml): the allowed licenses, and the few dependencies
+allowed one by one, with the reason. Why the policy is what it is, and how the licenses are read:
+[docs/maintenance/license-policy.md](docs/maintenance/license-policy.md).
+
+The CI `license` job fails when a dependency has a license outside the policy or no license information, and keeps
+the full list per component as the `license-report-<component>` artifact. To check locally:
+
+```bash
+./scripts/license_check.sh agent     # or mcp-server / bff / cli / maintenance; the list goes to ./license-report/
+cd agent && uv sync                  # the check reinstalls the component without dev dependencies; this restores them
+```
+
 ## License
 
 Apache 2.0 - See [LICENSE](LICENSE) file for details.
