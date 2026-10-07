@@ -7,7 +7,7 @@ DAK の作業は GitHub Project で管理する。この文書は、その Proje
 
 | キー | 意味 |
 |---|---|
-| `projectUrl` | DAK の Project の URL。Actions の Variables の `DAK_PROJECT_URL` はここから登録する（`gh variable set DAK_PROJECT_URL --body "$(jq -r .projectUrl ops.config.json)"`）。Project を移したら両方を直す |
+| `projectUrl` | DAK の Project の URL。Actions の Variables の `DAK_PROJECT_URL` はここから登録する（手順は [README.md](README.md) の初期セットアップ）。Project を移したら両方を直す |
 | `fields.area` | Project の Area フィールドの選択肢（下の「Area」） |
 | `fields.phase` | Project の Phase フィールドの選択肢（下の「Phase と Milestone」） |
 
