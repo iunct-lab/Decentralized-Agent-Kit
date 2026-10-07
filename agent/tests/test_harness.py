@@ -359,6 +359,11 @@ class TestToolOutputBudget:
             "artifact=tool_output_x.txt]\n"
             "abcdefghij\nabc\n\n... [90 chars / 7 lines omitted] ...\n\nfghij\n")
 
+    def test_preview_omitted_lines_when_head_ends_on_a_line_break(self):
+        preview = harness._preview("abcdefghij\n" * 10, 16, None)  # head keeps line 1 whole, tail part of line 10
+
+        assert "abcdefghij\n\n\n... [94 chars / 8 lines omitted] ...\n\nghij\n" in preview
+
     def test_preview_header_omits_artifact_when_none(self):
         preview = harness._preview("x" * 100, 20, None)
 
