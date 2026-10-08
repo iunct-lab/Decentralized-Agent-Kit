@@ -6,6 +6,7 @@ match the trusted public key. The allowed case needs the trusted private key,
 which exists nowhere; it is covered by agent/tests/test_payment_intent_gate.py.
 """
 import base64
+import hashlib
 import json
 import os
 
@@ -29,7 +30,8 @@ def unsigned_intent() -> str:
         "constraints": [{"type": "payment.amount", "currency": "SOL", "max": 100 * 10**9}],
     }]).encode())
     header = {"alg": "ES256", "typ": "kb-sd-jwt+kb", "kid": "it-user"}
-    payload = {"iat": 0, "exp": 2**40, "_sd_alg": "sha-256", "delegate_payload": [{"...": "x"}]}
+    digest = b64u(hashlib.sha256(mandate.encode()).digest())
+    payload = {"iat": 0, "exp": 2**40, "_sd_alg": "sha-256", "delegate_payload": [{"...": digest}]}
     jws = ".".join([b64u(json.dumps(header).encode()), b64u(json.dumps(payload).encode()), b64u(os.urandom(64))])
     return f"{jws}~{mandate}~"
 
