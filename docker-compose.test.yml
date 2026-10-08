@@ -123,6 +123,63 @@ services:
       retries: 30
       start_period: 20s
 
+  # tests/integration/test_a2a.py -k delegation: one DAK hands a task to another
+  # over A2A. The peer's card is named dak_peer (not dak_agent); the consumer finds
+  # it from the peer's endpoint URL in its a2a_peers, not from a hardcoded name.
+  # ADK's RemoteA2aAgent takes a card (and RPC) URL only over https or plain http
+  # on a loopback name; *.localhost counts, so the peer is reached as agent-peer.localhost.
+  agent-peer:
+    build: ./agent
+    networks:
+      default:
+        aliases:
+          - agent-peer.localhost
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://username:password@postgres:5432/postgres
+      - SESSION_SERVICE_URI=postgresql+asyncpg://username:password@postgres:5432/postgres
+      - MCP_SERVER_URL=http://mcp-server:8000/mcp
+      - MODEL_NAME=openai/fake-peer
+      - OPENAI_API_BASE=http://fake-llm:8080/v1
+      - OPENAI_API_KEY=dummy
+      - AGENT_NAME=dak_peer
+      - AGENT_PUBLIC_URL=http://agent-peer.localhost:8000/a2a/dak_agent
+    depends_on:
+      - postgres
+      - fake-llm
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/list-apps')"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+
+  agent-consumer:
+    build: ./agent
+    ports:
+      - "8013:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://username:password@postgres:5432/postgres
+      - SESSION_SERVICE_URI=postgresql+asyncpg://username:password@postgres:5432/postgres
+      - MCP_SERVER_URL=http://mcp-server:8000/mcp
+      - MODEL_NAME=openai/fake-consumer
+      - OPENAI_API_BASE=http://fake-llm:8080/v1
+      - OPENAI_API_KEY=dummy
+      - ENABLE_A2A_CONSUMER=true
+    volumes:
+      - ./tests/integration/fixtures/agent_config.consumer.yaml:/app/agent_config.yaml
+    depends_on:
+      - postgres
+      - fake-llm
+      - agent-peer
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/list-apps')"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+
   mcp-server:
     healthcheck:
       # GET /mcp answers 4xx without a proper MCP handshake; any HTTP response means the server is up
