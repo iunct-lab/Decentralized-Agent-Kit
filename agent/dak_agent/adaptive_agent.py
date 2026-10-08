@@ -961,14 +961,19 @@ class AdaptiveAgent(LlmAgent):
 
 
 def _load_trusted_jwks(raw: str) -> Optional[dict]:
-    """The trusted JWKS, or None when it is missing, not JSON or has no keys."""
+    """The trusted JWKS, or None when it is missing, not JSON, or any key is
+    not a P-256 public key with string coordinates."""
     try:
         jwks = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     keys = jwks.get("keys") if isinstance(jwks, dict) else None
-    if not isinstance(keys, list) or not keys or not all(isinstance(k, dict) for k in keys):
+    if not isinstance(keys, list) or not keys:
         return None
+    for k in keys:
+        if not (isinstance(k, dict) and k.get("kty") == "EC" and k.get("crv") == "P-256"
+                and isinstance(k.get("x"), str) and isinstance(k.get("y"), str)):
+            return None
     return jwks
 
 
