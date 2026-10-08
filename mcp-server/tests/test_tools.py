@@ -152,6 +152,12 @@ class TestMCPTools(unittest.IsolatedAsyncioTestCase):
             result = await main.read_file("/test/big.txt")
         self.assertIn("the other 10 cannot be read with read_file", result)
         self.assertIn("offset=1,", result)
+
+    async def test_read_file_line_that_fits_but_for_its_break_reports_nothing_unreadable(self):
+        content = "x" * main.MAX_OUTPUT_CHARS + "\nnext\n"
+        with patch('builtins.open', mock_open(read_data=content)):
+            result = await main.read_file("/test/big.txt")
+        self.assertNotIn("cannot be read with read_file", result)
         self.assertIn("offset=1,", result)
 
     async def test_read_file_reports_line_count_consistently(self):
