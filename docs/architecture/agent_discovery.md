@@ -184,15 +184,18 @@ card signed by another key with the same kid: InvalidSignaturesError: No valid s
 実装は別の PBI（PBI #318 のスコープ外）。その PBI の出発点として:
 
 - **自分のカード**: 署名の鍵が設定されているときだけ、起動時に `agent/dak_agent/agent.json` のカードへ `create_agent_card_signer` で署名して配る。鍵が無ければ今と同じく署名しない（既定 off）。鍵の置き場と `kid`・`jku` の決め方はその PBI で決める
-- **相手のカード**: `agent/dak_agent/a2a_peer_manager.py` の `create_remote_a2a_agents` で、`RemoteA2aAgent` に渡す前に `a2a-sdk` の `A2ACardResolver.get_agent_card(signature_verifier=...)` でカードを取って確かめる。
+- **相手のカード**: `agent/dak_agent/a2a_peer_manager.py` の `create_remote_a2a_agents` で、`RemoteA2aAgent` に渡す前に `a2a-sdk` の `A2ACardResolver.get_agent_card` でカードを取り、`create_signature_verifier` の関数を別に当てて確かめる（下の「検証の結果を…」の `invalid`）。
   ADK が URL から取るときにしている https と同じ origin の確かめは DAK 側に残す（§1）。信じる公開鍵は `a2a_peers` の各相手に書く（例 `card_keys`。名前はその PBI で決める）
 
 ### 検証の結果をエージェントにどう渡すか（案）
 
 憲章の「System ENABLES, Agent DECIDES」と「Observation-Driven」に合わせ、**検証の結果で接続を自動で切らず、判断の材料として返す**:
 
-- 相手ごとに `verified`（どの `kid` で通ったか）/ `unsigned`（`NoSignatureError`）/ `invalid`（`InvalidSignaturesError`）/ `unchecked`（信じる鍵を書いていない）を決め、
+- 相手ごとに `verified`（どの `kid` で通ったか）/ `unsigned`（`NoSignatureError`）/ `invalid`（それ以外の検証の失敗）/ `unchecked`（信じる鍵を書いていない）を決め、
   その相手の sub-agent の説明（モデルが `transfer_to_agent` の前に読む `description`）に 1 行で書き、ログにも出す
+- `invalid` は `InvalidSignaturesError` に限らない。`a2a-sdk` 1.2.2 の検証の関数は、保護ヘッダが JSON でないなどの壊れた署名で `JSONDecodeError` などをそのまま投げ、
+  `A2ACardResolver.get_agent_card(signature_verifier=...)` に渡すとカードの取得の失敗（`AgentCardResolutionError`）に変わる。
+  そこで検証の関数はカードの取得に渡さず、取ったカードに別に当て、`NoSignatureError` 以外の例外はすべて `invalid` にする（取得の失敗と検証の失敗を分け、検証の失敗で相手を落とさない）
 - `invalid` の相手にも任せられる（任せるかはエージェントが決める）。運用者が止めたいときは、その相手を `a2a_peers` から外す
 - DNS-AID を後で採用するなら、`dnssec_validated` も同じ形で渡す
 
