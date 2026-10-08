@@ -1,0 +1,38 @@
+# Opt-in: run every run_command inside anthropics/sandbox-runtime (srt), so a
+# command can write only to /projects and /tmp and reach no network
+# (MCP_COMMAND_SANDBOX=srt, docs/design/command-sandbox.md, PBI #292).
+#
+#   DAK_UID=$(id -u) DAK_GID=$(id -g) \
+#     docker compose -f docker-compose.yml -f docker-compose.command-sandbox.yml up -d --build
+#
+# WARNING: srt (bubblewrap) needs namespaces, which Docker's defaults forbid, so
+# this loosens the mcp-server container below Docker's defaults (each line says
+# how). srt's frame around the commands is what you get in return. The file
+# tools (read_file, write_file, ...) run in the server, outside srt.
+services:
+  mcp-server:
+    build:
+      args:
+        # Node.js, srt 0.0.77, bubblewrap, socat and ripgrep (about +450 MB).
+        WITH_SRT: "1"
+    environment:
+      - MCP_COMMAND_SANDBOX=srt
+    security_opt:
+      # Docker's default seccomp profile plus 13 namespace/mount syscalls
+      # (unshare, clone, setns, mount, pivot_root, ...) without CAP_SYS_ADMIN.
+      # Risk: a larger kernel attack surface for everything in this container.
+      - seccomp=./mcp-server/seccomp-srt.json
+      # Lets bubblewrap mount a fresh /proc for each command. Risk: the
+      # container's /proc is no longer masked or read-only, also for the file
+      # tools; as non-root (below) the kernel's file permissions still refuse
+      # /proc/kcore, /proc/sys writes and the like.
+      - systempaths=unconfined
+    # Non-root, so the unmasked /proc above stays behind file permissions. Use
+    # your uid:gid so the server can write the files mounted at /projects.
+    user: "${DAK_UID:-1000}:${DAK_GID:-1000}"
+    # `uv run` would need a writable uv cache, which a uid without a home lacks.
+    command: [".venv/bin/python", "main.py"]
+    # /app belongs to root; save_memory writes to .dak/memory under it. Like the
+    # default container's /app, this is lost when the container is recreated.
+    tmpfs:
+      - /app/.dak:uid=${DAK_UID:-1000},gid=${DAK_GID:-1000}

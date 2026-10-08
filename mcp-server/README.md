@@ -121,6 +121,68 @@ In a container that sees `/var/run/docker.sock`, the server refuses to start
 unless `SANDBOX_MODE=docker` (`run_command` would otherwise reach the host's
 daemon unisolated).
 
+### Command sandbox (`MCP_COMMAND_SANDBOX`, optional)
+
+`run_command` can run each command inside
+[anthropics/sandbox-runtime](https://github.com/anthropics/sandbox-runtime)
+(`srt`, bubblewrap on Linux): the command can write only to `/projects` and
+`/tmp`, cannot read the denied paths, and reaches only the allowed network
+destinations (none by default). Design, measurements and the options that were
+weighed: [`docs/design/command-sandbox.md`](../docs/design/command-sandbox.md).
+
+```bash
+DAK_UID=$(id -u) DAK_GID=$(id -g) \
+  docker compose -f docker-compose.yml -f docker-compose.command-sandbox.yml up -d --build
+```
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MCP_COMMAND_SANDBOX` | `off` | `off`: commands run as before. `srt`: `srt --settings <MCP_SRT_SETTINGS> <command>`, starting in `/projects` (`/app` is read-only inside srt). If srt or the settings file is missing, or `SANDBOX_MODE=docker` is set too, the command is **not run** and an error is returned. Any other value is an error too, so a typo never drops the sandbox. |
+| `MCP_SRT_SETTINGS` | `/app/srt-settings.json` | srt's settings file |
+| `DAK_UID` / `DAK_GID` | `1000` | The user the server runs as in `docker-compose.command-sandbox.yml`. Use yours so the server can write the files mounted at `/projects`. With rootless Docker a container uid other than 0 maps to another host uid and cannot write your files. |
+
+`srt-settings.json` (to change it, mount your own copy and point `MCP_SRT_SETTINGS` at it):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `filesystem.allowWrite` | `["/projects", "/tmp"]` | The only writable paths; everything else is read-only |
+| `filesystem.denyRead` | `["/projects/.env", "/root"]` | Hidden: a file reads as empty (`/dev/null`), a directory as an empty one. `/projects/.env` is the `.env` with the API keys |
+| `filesystem.denyWrite` | `[]` | Read-only paths inside `allowWrite` |
+| `network.allowedDomains` | `[]` | Destinations a command may reach through srt's proxy. Empty: no network. To let commands call the agent: `["agent:8000"]` |
+| `network.deniedDomains` | `[]` | Destinations refused even when allowed above |
+| `network.allowLocalBinding` | `false` | Whether a command may listen on a local port |
+
+**What the override loosens.** bubblewrap needs namespaces, which Docker's
+defaults forbid, so `docker-compose.command-sandbox.yml` lowers the
+mcp-server container's own protection below Docker's defaults:
+
+- `seccomp=./mcp-server/seccomp-srt.json`: Docker's default seccomp profile
+  (moby/profiles `seccomp/default.json` at `6fe7deb1b9fb`, Apache-2.0) with 13
+  namespace and mount syscalls allowed without `CAP_SYS_ADMIN`. The rest of the
+  default profile stays.
+- `systempaths=unconfined`: the container's `/proc` is no longer masked or
+  read-only, also for the file tools, so that srt can mount a fresh `/proc` for
+  each command. The server runs as non-root, which keeps `/proc/kcore`,
+  `/proc/sys` and the like behind the kernel's file permissions. Do not run it
+  as root with this override.
+
+**Why it is off by default.** It needs the loosened container above, adds
+about 450 MB to the image (Node.js and srt) and about 0.5 s to each command,
+and srt is a beta research preview.
+
+**What it does not cover.** The file tools (`read_file`, `write_file`, ...)
+run in the server process, outside srt (protected paths: #109; per-session
+isolation: `SANDBOX_MODE` above). Commands still inherit the server's
+environment variables.
+
+**Where it was tried.** Linux arm64 (kernel 6.18) with rootless Docker 29.8.1
+(the design doc). `tests/integration/test_command_sandbox.py` checks the
+override's stack. Docker Desktop, hosts with AppArmor (Ubuntu 24.04 and later
+restrict unprivileged user namespaces by default) and x86_64 are untested.
+The host kernel must be Linux 5.2 or later: on 4.14, bubblewrap 0.12 stops with
+`Can't open source /: Function not implemented` (no `open_tree`), and every
+command is refused.
+
 ## Dependencies
 
 Managed via `uv` and defined in `pyproject.toml`:
