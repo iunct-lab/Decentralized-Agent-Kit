@@ -13,6 +13,7 @@ from starlette.applications import Starlette
 from starlette.routing import Mount
 import uvicorn
 
+import command_sandbox
 from sandbox import DOCKER_SOCKET, DOCKER_WORKDIR, SANDBOX_TTL_SECONDS, SandboxManager, check_socket_exposure
 
 # DNS rebinding protection: since mcp 1.23 FastMCP auto-enables it for its
@@ -285,18 +286,34 @@ async def run_command(command: str, ctx: Context | None = None) -> str:
         command: The command to execute.
     """
     try:
+        # MCP_COMMAND_SANDBOX (docs/design/command-sandbox.md): when it is on but cannot
+        # take effect, refuse instead of running the command unsandboxed.
+        try:
+            mode = command_sandbox.sandbox_mode()
+            settings = command_sandbox.settings_path()
+            reason = command_sandbox.check_ready(mode, settings)
+            if mode == "srt" and _sandbox.mode == "docker":
+                reason = "SANDBOX_MODE=docker runs commands in the session container, outside srt"
+        except ValueError as e:
+            reason = str(e)
+        if reason:
+            return f"Error: command sandbox is enabled but not ready: {reason}. The command was not run."
         key, entry = _session(ctx)
         if entry["mode"] == "docker":
             result = _sandbox.exec_in_session(key, ["sh", "-c", command])
         else:
-            # off: cwd=None, the shared /projects as before; inproc: the session directory.
+            # off: cwd=None, the shared /projects as before (srt: /projects, as /app is
+            # read-only inside it); inproc: the session directory.
+            workdir = entry["workdir"]
+            if workdir is None and mode == "srt":
+                workdir = command_sandbox.SRT_WORKDIR
             result = subprocess.run(
-                command,
-                shell=True,
+                command_sandbox.build_argv(command, mode, settings),
+                shell=(mode == "off"),
                 capture_output=True,
                 text=True,
                 timeout=60,
-                cwd=entry["workdir"],
+                cwd=workdir,
             )
         # Cap each stream on its own: capping the concatenation would drop the
         # stderr of a command that wrote a lot to stdout before failing.
