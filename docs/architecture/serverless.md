@@ -105,14 +105,15 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 
 ### イメージの大きさ（#251、2026-10-08）
 
-`agent/Dockerfile` を、arm64 の使い捨てのビルド環境（Docker 28、BuildKit）でそのままビルドした値。ECR には送っていない（圧縮サイズは `docker save | gzip -9` で見積もった）。
+`agent/Dockerfile` を、arm64 の使い捨てのビルド環境（Docker 28、BuildKit）でそのままビルドした値。ECR には送っていない（圧縮サイズは `docker save | gzip -9` で見積もった）。MB・GB は 10 進（1 GB = 10^9 バイト）。
 
 | 項目 | 値 | AgentCore Runtime（2 GB）に対して | Lambda（10 GB）に対して |
 |---|---:|---:|---:|
 | 非圧縮（`docker image inspect` の Size） | 767 MB | 38%（残り 1.2 GB） | 8% |
-| 圧縮（`docker save \| gzip -9`） | 253 MB | 12% | 2% |
+| 圧縮（`docker save \| gzip -9`） | 253 MB | 13% | 3% |
 
 上限を非圧縮と圧縮のどちらで数えるかは確かめていない。どちらで数えても収まる。
+ECR 上の圧縮サイズは見積もりと一致しないことがある。#253 で BuildKit を使わない別の環境でビルドした dev 用イメージ（非圧縮 1.54 GB）を ECR に送ったときは 360 MB だった。
 レイヤの内訳は、土台の `python:3.12-slim` が 145 MB、`gcc` と `python3-dev` が 255 MB、依存（`uv sync`）が 318 MB、uv 本体が 45 MB。
 
 削れる見込みがあるもの:
@@ -121,9 +122,11 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 |---|---:|---|
 | `gcc` と `python3-dev` のレイヤ | 255 MB | 実行には要らない。マルチステージにすれば実行用のイメージから外せる（arm64 の wheel が無い依存が残っていないかは未確認） |
 | uv 本体（`/bin/uv`） | 45 MB | 実行時は venv を直接起動すれば要らない |
-| `solders`（`solana` は 2 MB 未満） | 24 MB | AP2 の財布のツールだけが使う（`agent/dak_agent/wallets/solana_wallet.py`）。`ENABLE_AP2_PROTOCOL=false`（既定）では読み込まない |
+| `solders`（`solana` は 2 MB 未満で、上位 30 件に入らなかった） | 24 MB | 読み込むのは `agent/dak_agent/wallets/solana_wallet.py` だけ（`decorators.py` 経由でも読まれる）。読み込みは `ImportError` を受けるので、外しても既定のモック（`SOLANA_USE_MOCK=true`）では動き、実チェーンを使うときだけ失敗する |
+| `psycopg2_binary.libs` | 16 MB | `agent/dak_agent` から読み込まれていない（セッションは `asyncpg`）。DB を置かない構成（§3 共通）なら外せる見込み |
+| `pytest` など dev の依存 | 2 MB 以上 | `uv sync` が dev のグループも入れている。`--no-dev` で外せる |
 
-依存で大きいのは `litellm`（85 MB）、`google`（32 MB）、`botocore`（25 MB）。どれもモデルの呼び出しに要る。
+依存で大きいのは `litellm`（85 MB）、`google`（32 MB）、`botocore`（25 MB）。どれもモデルの呼び出しに要る。`a2a-sdk` は 2 MB 未満で、ADK の A2A の受け口に要る。
 ビルドの仕組みで値が変わる点に注意する。同じ Dockerfile でも、BuildKit を使わない別のビルド環境では非圧縮が 1.54 GB と出た（差の内訳は調べていない。uv のキャッシュ `/root/.cache` がレイヤに残ると増える。上の環境では 5 MB）。本番のビルド（#135）では、配置する環境と同じ仕組みで測り直す。
 
 ### 参考: 常時稼働（Fargate）
