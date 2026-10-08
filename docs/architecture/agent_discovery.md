@@ -112,6 +112,7 @@ PBI #318 / Task #319。DAK がほかのエージェント（A2A）と MCP サー
 README の手順のコードブロックを、Docker の使える使い捨ての arm64 の Linux（Docker Compose v5.4.0、Python 3.12）でそのまま実行した（2026-10-08）。
 DAK は fake-LLM の構成（`docker-compose.yml` + `docker-compose.test.yml` の `agent` と `mcp-server`）、DNS は dns-aid-core の v0.28.1（コミット `e3adf8b`）の
 BIND9 の試験用の構成（`ubuntu/bind9:latest`、ゾーン `test.dns-aid.local`、TSIG で RFC 2136 の動的更新）。手順の全体（ビルド・起動・試作・片づけ）は 1 分 14 秒。
+レビューで片づけを直した（compose のプロジェクト名を分けた）後にもう一度実行し、同じ結果だった（1 分 9 秒。`discover` は a2a 10.2 ms・mcp 2.4 ms）。
 
 ### DNS-AID の公開と発見
 
@@ -134,7 +135,7 @@ mcp initialize: serverInfo={"name": "dak-agent-mcp", "version": "1.30.0"}
   中身は `1 localhost. mandatory=alpn,port alpn="a2a" port=8000 key65409="/a2a/dak_agent/.well-known/agent-card.json"`（`well-known` は番号が未割り当てなので私用の番号 `key65409`）と、`version=1.0.0` の TXT
 - **組織の一覧が要る**: 公開しただけでは `discover(ZONE, protocol=...)` が 0 件だった。`_index._agents.<ゾーン>` の索引（`dns_aid.core.indexer.update_index`。TXT `agents=dak-agent:a2a,dak-mcp:mcp`）を書いて見つかった。
   名前を知っている相手は `discover(..., name=...)` か `discover_at_fqdn` で引ける
-- **発見にかかった時間**: 1 回の `discover` が 3〜12 ms（手元の BIND9 に直接。キャッシュの効くリゾルバや本物の DNS の遅延は含まない）
+- **発見にかかった時間**: 1 回の `discover` が 2〜12 ms（2 回の実行）（手元の BIND9 に直接。キャッシュの効くリゾルバや本物の DNS の遅延は含まない）
 - **依存の大きさ**: 新しい venv に `dns-aid==0.28.1` だけを入れて 28 MB、18 パッケージ（`dns-aid` 自身を含む）。
   DAK の agent（`agent/uv.lock`）にはこのうち httpx・pydantic・cryptography・anyio・python-dotenv が既にあり、新しく入るのは dnspython と structlog（と `dns-aid` 自身）
 - **DNSSEC**: 試験用のゾーンは署名していない。既定（`require_dnssec=False`）では `dnssec_validated=False` のまま発見を返す。
