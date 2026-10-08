@@ -26,13 +26,8 @@ dependencies = [
     # Solana + AP2/x402 support
     "solana>=0.40.0",
     "solders>=0.21.0",
-    # a2a-sdk 1.x はエージェントカードの wire format を変える（top-level `url` を廃し
-    # `supportedInterfaces` へ）。google-adk 2.8.0 自体は 0.3/1.x 両対応だが、DAK のカードは
-    # protocolVersion "0.2.6" を宣言しており 1.x クライアントは互換 transport を選べず、
-    # 1.x で配信したカードは 0.3 側の peer が読めない。1.x への移行は「カードの
-    # protocolVersion を 0.3.0+ に上げ、peer 間のバージョン混在をどう扱うか決める」作業
-    # （PR #76 参照）。それまで <1 に留める。
-    "a2a-sdk>=0.2.0,<1",
+    # A2A 1.0 のカードを配る。移行の経緯と版の方針は docs/architecture/a2a.md
+    "a2a-sdk>=1.1,<2",
 ]
 
 [build-system]

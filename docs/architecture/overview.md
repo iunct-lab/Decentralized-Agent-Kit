@@ -8,7 +8,7 @@ The Decentralized Agent Kit (DAK) is designed to be a modular and extensible pla
 The backend service responsible for:
 - **LLM Integration**: Communicating with Large Language Models (Gemini, etc.) via `google-adk`.
 - **State Management**: Storing conversation history and user context (PostgreSQL or In-Memory).
-- **A2A Protocol**: Handling Agent-to-Agent communication via `/task/send` (or `/run`).
+- **A2A Protocol**: Serving A2A 1.0 (and 0.3 for older peers) over JSON-RPC at `POST /a2a/<AGENT_NAME>`, with the Agent Card at `GET /a2a/<AGENT_NAME>/.well-known/agent-card.json` (see [a2a.md](a2a.md)).
 - **MCP Server**: Exposing tools and resources via the Model Context Protocol.
 
 ### 2. BFF UI Service (`bff/`)

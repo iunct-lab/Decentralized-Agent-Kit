@@ -717,8 +717,9 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         which the server mounts at /a2a) resumes the A2A context's session and
         gets its saved handoff."""
         from a2a.server.agent_execution import RequestContext
+        from a2a.server.context import ServerCallContext
         from a2a.server.events import EventQueue
-        from a2a.types import Message, MessageSendParams, Part, Role, TextPart
+        from a2a.types import Message, Part, Role, SendMessageRequest
         from google.adk.a2a.executor.a2a_agent_executor import A2aAgentExecutor
         from google.adk.apps import App
         from google.adk.artifacts import InMemoryArtifactService
@@ -733,12 +734,12 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         agent = AdaptiveAgent(model=_scripted_llm(requests, ["ok"]), name="dak_agent", instruction="Hi.", tools=[])
         runner = Runner(app=App(name="dak_agent", root_agent=agent), session_service=sessions,
                         artifact_service=InMemoryArtifactService())
-        message = Message(message_id="m1", role=Role.user, context_id="ctx-1",
-                          parts=[Part(root=TextPart(text="continue"))])
+        message = Message(message_id="m1", role=Role.ROLE_USER, context_id="ctx-1", parts=[Part(text="continue")])
 
         with patch("dak_agent.remote_tools.discover_remote_tools", return_value={}):
             await A2aAgentExecutor(runner=runner).execute(
-                RequestContext(request=MessageSendParams(message=message), task_id="t1", context_id="ctx-1"),
+                RequestContext(ServerCallContext(), request=SendMessageRequest(message=message),
+                               task_id="t1", context_id="ctx-1"),
                 EventQueue())
 
         self.assertEqual(len(requests), 1)

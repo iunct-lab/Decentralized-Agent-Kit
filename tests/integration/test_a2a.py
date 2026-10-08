@@ -2,9 +2,12 @@
 
 A2A is the peer-to-peer seam of the kit (`agent/dak_agent/a2a_peer_manager.py`),
 but it had no test coverage, so a breaking `a2a-sdk` bump passed CI green while
-making every peer handshake fail (PR #76). These tests pin the two things that
-broke: the agent-card wire format and an actual JSON-RPC task exchange.
+making every peer handshake fail (PR #76). These tests pin the agent-card wire
+format (A2A 1.0, with a 0.3 interface for older peers) and actual exchanges with
+an a2a-sdk 1.x client and with a 0.3 peer. The version policy is in
+docs/architecture/a2a.md.
 """
+import asyncio
 import uuid
 
 import httpx
@@ -30,24 +33,48 @@ def test_agent_card_is_served(agent_card):
     assert agent_card["skills"], "card advertises no skills"
 
 
-def test_agent_card_carries_a_top_level_transport_url(agent_card):
-    """The card must keep the top-level `url` + `preferredTransport` fields.
-
-    This guards the `a2a-sdk<1` pin in agent/pyproject.toml. a2a-sdk 1.x serves
-    the card with `url` moved into `supportedInterfaces`, which 0.3 peers reject
-    ("url Field required"); and because DAK's card declares protocolVersion
-    0.2.6, 1.x clients find "no compatible transports". Update this test
-    together with the card when migrating to 1.x.
-    """
-    assert "url" in agent_card, (
-        f"agent card has no top-level 'url' (a2a-sdk 1.x wire format?): {agent_card}"
-    )
-    assert agent_card["url"].endswith(f"/a2a/{APP_NAME}")
-    assert agent_card["preferredTransport"] == "JSONRPC"
+def test_agent_card_declares_a2a_1_0_jsonrpc_interface(agent_card):
+    """A2A 1.0 clients pick the endpoint from `supportedInterfaces`; a 0.3
+    interface at the same URL keeps older peers (a2a-sdk 0.3, older DAKs) able
+    to read the card, which then also carries the 0.3 top-level fields."""
+    interfaces = {(i["protocolBinding"], i["protocolVersion"]): i["url"]
+                  for i in agent_card.get("supportedInterfaces", [])}
+    assert interfaces.get(("JSONRPC", "1.0"), "").endswith(f"/a2a/{APP_NAME}"), agent_card
+    assert interfaces.get(("JSONRPC", "0.3")) == interfaces[("JSONRPC", "1.0")]
+    assert agent_card["capabilities"].get("streaming") is True
+    assert agent_card["url"] == interfaces[("JSONRPC", "1.0")]  # what a 0.3 peer reads
 
 
-def test_a2a_message_send_round_trip(fake_llm):
-    """A peer can drive the agent over A2A JSON-RPC and get its reply back."""
+@pytest.mark.parametrize("streaming", [False, True])
+def test_a2a_sdk_client_round_trip(fake_llm, streaming):
+    """The official a2a-sdk 1.x client resolves the card and gets the reply
+    over A2A 1.0 JSON-RPC (SendMessage / SendStreamingMessage)."""
+    from a2a.client import ClientConfig, create_client
+    from a2a.types import a2a_pb2 as pb
+
+    fake_llm.clear(MODEL)
+    fake_llm.script(MODEL, [fake_llm.text("A2A 1.0 pong from DAK.")])
+
+    async def exchange():
+        async with httpx.AsyncClient(timeout=120.0) as http:
+            client = await create_client(A2A_RPC_URL, client_config=ClientConfig(streaming=streaming, httpx_client=http))
+            request = pb.SendMessageRequest(message=pb.Message(
+                message_id=uuid.uuid4().hex, role=pb.ROLE_USER, parts=[pb.Part(text="ping")]))
+            try:
+                return [event async for event in client.send_message(request)]
+            finally:
+                await client.close()
+
+    events = asyncio.run(exchange())
+    texts = [part.text for event in events
+             for artifact in ([event.artifact_update.artifact] if event.HasField("artifact_update")
+                              else event.task.artifacts if event.HasField("task") else [])
+             for part in artifact.parts]
+    assert "A2A 1.0 pong from DAK." in texts, events
+
+
+def test_a2a_v0_3_message_send_round_trip(fake_llm):
+    """A 0.3 peer (`message/send`) can still drive the agent and get its reply back."""
     fake_llm.clear(MODEL)
     fake_llm.script(MODEL, [fake_llm.text("A2A pong from DAK.")])
 

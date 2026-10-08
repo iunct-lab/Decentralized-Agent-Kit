@@ -11,6 +11,7 @@ dev = [
     "httpx>=0.28.1",
     "playwright>=1.61.0",
     "agent-client-protocol>=0.12.1,<0.13",
+    "a2a-sdk>=1.1,<2",
 ]
 
 [tool.pytest.ini_options]

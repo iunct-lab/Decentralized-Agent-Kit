@@ -31,8 +31,10 @@ A2A 仕様 1.0 とのずれを測った結果と、版の混在（0.3 の相手�
 | JSON-RPC | `POST /a2a/<AGENT_NAME>` |
 | 組み立て | `agent/dak_agent/server.py` の `get_fast_api_app(..., a2a=True)`。ADK が `agents_dir` の下で `agent.json` のあるディレクトリごとに窓口を足す（`_compat.attach_a2a_routes_to_app`、`prefix=/a2a/<ディレクトリ名>`） |
 
-今の版: `a2a-sdk` 0.3.26（`agent/pyproject.toml` は `a2a-sdk>=0.2.0,<1`、`.github/dependabot.yml` は major を止めている）。
-カードは 0.3 の形で、`"protocolVersion": "0.2.6"` を宣言する。
+今の版: `a2a-sdk` 1.x（`agent/pyproject.toml` は `a2a-sdk>=1.1,<2`。#311）。カードは 1.0 の形で、`supportedInterfaces` に同じ JSON-RPC の URL を
+`protocolVersion` 1.0 と 0.3 の 2 つの窓口として書く（§4）。
+調べた時点（#310）は `a2a-sdk` 0.3.26（`a2a-sdk>=0.2.0,<1` にピンし、`.github/dependabot.yml` は major を止めていた）で、
+カードは 0.3 の形（`"protocolVersion": "0.2.6"`）だった。§2・§3 の「今」と「今の main」はこの時点のこと。
 
 google-adk 2.11 は `a2a-sdk` 0.3 と 1.x の両方を扱う（`_compat.py` が `IS_A2A_V1` で分ける）。
 1.x のときは JSON-RPC の窓口を `enable_v0_3_compat=True`（既定）で作るので、同じ URL で 0.3 の `message/send` も受ける。

@@ -81,10 +81,12 @@ Supports three authentication modes:
 
 ### A2A Protocol
 
-Agent-to-Agent communication endpoints:
+Agent-to-Agent communication endpoints (A2A 1.0 over JSON-RPC; 0.3 peers are still accepted):
 
-- `POST /task/send`: Receive tasks from other agents
-- `GET /task/status/{task_id}`: Query task status
+- `GET /a2a/<AGENT_NAME>/.well-known/agent-card.json`: Agent Card (written by `entrypoint.sh` from `AGENT_NAME` / `AGENT_PUBLIC_URL`)
+- `POST /a2a/<AGENT_NAME>`: JSON-RPC (`SendMessage`, `SendStreamingMessage`, `GetTask`, … and the 0.3 `message/send` / `message/stream`)
+
+The gap to the A2A specification and the version policy: [docs/architecture/a2a.md](../docs/architecture/a2a.md).
 
 ## API Endpoints
 
