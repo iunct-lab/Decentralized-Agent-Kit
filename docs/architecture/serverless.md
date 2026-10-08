@@ -103,6 +103,29 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 - 利点: LLM の応答待ちの間は CPU が課金されない。A2A の task をそのまま使えるので、憲章の「標準プロトコルで結合」に合う。
 - 欠点: AWS 固有の実行環境になる。v2 はアイドル 120 秒でメモリを回収する。
 
+### イメージの大きさ（#251、2026-10-08）
+
+`agent/Dockerfile` を、arm64 の使い捨てのビルド環境（Docker 28、BuildKit）でそのままビルドした値。ECR には送っていない（圧縮サイズは `docker save | gzip -9` で見積もった）。
+
+| 項目 | 値 | AgentCore Runtime（2 GB）に対して | Lambda（10 GB）に対して |
+|---|---:|---:|---:|
+| 非圧縮（`docker image inspect` の Size） | 767 MB | 38%（残り 1.2 GB） | 8% |
+| 圧縮（`docker save \| gzip -9`） | 253 MB | 12% | 2% |
+
+上限を非圧縮と圧縮のどちらで数えるかは確かめていない。どちらで数えても収まる。
+レイヤの内訳は、土台の `python:3.12-slim` が 145 MB、`gcc` と `python3-dev` が 255 MB、依存（`uv sync`）が 318 MB、uv 本体が 45 MB。
+
+削れる見込みがあるもの:
+
+| 対象 | 大きさ | 理由 |
+|---|---:|---|
+| `gcc` と `python3-dev` のレイヤ | 255 MB | 実行には要らない。マルチステージにすれば実行用のイメージから外せる（arm64 の wheel が無い依存が残っていないかは未確認） |
+| uv 本体（`/bin/uv`） | 45 MB | 実行時は venv を直接起動すれば要らない |
+| `solders`（`solana` は 2 MB 未満） | 24 MB | AP2 の財布のツールだけが使う（`agent/dak_agent/wallets/solana_wallet.py`）。`ENABLE_AP2_PROTOCOL=false`（既定）では読み込まない |
+
+依存で大きいのは `litellm`（85 MB）、`google`（32 MB）、`botocore`（25 MB）。どれもモデルの呼び出しに要る。
+ビルドの仕組みで値が変わる点に注意する。同じ Dockerfile でも、BuildKit を使わない別のビルド環境では非圧縮が 1.54 GB と出た（差の内訳は調べていない。uv のキャッシュ `/root/.cache` がレイヤに残ると増える。上の環境では 5 MB）。本番のビルド（#135）では、配置する環境と同じ仕組みで測り直す。
+
 ### 参考: 常時稼働（Fargate）
 
 0.5 vCPU / 1 GB を 1 台置くだけで月約 22 USD（東京）。ALB（月約 18 USD〜）と DB を加えると、月 60 USD 前後になる。小さな呼び出し元の予算の目安（月 5〜10 USD）に収まらない。
@@ -174,5 +197,5 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 | 論点 | 状態 | 内容 |
 |---|---|---|
 | データの所在 | **決定（2026-09-21）** | Global CRIS を許可する。利用者の原文「別にGlobalモデルはあなた自身がすでにGlobalでしょ」|
-| 実行環境 | 未決 → #141 | 実機で確かめてから決める。AgentCore Runtime のイメージの上限は 2 GB・引き上げ不可（2026-09-21、[公式のクォータ表](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/bedrock-agentcore-limits.html)）。Lambda は 10 GB。今のエージェントのイメージは手元で 767 MB（非圧縮）|
+| 実行環境 | 未決 → #141 | 実機で確かめてから決める。AgentCore Runtime のイメージの上限は 2 GB・引き上げ不可（2026-09-21、[公式のクォータ表](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/bedrock-agentcore-limits.html)）。Lambda は 10 GB。今のエージェントのイメージは 767 MB（非圧縮）・253 MB（圧縮）で、どちらでも収まる（§3 のイメージの大きさ、#251）|
 | 費用の上限 | 未決 | 1 日 N 回 × 1 回の上限（#134）が、最悪の場合の月額になる |
