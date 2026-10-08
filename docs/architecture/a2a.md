@@ -11,6 +11,7 @@ A2A 仕様 1.0 とのずれを測った結果と、版の混在（0.3 の相手�
 - §5 Agent Communication Protocol を別に採用しない
 - §6 ほかのフレームワークのクライアント（候補）
 - §7 別の A2A エージェントに任せる（Consumer の `a2a_peers`）
+- §8 適合テスト（CI の a2a-tck）
 
 調べたもの（2026-10-07）:
 
@@ -189,3 +190,39 @@ ADK（2.11）の `RemoteA2aAgent` は、ネットワークから取るカード�
 
 DAK の窓口のパスは、相手の `AGENT_NAME` ではなく、ADK のアプリ（エージェントのディレクトリ）の名前 `dak_agent` で決まる。`AGENT_NAME` はカードの `name` を変えるだけ。
 fake-LLM の構成の `agent-consumer` → `agent-peer`（カードの名前は `dak_peer`。http で呼ぶため、compose のネットワークの別名 `agent-peer.localhost` を使う）で、この委譲を `tests/integration/test_a2a.py::test_delegation_to_peer_with_non_default_name` が確かめる。
+
+## 8. 適合テスト（CI の a2a-tck）
+
+`.github/workflows/ci.yml` の `integration` ジョブが、統合テストの後に、同じ fake-LLM の構成の `agent` に a2a-tck を当てる（#313）。
+
+- 版: `A2A_TCK_REF`（ジョブの `env`）で a2a-tck のコミットを固定する。今は `263b9cfaf16a554bdfb166a7ba5b67716e946349`（§3 と同じ）
+- 範囲: MUST の要件だけ（`--level must`）、JSON-RPC だけ（`--transport jsonrpc`）。下の 6 テストを外し、残りが 1 つでも落ちたら CI を失敗にする
+- 結果: `reports/`（`compatibility.json`・`compatibility.html` など）を成果物 `a2a-tck-report` として残す（落ちたときも）
+
+外すテスト（`--deselect`。DAK の中では直せない 3 要件。§3.2。2026-10-08 の利用者の判断）:
+
+| テスト | 要件 | 外す理由 |
+|---|---|---|
+| `tests/compatibility/core_operations/test_artifacts.py::TestTextArtifact::test_task_has_text_artifact[jsonrpc]` | DM-ART-001 | tck のシナリオに合わせて作った SUT を前提にする（決まった中身の artifact を出させる） |
+| `…::TestFileArtifact::test_task_has_file_artifact[jsonrpc]` | DM-ART-001 | 同上（ファイルの artifact） |
+| `…::TestFileUrlArtifact::test_task_has_file_url_artifact[jsonrpc]` | DM-ART-001 | 同上（URL のファイルの artifact） |
+| `…::TestDataArtifact::test_task_has_data_artifact[jsonrpc]` | DM-ART-001 | 同上（data の artifact） |
+| `…::TestMessageResponse::test_returns_message_with_text_part[jsonrpc]` | DM-MSG-001 | Message での応答を期待する。ADK の窓口はいつも Task で返す |
+| `tests/compatibility/core_operations/test_data_model.py::TestCamelCaseFieldNames::test_no_snake_case_keys` | DM-SERIAL-001 | ADK が `metadata` に入れる `adk_session_id` などの snake_case のキーを違反と数える |
+
+手元で回すとき（fake-LLM の構成を立てた後。sb-offload でも同じ）:
+
+```bash
+git clone https://github.com/a2aproject/a2a-tck.git && cd a2a-tck
+git checkout 263b9cfaf16a554bdfb166a7ba5b67716e946349
+uv venv && uv pip install -e .
+uv run ./run_tck.py --sut-host http://localhost:8000/a2a/dak_agent --transport jsonrpc --level must -- --deselect <上の 6 つ>
+```
+
+a2a-tck を上げるとき:
+
+1. 新しいコミットで、外すテストを付けずに手元で回す（上のコマンドから `--` 以降を外す）
+2. 落ちたテストを上の表と突き合わせる。表に無いテストが落ちたら、DAK のずれとして直す（外して済ませない）。表のテストの名前が変わっていたら表と `ci.yml` の `--deselect` を直す。表のテストが通るようになっていたら、外すのをやめる
+3. `A2A_TCK_REF` とこの節の版を同じ PR で変える
+
+google-adk や a2a-sdk を上げたときも、表の 3 要件が通るようになっていないかを、手元で外さずに回して確かめる。
