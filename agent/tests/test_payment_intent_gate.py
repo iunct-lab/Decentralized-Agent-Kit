@@ -5,6 +5,7 @@ is the mock one, so a blocked call must leave its balance unchanged.
 """
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -20,10 +21,17 @@ from dak_agent.adaptive_agent import (
 )
 from dak_agent.permission import DEFAULT_RULES, Rule
 from skills.solana_wallet import tools as wallet_tools
-from test_payment_intent import OTHER, PAYEE, issue, jwk, present
+from test_payment_intent import OTHER, PAYEE, jwk, present
+from test_payment_intent import issue as issue_at
 from test_permission import Harness, ScriptedLlm, _state_event, responses
 
 SEND = SimpleNamespace(name="send_sol_payment")
+
+
+def issue(key):
+    # The gate checks against the real clock, so the intent is valid from now.
+    now = datetime.now(timezone.utc)
+    return issue_at(key, issued_at=now - timedelta(minutes=1), expires_at=now + timedelta(days=1))
 
 
 @pytest.fixture
@@ -99,7 +107,10 @@ def test_within_range_pays_as_before(monkeypatch, wallet, key):
     assert wallet.get_balance() == 999.5
 
 
-@pytest.mark.parametrize("jwks", [None, "not json", '{"keys": []}', '{"keys": ["not a key"]}'])
+@pytest.mark.parametrize("jwks", [
+    None, "not json", "[" * 100_000, '{"keys": []}', '{"keys": ["not a key"]}',
+    '{"keys": [{"kty": "EC", "crv": "P-256", "x": null, "y": null}]}',
+], ids=["unset", "not-json", "deep-nesting", "no-keys", "key-not-object", "null-coordinates"])
 def test_enabled_without_usable_keys_blocks_every_payment(monkeypatch, wallet, key, jwks):
     agent = make_agent(monkeypatch, jwks=jwks)
     assert_blocked(pay(agent, wallet, context(present(*issue(key)))), wallet, PAYMENT_INTENT_TRUSTED_JWKS_ENV)
