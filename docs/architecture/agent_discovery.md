@@ -9,6 +9,7 @@ PBI #318 / Task #319。DAK がほかのエージェント（A2A）と MCP サー
 - §3 やり方ごとの補足
 - §4 試作する範囲
 - §5 試作の結果
+- §6 採否の案（利用者の判断待ち。PBI #318）
 
 確認日はすべて 2026-10-08。一次資料は §2 の表の「出典」の列と §3 に書く。
 
@@ -165,4 +166,33 @@ card signed by another key with the same kid: InvalidSignaturesError: No valid s
 - 今の DAK のカードを、検証の関数を付けた `A2ACardResolver.get_agent_card` で取ると `NoSignatureError`。Consumer で署名を求めるなら、署名の無い相手はこの例外になる（接続を切るか、判断の材料として返すかは #321）
 - 鍵は実行ごとにメモリの中で作り、どこにも書いていない。鍵の置き場と配り方（`jku` の JWKS、DNS-AID の JWS など）はスコープ外（PBI #318）
 - ほかの実装（a2a-sdk 以外）が付けた署名との相互運用は試していない（§3 の §8.4.1 の正規化の細部）
+
+## 6. 採否の案
+
+#321。**利用者の判断待ち**（PBI #318 の `## 判断待ち`）。回答を受けて、この節を「採否」に直す。
+
+| やり方 | 案 | 根拠 | また見直す条件 |
+|---|---|---|---|
+| 今の設定ファイル | **続ける**（既定の見つけ方のまま） | 依存が無く、どの構成でも動く（§2）。ほかのやり方を足しても、相手を手で書く道は残す | — |
+| 署名付き Agent Card | **採用**（実装の PBI を別に切る） | A2A 1.0 の仕様の一部（§2）。DAK が使う `a2a-sdk` 1.2.2 の関数で、依存を増やさずに署名と検証ができた。改ざんと別の鍵の署名を見分けた（§5） | — |
+| DNS-AID | **見送り** | 作業部会に未採択の個人ドラフトで、owner 名の形が -01 と -02 で変わり、`cap`・`well-known` などの SvcParam の番号が未割り当て（§2・§3）。`dns-aid` は試作で、リゾルバの向き先を受け取らない・窓口を https に決め打ちする・MCP のパスを載せる場所が無いなど、DAK に入れるには回り道が要った（§5）。DNSSEC を求めても検証は上流のリゾルバ任せ（§5）。DAK がつなぐ相手に DNS-AID で窓口を出しているものがまだ無い | draft が dnsop の作業部会に採択される、または SvcParam の番号が IANA に割り当てられる。あるいは、DAK がつなぎたい相手が DNS-AID で窓口を出す |
+| agent:// | **見送り** | §4（試作しない理由と同じ） | §4 |
+| NANDA の Index と AgentFacts | **見送り** | §4（試作しない理由と同じ） | §4 |
+
+### 署名付き Agent Card を実装する場合の入り口（案）
+
+実装は別の PBI（PBI #318 のスコープ外）。その PBI の出発点として:
+
+- **自分のカード**: 署名の鍵が設定されているときだけ、起動時に `agent/dak_agent/agent.json` のカードへ `create_agent_card_signer` で署名して配る。鍵が無ければ今と同じく署名しない（既定 off）。鍵の置き場と `kid`・`jku` の決め方はその PBI で決める
+- **相手のカード**: `agent/dak_agent/a2a_peer_manager.py` の `create_remote_a2a_agents` で、`RemoteA2aAgent` に渡す前に `a2a-sdk` の `A2ACardResolver.get_agent_card(signature_verifier=...)` でカードを取って確かめる。
+  ADK が URL から取るときにしている https と同じ origin の確かめは DAK 側に残す（§1）。信じる公開鍵は `a2a_peers` の各相手に書く（例 `card_keys`。名前はその PBI で決める）
+
+### 検証の結果をエージェントにどう渡すか（案）
+
+憲章の「System ENABLES, Agent DECIDES」と「Observation-Driven」に合わせ、**検証の結果で接続を自動で切らず、判断の材料として返す**:
+
+- 相手ごとに `verified`（どの `kid` で通ったか）/ `unsigned`（`NoSignatureError`）/ `invalid`（`InvalidSignaturesError`）/ `unchecked`（信じる鍵を書いていない）を決め、
+  その相手の sub-agent の説明（モデルが `transfer_to_agent` の前に読む `description`）に 1 行で書き、ログにも出す
+- `invalid` の相手にも任せられる（任せるかはエージェントが決める）。運用者が止めたいときは、その相手を `a2a_peers` から外す
+- DNS-AID を後で採用するなら、`dnssec_validated` も同じ形で渡す
 
