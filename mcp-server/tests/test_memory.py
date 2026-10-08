@@ -47,6 +47,12 @@ class TestMemory(unittest.IsolatedAsyncioTestCase):
         self.assertTrue((await main.load_memory("../user")).startswith("Error"))
         self.assertFalse(os.path.exists(".dak"))
 
+    async def test_save_empty_text_returns_error(self):
+        """A blank save stores nothing and does not report success."""
+        for text in ("", "  \n"):
+            self.assertTrue((await main.save_memory(text)).startswith("Error"), repr(text))
+        self.assertFalse(os.path.exists(".dak"))
+
     async def test_load_missing_scope_returns_empty_string(self):
         self.assertEqual(await main.load_memory("user"), "")
         self.assertEqual(await main.load_memory(""), "")
@@ -60,6 +66,9 @@ class TestMemory(unittest.IsolatedAsyncioTestCase):
         self.assertIn("NEWEST", loaded)
         self.assertNotIn("OLDEST", loaded)
         self.assertIn("[truncated:", loaded)
+        # Only the newest part is kept: no "middle" and no "first 0 chars".
+        self.assertNotIn("middle", loaded)
+        self.assertNotIn("first 0", loaded)
         self.assertIn(".dak/memory/project.md", loaded)
         with open(".dak/memory/project.md", encoding="utf-8") as f:
             self.assertIn("OLDEST", f.read())
