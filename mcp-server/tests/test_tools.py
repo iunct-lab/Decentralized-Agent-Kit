@@ -143,8 +143,15 @@ class TestMCPTools(unittest.IsolatedAsyncioTestCase):
         self.assertIn("truncated: 10000 more chars", result)
         # One line longer than the bound: its head is shown, and the hint says the
         # rest of that line cannot be paged with read_file before pointing past it
-        self.assertIn(f"line 0 is {len(content)} chars; only its first {main.MAX_OUTPUT_CHARS} are shown "
-                      "and the other 10000 cannot be read with read_file", result)
+        self.assertIn(f"The line at offset 0 is {len(content)} chars; only its first {main.MAX_OUTPUT_CHARS} are "
+                      "shown and the other 10000 cannot be read with read_file", result)
+
+    async def test_read_file_oversized_line_count_leaves_out_the_line_break(self):
+        content = "x" * (main.MAX_OUTPUT_CHARS + 10) + "\r\nnext\n"
+        with patch('builtins.open', mock_open(read_data=content)):
+            result = await main.read_file("/test/big.txt")
+        self.assertIn("the other 10 cannot be read with read_file", result)
+        self.assertIn("offset=1,", result)
         self.assertIn("offset=1,", result)
 
     async def test_read_file_reports_line_count_consistently(self):
