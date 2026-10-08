@@ -126,7 +126,7 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 
 - 名前で絞った権限だけではランタイムを作れない。作成の中で作られる既定のエンドポイント（`CreateAgentRuntimeEndpoint`）とワークロード ID（`CreateWorkloadIdentity`）が、名前の決まる前の `runtime/*`・`workload-identity/*` に対して、呼び出し側の権限で評価される。dev では、`CreateAgentRuntimeEndpoint` を `runtime/*` に（#562）、`CreateWorkloadIdentity` を `workload-identity/*` に、`GetAgentRuntime` と `DeleteAgentRuntime` を `runtime/*` に許した（#589 の利用者の回答）。使う・変える操作は `dak_dev_*` のまま
 - アカウントで最初のランタイムを作るとき、サービスにリンクされたロール `AWSServiceRoleForBedrockAgentCoreRuntimeIdentity` が作られる（`iam:CreateServiceLinkedRole` が要る。一度作れば残る）
-- `DeleteAgentRuntime` の中のワークロード ID の削除（`DeleteWorkloadIdentity`）も、呼び出し側の名前で CloudTrail に記録された。名前で絞った削除の権限では、ほかの名前で作ったランタイムのワークロード ID は消せない見込み（試していない。`DeleteWorkloadIdentity` を広げるかは未決）
+- `DeleteAgentRuntime` の中のワークロード ID の削除（`DeleteWorkloadIdentity`）も、呼び出し側の名前で CloudTrail に記録された。名前で絞った削除の権限では、ほかの名前で作ったランタイムのワークロード ID は消せない見込み（試していない。`DeleteWorkloadIdentity` は広げないと決めた。#589 の利用者の回答）
 
 ### イメージの大きさ（#251、2026-10-08）
 
@@ -238,7 +238,7 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 | CPU | arm64 で確かめた（x86_64 も選べるが、試していない） | ARM64 だけ |
 | 入口 | AWS Lambda Web Adapter で今のサーバのまま動いた（読み取り専用のルートファイルシステムのため、`agent.json` をビルド時に作り、`uv run` を使わなかった） | `/ping` と `/invocations`（または A2A）の入口が要る |
 | コールドスタート | 初回 18.7 秒（Init が上限 10 秒で打ち切られて再実行）。2 回目 0.8 秒 | 作った直後の初回 30.2 秒、別のセッションの初回 10.5 秒、同じセッション 1.5 秒 |
-| 30 秒を超えるターン | 同期 `Invoke` で 379 秒まで受け取れた（上限 15 分）。非同期 Event は応答を返さず、失敗時に最大 2 回再試行する（二重実行になりうる。未実測） | 同期とストリーミングで 120 秒まで受け取れた（上限は同期 15 分、ストリーミング 60 分） |
+| 30 秒を超えるターン | 同期 `Invoke` で 379 秒まで受け取れた（上限 15 分）。非同期 Event は応答を返さず、失敗時に最大 2 回再試行する（二重実行になりうる。未実測） | 同期とストリーミングで 120 秒まで受け取れた（上限は同期 15 分、ストリーミング 60 分、非同期ジョブ 8 時間） |
 | 状態 | 実行中は別のコンテナが受けるとセッションが見えない | セッション ID ごとに別のプロセス。アイドルで回収される |
 | 呼び出しの認証 | IAM（`lambda:InvokeFunction`）で許可と拒否を確かめた | SigV4（`InvokeAgentRuntime`）で許可と拒否を確かめた |
 | 別の Lambda から | 未実施（#135） | 未実施（#135） |
