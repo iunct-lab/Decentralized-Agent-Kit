@@ -233,8 +233,8 @@ async def read_file(path: str, offset: int = 0, limit: int = 0, ctx: Context | N
     else:  # one line longer than the bound: show its head, go on after it
         shown, next_line = selected[0][:MAX_OUTPUT_CHARS], start + 1
         line_chars = len(selected[0].rstrip("\r\n"))
-        cut = ""
-        if line_chars > MAX_OUTPUT_CHARS:  # only its line break did not fit: nothing is lost
+        cut = ""  # stays empty when only the line break did not fit: nothing is lost
+        if line_chars > MAX_OUTPUT_CHARS:
             cut = (f" The line at offset {start} is {line_chars} chars; only its first {MAX_OUTPUT_CHARS} are shown "
                    f"and the other {line_chars - MAX_OUTPUT_CHARS} cannot be read with read_file (narrow them with "
                    "run_command, e.g. cut or grep).")
