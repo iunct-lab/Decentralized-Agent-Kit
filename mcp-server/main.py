@@ -70,6 +70,12 @@ INSTRUCTION_FILENAMES = ("AGENTS.md", "CLAUDE.md", "CONTEXT.md")
 MAX_INSTRUCTIONS_BYTES = _env_int("MCP_INSTRUCTIONS_MAX_BYTES", 32768)
 TRUSTED_WORKSPACE_PREFIXES = [os.path.normpath(p.strip()) for p in os.getenv("MCP_TRUSTED_WORKSPACE_PREFIXES", ".").split(":") if p.strip()]
 
+# Memory (save_memory / load_memory): one append-only file per scope under the
+# workspace root (/projects). load_memory returns at most this many chars.
+MEMORY_DIR = ".dak/memory"
+MEMORY_SCOPES = ("user", "project")
+MEMORY_MAX_CHARS = _env_int("MCP_MEMORY_MAX_CHARS", 8000)
+
 
 def _cap_text(text: str, hint: str, limit: int = MAX_OUTPUT_CHARS, head_ratio: float = 1.0) -> str:
     """Keep the first `head_ratio` of `limit` chars and the rest from the end."""
@@ -479,6 +485,65 @@ async def get_project_instructions(path: str = ".") -> str:
         return text
     cut = data[:MAX_INSTRUCTIONS_BYTES].decode("utf-8", errors="ignore")
     return cut + "\n\n[truncated: instructions exceeded MCP_INSTRUCTIONS_MAX_BYTES]"
+
+
+def _memory_path(scope: str) -> str:
+    return os.path.join(MEMORY_DIR, f"{scope}.md")
+
+
+def _load_scope(scope: str, limit: int) -> str:
+    """One scope's memory, the newest `limit` chars kept ("" when nothing is saved)."""
+    path = _memory_path(scope)
+    if not os.path.isfile(path):
+        return ""
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+    hint = f"Older {scope} memory kept in {path}; edit it directly to curate."
+    return _cap_text(content, hint, limit=limit, head_ratio=0.0)
+
+
+@mcp.tool()
+async def save_memory(text: str, scope: str = "project") -> str:
+    """
+    Remember something across sessions by appending it to a memory file.
+    Always writes the server's workspace (/projects), never a session sandbox.
+    Args:
+        text: What to remember.
+        scope: "user" (about the user: preferences, habits) or "project"
+               (about this workspace: conventions, commands). Default: project.
+    """
+    if scope not in MEMORY_SCOPES:
+        return f"Error: scope must be one of {MEMORY_SCOPES}."
+    try:
+        os.makedirs(MEMORY_DIR, exist_ok=True)
+        with open(_memory_path(scope), "a", encoding="utf-8") as f:
+            f.write(text.rstrip() + "\n\n")
+    except OSError as e:
+        return f"Error saving memory: {e}"
+    return f"Saved to {scope} memory ({len(text)} chars)."
+
+
+@mcp.tool()
+async def load_memory(scope: str = "") -> str:
+    """
+    Read the saved memory, capped at MCP_MEMORY_MAX_CHARS (the newest part is kept).
+    Always reads the server's workspace (/projects), never a session sandbox.
+    Args:
+        scope: "user", "project", or "" (default) for both under a heading each.
+    """
+    if scope and scope not in MEMORY_SCOPES:
+        return f"Error: scope must be one of {MEMORY_SCOPES} or empty."
+    try:
+        if scope:
+            return _load_scope(scope, MEMORY_MAX_CHARS)
+        sections = []
+        for name in MEMORY_SCOPES:
+            capped = _load_scope(name, MEMORY_MAX_CHARS // 2)
+            if capped:
+                sections.append(f"# {name.title()} Memory\n{capped}\n\n")
+        return "".join(sections)
+    except OSError as e:
+        return f"Error loading memory: {e}"
 
 
 @contextlib.asynccontextmanager
