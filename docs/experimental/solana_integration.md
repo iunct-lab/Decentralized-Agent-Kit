@@ -71,7 +71,7 @@ Payment Protocol) differs from Google's AP2 (Agent Payments Protocol) are in
 ENABLE_PAYMENT_INTENT_CHECK=true
 
 # The user's PUBLIC key(s) as a JWKS JSON string (EC, P-256, ES256).
-DAK_PAYMENT_INTENT_TRUSTED_JWKS={"keys":[{"kty":"EC","crv":"P-256","kid":"user-1","x":"...","y":"..."}]}
+DAK_PAYMENT_INTENT_TRUSTED_JWKS='{"keys":[{"kty":"EC","crv":"P-256","kid":"user-1","x":"...","y":"..."}]}'
 ```
 
 - **Keys**: only public keys go in `DAK_PAYMENT_INTENT_TRUSTED_JWKS`. The user
