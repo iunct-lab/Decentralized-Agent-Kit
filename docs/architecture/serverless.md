@@ -113,20 +113,20 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 | アーキテクチャ | ARM64 のコンテナが必須（[HTTP プロトコルの契約](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-http-protocol-contract.html)）。arm64 のマシンで `agent/Dockerfile` をそのままビルドして動いた。x86_64 のマシンでは `docker buildx build --platform linux/arm64` でのクロスビルドが要るはずだが、試していない |
 | 配置 | イメージ（#251 より前の依存、ECR 上で 360 MB）を指定して `create-agent-runtime` から READY まで 3.9 秒 |
 | 1 ターンの実行 | 成功。`InvokeAgentRuntime` が DAK の応答を返した |
-| コールドスタート | 作った直後の最初の呼び出しが 30.2 秒。うち約 14 秒は応答したプロセスが起動する前（microVM とイメージの起動と見られる）、6.1 秒が DAK の読み込み、9.8 秒が最初のターン。別のセッションの最初の呼び出しは 10.5 秒で、応答したプロセスは呼び出しの前から動いていた（AWS が前もって起動していたと見られるが、仕組みは確かめていない）。同じセッションの 2 回目は 1.5 秒（DAK の処理は 0.04 秒）。どのプロセスでも最初のターンだけが 7.6〜9.8 秒かかった（原因は未確認。S1 でも初回が遅かったが、モデルも条件も違うので比べていない） |
+| コールドスタート | 作った直後の最初の呼び出しが 30.2 秒。うち約 14 秒は応答したプロセスが起動する前（CLI の起動の約 1 秒を含む。残りは microVM とイメージの起動と見られる）、6.1 秒が DAK の読み込み、9.8 秒が最初のターン。別のセッションの最初の呼び出しは 10.5 秒で、応答したプロセスは呼び出しの前から動いていた（AWS が前もって起動していたと見られるが、仕組みは確かめていない）。同じセッションの 2 回目は 1.5 秒（DAK の処理は 0.04 秒）。どのプロセスでも最初のターンだけが 7.6〜9.8 秒かかった（原因は未確認。S1 でも初回が遅かったが、モデルも条件も違うので比べていない） |
 | セッションの分離 | 2 つのセッション ID に、別のプロセス（DAK の読み込み時間と起動からの時間が違う）が応答した。ほかのセッションの会話が見えないことは試していない（入口は AgentCore のセッション ID を DAK のセッション ID に使うので、同じプロセスでも分かれる） |
 | 30 秒を超えるターン（同期） | 45 秒のターンが 47.4 秒、120 秒のターンが 122.1 秒で、JSON の応答を受け取れた。API Gateway を挟まない `InvokeAgentRuntime` は 30 秒に縛られない（同期の上限は 15 分） |
 | 30 秒を超えるターン（ストリーミング） | `"stream": true` で、45 秒のターンが 48.7 秒、120 秒のターンが 121.1 秒。応答は部分（`partial: true`）のイベントの列で返った。偽のサーバは 5 秒ごとに部分を出すが、届いた時刻は測っていない（ストリーミングの上限は 60 分） |
 | アイドルの回収 | 150 秒あけて同じセッション ID で呼ぶと、前とは別の、前もって起動していたプロセスが答えた（9.1 秒。ほとんどは最初のターンの 7.6 秒）。前のプロセスの `/tmp` のセッションは引き継がれないと見られる（会話の履歴が残るかは試していない）。呼び出しごとのセッションで動かす方針（§3 共通）なら影響しない |
 | SigV4 の呼び出し | `bedrock-agentcore:InvokeAgentRuntime` を持つロールは成功、持たないロールは AccessDeniedException（どちらも同じマシンから）。別の Lambda からの呼び出しは未実施（S1 と同じく #135 で確かめる） |
 | 後片付け | `delete-agent-runtime` でランタイムとワークロード ID が消えた。ECR の画像も消した。前からあった ECR のリポジトリと実行ロールは消していない。この作業で作られたサービスにリンクされたロール（下）は残る |
-| 費用 | 未計測 |
+| 費用 | 未計測（請求に反映されてから、#254 で Cost Explorer から見る） |
 
 配置する側の権限で、実機で初めて分かったこと（#562、#580、#589）:
 
-- 名前で絞った権限だけではランタイムを作れない。作成の中で作られる既定のエンドポイント（`CreateAgentRuntimeEndpoint`）とワークロード ID（`CreateWorkloadIdentity`）が、名前の決まる前の `runtime/*`・`workload-identity/*` に対して、呼び出し側の権限で評価される。dev ではこの 2 つを `*` に許し、どの名前で作っても読み取りと削除はできるようにした（#589 の利用者の回答）
+- 名前で絞った権限だけではランタイムを作れない。作成の中で作られる既定のエンドポイント（`CreateAgentRuntimeEndpoint`）とワークロード ID（`CreateWorkloadIdentity`）が、名前の決まる前の `runtime/*`・`workload-identity/*` に対して、呼び出し側の権限で評価される。dev では、`CreateAgentRuntimeEndpoint` を `runtime/*` に（#562）、`CreateWorkloadIdentity` を `workload-identity/*` に、`GetAgentRuntime` と `DeleteAgentRuntime` を `runtime/*` に許した（#589 の利用者の回答）。使う・変える操作は `dak_dev_*` のまま
 - アカウントで最初のランタイムを作るとき、サービスにリンクされたロール `AWSServiceRoleForBedrockAgentCoreRuntimeIdentity` が作られる（`iam:CreateServiceLinkedRole` が要る。一度作れば残る）
-- `DeleteAgentRuntime` の中のワークロード ID の削除（`DeleteWorkloadIdentity`）も、呼び出し側の名前で CloudTrail に記録された。名前で絞った削除の権限では、ほかの名前で作ったランタイムのワークロード ID は消せない見込み（試していない）
+- `DeleteAgentRuntime` の中のワークロード ID の削除（`DeleteWorkloadIdentity`）も、呼び出し側の名前で CloudTrail に記録された。名前で絞った削除の権限では、ほかの名前で作ったランタイムのワークロード ID は消せない見込み（試していない。`DeleteWorkloadIdentity` を広げるかは未決）
 
 ### イメージの大きさ（#251、2026-10-08）
 
