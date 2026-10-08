@@ -40,6 +40,9 @@ STATE_CALLER_MCP_TOOLS = "temp:dak_caller_mcp_tools"
 # The project's instruction files (mcp-server's get_project_instructions),
 # read at the start of every invocation and sent with its instruction.
 STATE_PROJECT_INSTRUCTIONS = "dak_project_instructions"
+# The saved user/project memory (mcp-server's load_memory, capped there by
+# MCP_MEMORY_MAX_CHARS), read at the start of every invocation like the above.
+STATE_LOADED_MEMORY = "dak_loaded_memory"
 # What DAK asks the model when its reply failed `dak:output_schema` / `dak:inspection`.
 INSPECTION_RETRY_PROMPT = ("Your previous response failed validation.\nValidation errors:\n{errors}\n\n"
                            "Produce a corrected response only, in the exact format required.")
@@ -235,10 +238,10 @@ class AdaptiveAgent(LlmAgent):
 
     def _verbatim_sections(self, state: MutableMapping[str, Any]) -> str:
         """The instruction's tail built from text the user or the model wrote
-        (the project's instruction files, the plan, the original request, the
-        handoff): sent as is, never
+        (the project's instruction files, the saved memory, the plan, the
+        original request, the handoff): sent as is, never
         through ADK's `{var}` session-state injection."""
-        return (self._project_instructions_section(state) + self._plan_section(state)
+        return (self._project_instructions_section(state) + self._memory_section(state) + self._plan_section(state)
                 + self._original_request_section(state) + self._handoff_section(state))
 
     @staticmethod
@@ -288,6 +291,15 @@ class AdaptiveAgent(LlmAgent):
             marker = "\n[truncated — call get_project_instructions for the full text]"
             text = text[: max_chars - len(marker)] + marker
         return f"\n\n# Project Instructions\n{text}"
+
+    @staticmethod
+    def _memory_section(state: MutableMapping[str, Any]) -> str:
+        """The memory saved with save_memory (user and project scopes), as
+        load_memory returned it: already within MCP_MEMORY_MAX_CHARS."""
+        text = state.get(STATE_LOADED_MEMORY)
+        if not isinstance(text, str) or not text:
+            return ""
+        return f"\n\n# Remembered Context\n{text}"
 
     def _plan_section(self, state: MutableMapping[str, Any]) -> str:
         """The session's plan (`write_todos`), rebuilt from state every turn so
@@ -354,6 +366,30 @@ class AdaptiveAgent(LlmAgent):
                 callback_context.state[STATE_PROJECT_INSTRUCTIONS] = text
         except Exception as e:
             logger.warning(f"Could not read the project instructions: {e}")
+
+    async def _inject_memory(self, callback_context: CallbackContext) -> None:
+        """Read the saved memory (both scopes) from the default MCP server once
+        per invocation, the same way as `_inject_project_instructions`: nothing
+        saved clears the kept text, a failure or an error result keeps it, and
+        only a changed text is written."""
+        if not self._has_default_mcp_toolset:
+            return
+        try:
+            toolset = self._cached_mcp_toolset(self._mcp_url, "http", set())
+            tools = await toolset.get_tools()
+            tool = next((t for t in tools if getattr(t, "name", None) == "load_memory"), None)
+            if tool is None:  # an older mcp-server
+                return
+            result = await tool.run_async(args={"scope": ""}, tool_context=callback_context)
+            text = _result_text(result) or None
+            if (isinstance(result, Mapping) and result.get("isError")) or (
+                    text or "").startswith(("Error loading memory", "Error: scope")):
+                logger.warning(f"Could not load the memory: {text}")
+                return
+            if callback_context.state.get(STATE_LOADED_MEMORY) != text:
+                callback_context.state[STATE_LOADED_MEMORY] = text
+        except Exception as e:
+            logger.warning(f"Could not load the memory: {e}")
 
     @staticmethod
     def _capture_original_request(context: CallbackContext) -> None:
@@ -581,6 +617,7 @@ class AdaptiveAgent(LlmAgent):
             # one whose `dak:instruction` replaces the instruction.
             if not refused and not call_settings.get(call_config.STATE_CALL_INSTRUCTION):
                 await self._inject_project_instructions(callback_context)
+                await self._inject_memory(callback_context)
             error = self._apply_session_config(callback_context)
         except Exception as e:
             logger.error(f"CRITICAL ERROR restoring session config: {e}", exc_info=True)
