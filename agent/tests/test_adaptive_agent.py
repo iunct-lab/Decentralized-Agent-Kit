@@ -886,7 +886,7 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         tools[0].run_async.assert_awaited_once_with(args={"scope": ""}, tool_context=context)
         self.assertEqual(state[STATE_LOADED_MEMORY], memory)
 
-    async def test_inject_memory_empty_result_is_noop(self):
+    async def test_inject_memory_empty_result_keeps_nothing_and_clears_a_stale_one(self):
         """Nothing saved: nothing is kept, and a stale memory is cleared."""
         from google.adk.sessions.state import State
 
@@ -916,6 +916,20 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(state[STATE_LOADED_MEMORY], "likes concise answers")
             self.assertEqual(state._delta, {})
+
+    async def test_inject_memory_records_no_delta_when_unchanged(self):
+        """Every turn re-reads the memory: an unchanged text must not add a
+        state delta (up to MCP_MEMORY_MAX_CHARS per turn in a persisted session)."""
+        from google.adk.sessions.state import State
+
+        agent, toolset, _ = self._project_instructions_agent(
+            {"content": [{"type": "text", "text": "likes concise answers"}]}, names=("load_memory",))
+        state = State({STATE_LOADED_MEMORY: "likes concise answers"}, {})
+
+        with patch.object(AdaptiveAgent, "_cached_mcp_toolset", return_value=toolset):
+            await agent._inject_memory(self._session_context(agent, state))
+
+        self.assertEqual(state._delta, {})
 
     async def test_restore_session_config_injects_memory_into_the_instruction(self):
         """The memory read at the start of the invocation reaches this turn's
