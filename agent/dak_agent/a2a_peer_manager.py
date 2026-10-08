@@ -29,7 +29,7 @@ class A2APeerConfig:
         self.card_url = card_url
 
     def __repr__(self):
-        return f"A2APeer({self.name}, {self.url}, caps={self.capabilities})"
+        return f"A2APeer({self.name}, {self.url}, card_url={self.card_url}, caps={self.capabilities})"
 
 
 def load_a2a_peers_from_config(config_path: str = None) -> List[A2APeerConfig]:

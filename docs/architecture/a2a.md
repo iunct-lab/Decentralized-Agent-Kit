@@ -173,18 +173,19 @@ MUST の要件 114 件のうち、PASS 56 件・FAIL 3 件・SKIPPED 33 件・NO
 |---|---|
 | `card_url: <URL>` | その URL |
 | `url:` がカードの URL（`…/.well-known/agent-card.json` で終わる） | そのまま |
-| `url:` が相手の A2A 窓口（例 `http://agent-peer:8000/a2a/dak_agent`） | 窓口の下の `/.well-known/agent-card.json` |
-| `url:` にパスが無い（例 `http://agent-provider:8000`。前の書き方） | DAK の既定の窓口 `/a2a/dak_agent` を補う。新しい書き方を示す警告をログに出す |
+| `url:` が相手の A2A 窓口（例 `https://peer.example/a2a/dak_agent`） | 窓口の下の `/.well-known/agent-card.json` |
+| `url:` にパスが無い（例 `https://peer.example`。前の書き方） | DAK の既定の窓口 `/a2a/dak_agent` を補う。新しい書き方を示す警告をログに出す。DAK でない相手がホストの直下（`/.well-known/agent-card.json`）でカードを配るときは `card_url` を書く |
 
 ```yaml
 a2a_peers:
   - name: "dak_peer"                              # sub-agent の名前（transfer_to_agent で使う）
-    url: "http://agent-peer:8000/a2a/dak_agent"   # 相手の A2A 窓口。カードはその下
+    url: "https://peer.example/a2a/dak_agent"     # 相手の A2A 窓口。カードはその下（https。下の段落）
     capabilities: ["..."]
 ```
 
 ADK（2.11）の `RemoteA2aAgent` は、ネットワークから取るカードの URL と、カードが示す RPC の URL の両方に **https** を求める（http はループバックの名前 `localhost`・`*.localhost`・`127.0.0.1` などだけ。外す設定は無い）。
 カードの RPC の URL は、カードを取った URL と同じ origin でなければならない。別のホストの DAK に任せるときは、相手の窓口を https で公開する。
+`url` にクエリ文字列を付けない（カードのパスがクエリの後ろに付き、カードを取れない）。
 
 DAK の窓口のパスは、相手の `AGENT_NAME` ではなく、ADK のアプリ（エージェントのディレクトリ）の名前 `dak_agent` で決まる。`AGENT_NAME` はカードの `name` を変えるだけ。
 fake-LLM の構成の `agent-consumer` → `agent-peer`（カードの名前は `dak_peer`。http で呼ぶため、compose のネットワークの別名 `agent-peer.localhost` を使う）で、この委譲を `tests/integration/test_a2a.py::test_delegation_to_peer_with_non_default_name` が確かめる。
