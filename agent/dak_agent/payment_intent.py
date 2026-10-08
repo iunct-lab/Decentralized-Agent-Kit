@@ -86,6 +86,8 @@ def verify_payment_intent(
         return _check_constraints(mandate, payee=payee, amount_minor=amount_minor, currency=currency)
     except _Invalid as e:
         return _reject(str(e))
+    except RecursionError:
+        return _reject("malformed SD-JWT: nested too deeply")
 
 
 def _b64decode(part: str) -> bytes:
@@ -98,7 +100,10 @@ def _b64decode(part: str) -> bytes:
 def _json(part: str) -> Any:
     try:
         return json.loads(_b64decode(part))
-    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+    # ValueError covers JSONDecodeError, bad UTF-8 and integers over Python's
+    # digit limit; RecursionError a deeply nested value. All come before the
+    # signature is checked, so they must reject rather than raise.
+    except (ValueError, RecursionError) as e:
         raise _Invalid("malformed SD-JWT: bad JSON") from e
 
 
@@ -165,8 +170,11 @@ def _verify_signature(signing_input: bytes, signature: bytes, header: dict, trus
 def _check_time(payload: dict, now: datetime) -> None:
     exp, iat = payload.get("exp"), payload.get("iat")
     for name, value in (("exp", exp), ("iat", iat)):
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise _Invalid(f"missing or non-numeric {name}")
+        # A float exp of NaN or Infinity would never expire; ints are exact.
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or (
+            isinstance(value, float) and not math.isfinite(value)
+        ):
+            raise _Invalid(f"missing or non-finite {name}")
     ts = now.timestamp()
     if ts > exp + CLOCK_SKEW_SECONDS:
         raise _Invalid("intent expired (exp)")

@@ -60,11 +60,12 @@ def amount(currency="SOL", min=None, max=1_000_000_000) -> dict:
     return c
 
 
-def issue(key, constraints=None, payees=(PAYEE,), *, alg="ES256", iat=None, exp=None, extra_mandates=()):
+def issue(key, constraints=None, payees=(PAYEE,), *, alg="ES256", issued_at=None, expires_at=None, extra_mandates=(), **claims):
     """Issue an L2 SD-JWT; returns (sd_jwt, disclosures) with every disclosure attached.
 
     `payees` are added to a `payment.allowed_payee` constraint as nested
-    disclosures (`{"...": hash}`) unless `constraints` is given.
+    disclosures (`{"...": hash}`) unless `constraints` is given. `claims`
+    override the payload's claims.
     """
     disclosures = []
     if constraints is None:
@@ -82,10 +83,11 @@ def issue(key, constraints=None, payees=(PAYEE,), *, alg="ES256", iat=None, exp=
     payload = {
         "nonce": "n-1",
         "aud": "dak",
-        "iat": int((iat or NOW - timedelta(minutes=1)).timestamp()),
-        "exp": int((exp or NOW + timedelta(days=1)).timestamp()),
+        "iat": int((issued_at or NOW - timedelta(minutes=1)).timestamp()),
+        "exp": int((expires_at or NOW + timedelta(days=1)).timestamp()),
         "_sd_alg": "sha-256",
         "delegate_payload": refs,
+        **claims,
     }
     jws = sign(key, {"alg": alg, "typ": "kb-sd-jwt+kb", "kid": "user-1"}, payload)
     return jws, disclosures
@@ -156,17 +158,17 @@ def test_unreferenced_disclosure_is_rejected(key, jwks):
 
 
 def test_expired_intent_is_rejected(key, jwks):
-    sd_jwt = present(*issue(key, iat=NOW - timedelta(days=2), exp=NOW - timedelta(seconds=301)))
+    sd_jwt = present(*issue(key, issued_at=NOW - timedelta(days=2), expires_at=NOW - timedelta(seconds=301)))
     assert_rejected(check(sd_jwt, jwks), "expired")
 
 
 def test_expiry_within_clock_skew_is_allowed(key, jwks):
-    sd_jwt = present(*issue(key, iat=NOW - timedelta(days=2), exp=NOW - timedelta(seconds=299)))
+    sd_jwt = present(*issue(key, issued_at=NOW - timedelta(days=2), expires_at=NOW - timedelta(seconds=299)))
     assert check(sd_jwt, jwks).allowed is True
 
 
 def test_issued_in_the_future_is_rejected(key, jwks):
-    assert_rejected(check(present(*issue(key, iat=NOW + timedelta(seconds=301))), jwks), "iat")
+    assert_rejected(check(present(*issue(key, issued_at=NOW + timedelta(seconds=301))), jwks), "iat")
 
 
 def test_amount_over_max_is_rejected(key, jwks):
@@ -208,6 +210,42 @@ def test_second_mandate_is_rejected(key, jwks):
 
 def test_malformed_input_is_rejected_without_raising(jwks):
     assert_rejected(check("not-a-jwt", jwks), "malformed")
+
+
+@pytest.mark.parametrize(
+    "header", ["[" * 100_000 + "]" * 100_000, '{"alg": ' + "1" * 5000 + "}"], ids=["deep-nesting", "huge-int"]
+)
+def test_unparsable_header_is_rejected_without_raising(jwks, header):
+    sd_jwt = f"{b64u(header.encode())}.e30.AA~"
+    assert_rejected(check(sd_jwt, jwks), "malformed")
+
+
+@pytest.mark.parametrize("claim", [{"exp": float("nan")}, {"exp": float("inf")}, {"iat": float("nan")}])
+def test_non_finite_time_is_rejected(key, jwks, claim):
+    assert_rejected(check(present(*issue(key, **claim)), jwks), "non-finite")
+
+
+def test_object_sd_disclosure_is_resolved(key, jwks):
+    # The mandate's `constraints` is itself selectively disclosed through `_sd`.
+    hidden = disclose("constraints", [amount(), {"type": "payment.allowed_payee", "allowed_payees": [{"id": PAYEE}]}])
+    mandate = disclose({"vct": "mandate.payment.open", "_sd": [digest(hidden)]})
+    jws, _ = issue(key, delegate_payload=[{"...": digest(mandate)}])
+    assert check(present(jws, [hidden, mandate]), jwks).allowed is True
+    assert_rejected(check(present(jws, [mandate]), jwks), "digest")
+
+
+def test_digest_referenced_twice_is_rejected(key, jwks):
+    jws, disclosures = issue(key)
+    ref = {"...": digest(disclosures[-1])}
+    jws, _ = issue(key, delegate_payload=[ref, ref])
+    assert_rejected(check(present(jws, disclosures), jwks), "more than once")
+
+
+def test_disclosure_kind_mismatch_is_rejected(key, jwks):
+    # An object-property disclosure ([salt, name, value]) used as an array element.
+    named = disclose("mandate", {"vct": "mandate.payment.open", "constraints": [amount()]})
+    jws, _ = issue(key, delegate_payload=[{"...": digest(named)}])
+    assert_rejected(check(present(jws, [named]), jwks), "kind")
 
 
 @pytest.mark.parametrize(
