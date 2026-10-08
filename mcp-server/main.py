@@ -71,7 +71,8 @@ MAX_INSTRUCTIONS_BYTES = _env_int("MCP_INSTRUCTIONS_MAX_BYTES", 32768)
 TRUSTED_WORKSPACE_PREFIXES = [os.path.normpath(p.strip()) for p in os.getenv("MCP_TRUSTED_WORKSPACE_PREFIXES", ".").split(":") if p.strip()]
 
 # Memory (save_memory / load_memory): one append-only file per scope under the
-# workspace root (/projects). load_memory returns at most this many chars.
+# workspace root (/projects). load_memory keeps at most this many chars of the
+# saved text (scope headings and the truncation note come on top).
 MEMORY_DIR = ".dak/memory"
 MEMORY_SCOPES = ("user", "project")
 MEMORY_MAX_CHARS = _env_int("MCP_MEMORY_MAX_CHARS", 8000)
@@ -85,6 +86,8 @@ def _cap_text(text: str, hint: str, limit: int = MAX_OUTPUT_CHARS, head_ratio: f
     tail = limit - head
     if tail <= 0:
         return f"{text[:head]}\n\n[truncated: {len(text) - head} more chars. {hint}]"
+    if head <= 0:
+        return f"[truncated: the first {len(text) - tail} chars omitted. {hint}]\n\n{text[-tail:]}"
     omitted = len(text) - head - tail
     return (f"{text[:head]}\n\n[truncated: {omitted} chars omitted from the middle; "
             f"kept the first {head} and the last {tail} chars. {hint}]\n\n--- tail ---\n{text[-tail:]}")
@@ -514,6 +517,8 @@ async def save_memory(text: str, scope: str = "project") -> str:
     """
     if scope not in MEMORY_SCOPES:
         return f"Error: scope must be one of {MEMORY_SCOPES}."
+    if not text.strip():
+        return "Error: text is empty; nothing to remember."
     try:
         os.makedirs(MEMORY_DIR, exist_ok=True)
         with open(_memory_path(scope), "a", encoding="utf-8") as f:
