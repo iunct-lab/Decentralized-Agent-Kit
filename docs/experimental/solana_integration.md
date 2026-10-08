@@ -56,6 +56,50 @@ SOLANA_NETWORK=devnet
 
 ---
 
+## Payment Intent Check (optional)
+
+The user can sign the limits of what the agent may pay — "at most this much",
+"only to these addresses" — and DAK refuses any `send_sol_payment` outside them
+**before the transfer runs**. The intent is a Verifiable Intent v0.1 L2 SD-JWT
+narrowed to DAK's profile. What is checked, where DAK deliberately differs from
+the spec, and how DAK's payment flow ("AP2" in this repository: Agent-to-Agent
+Payment Protocol) differs from Google's AP2 (Agent Payments Protocol) are in
+[docs/design/verifiable_intent.md](../design/verifiable_intent.md).
+
+```bash
+# Off by default: the payment flow above is unchanged.
+ENABLE_PAYMENT_INTENT_CHECK=true
+
+# The user's PUBLIC key(s) as a JWKS JSON string (EC, P-256, ES256).
+DAK_PAYMENT_INTENT_TRUSTED_JWKS={"keys":[{"kty":"EC","crv":"P-256","kid":"user-1","x":"...","y":"..."}]}
+```
+
+- **Keys**: only public keys go in `DAK_PAYMENT_INTENT_TRUSTED_JWKS`. The user
+  keeps the private key that signs intents; never put it in the repository, in
+  `.env.example`, or in the agent's environment. When the check is on but the
+  JWKS is missing or unusable, the agent still starts and blocks every payment
+  (it logs why).
+- **Passing the intent**: the caller puts the SD-JWT (`<JWS>~<disclosure>~...~`,
+  every disclosure attached) in the session state under `dak:payment_intent`,
+  e.g. when creating the session:
+  `POST /apps/dak_agent/users/{user}/sessions` with `{"state": {"dak:payment_intent": "<SD-JWT>"}}`.
+  No agent tool writes this key.
+- **Constraints**: `payment.amount` (`currency: "SOL"`, `min` / `max` in
+  lamports, 1 SOL = 10^9) and `payment.allowed_payee` (exact match on
+  `allowed_payees[].id`, the base58 address). Any other constraint type
+  rejects the intent. The signature must be ES256; `exp` / `iat` allow 300 s of
+  clock skew.
+- **When blocked**, the tool is not run and the model gets an Observation:
+
+```json
+{"error": "Payment blocked by payment intent: amount 1500000000 is above max 1000000000 (constraint: payment.amount). Ask the user to review their payment intent."}
+```
+
+The check only blocks. It never starts, approves or retries a payment; the
+permission rules (`PermissionPlugin`) still run first.
+
+---
+
 ## Testing
 
 ```bash
