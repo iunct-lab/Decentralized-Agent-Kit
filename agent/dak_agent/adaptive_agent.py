@@ -383,7 +383,7 @@ class AdaptiveAgent(LlmAgent):
             result = await tool.run_async(args={"scope": ""}, tool_context=callback_context)
             text = _result_text(result) or None
             if (isinstance(result, Mapping) and result.get("isError")) or (
-                    text or "").startswith(("Error loading memory", "Error: scope")):
+                    text or "").startswith("Error loading memory"):
                 logger.warning(f"Could not load the memory: {text}")
                 return
             if callback_context.state.get(STATE_LOADED_MEMORY) != text:
