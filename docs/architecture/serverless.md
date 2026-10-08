@@ -103,6 +103,30 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 - 利点: LLM の応答待ちの間は CPU が課金されない。A2A の task をそのまま使えるので、憲章の「標準プロトコルで結合」に合う。
 - 欠点: AWS 固有の実行環境になる。v2 はアイドル 120 秒でメモリを回収する。
 
+### S2 の実測（#253、2026-10-08）
+
+`agent/Dockerfile` のイメージに、AgentCore Runtime の HTTP の入口（`0.0.0.0:8080` の `GET /ping` と `POST /invocations`。`/invocations` は DAK の `/run`、`"stream": true` なら `/run_sse` に流す）を足した dev 用イメージを、東京の AgentCore Runtime に HTTP プロトコルで配置した。入口は書き捨てで、リポジトリには入れていない。
+モデルは呼ばず、コンテナの中の OpenAI 互換の偽のサーバが答えた（指示で遅延を指定できる。ストリーミングでは 5 秒ごとに部分を返す）。MCP サーバは置かず、セッションはコンテナの `/tmp` の SQLite。アイドルの回収は `idleRuntimeSessionTimeout=120` に設定した。各数値は 1 回の測定で、ばらつきは見ていない。時間は呼び出し側（AWS CLI）で測ったので、CLI の起動の約 1 秒を含む。
+
+| 確かめたこと | 結果 |
+|---|---|
+| アーキテクチャ | ARM64 のコンテナが必須（[HTTP プロトコルの契約](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-http-protocol-contract.html)）。arm64 のマシンなら `agent/Dockerfile` をそのままビルドできる。x86_64 のマシンでは `docker buildx build --platform linux/arm64` が要る |
+| 配置 | イメージ（#251 より前の依存、ECR 上で 360 MB）を指定して `create-agent-runtime` から READY まで 3.9 秒 |
+| 1 ターンの実行 | 成功。`InvokeAgentRuntime` が DAK の応答を返した |
+| コールドスタート | 作った直後の最初の呼び出しが 30.2 秒（DAK の読み込み 6.1 秒、最初のターン 9.8 秒を含む）。別のセッションの最初の呼び出しは 10.5 秒で、応答したプロセスは呼び出しの前から動いていた（AWS が前もって起動していたと見られるが、仕組みは確かめていない）。同じセッションの 2 回目は 1.5 秒（DAK の処理は 0.04 秒）。どのプロセスでも最初のターンだけが 8〜10 秒かかる（S1 の初回 15 秒と同じ傾向。原因は未確認） |
+| セッションの分離 | セッション ID ごとに別のプロセス（microVM）が応答した。DAK のセッションはその中の `/tmp` にあり、ほかのセッションからは見えない |
+| 30 秒を超えるターン（同期） | 45 秒のターンが 47.4 秒、120 秒のターンが 122.1 秒で、JSON の応答を受け取れた。API Gateway を挟まない `InvokeAgentRuntime` は 30 秒に縛られない（同期の上限は 15 分） |
+| 30 秒を超えるターン（ストリーミング） | `"stream": true` で、45 秒のターンが 48.7 秒、120 秒のターンが 121.1 秒。部分（`partial: true`）が 5 秒ごとに届いた（ストリーミングの上限は 60 分） |
+| アイドルの回収 | 150 秒あけて同じセッション ID で呼ぶと、新しいプロセスが答えた（DAK の読み込みからやり直し、9.1 秒）。前のプロセスの `/tmp` のセッションは消える。呼び出しごとのセッションで動かす方針（§3 共通）なら影響しない |
+| SigV4 の呼び出し | `bedrock-agentcore:InvokeAgentRuntime` を持つロールは成功、持たないロールは AccessDeniedException。別の Lambda からの呼び出しは未実施（#135 で確かめる） |
+| 後片付け | `delete-agent-runtime` でランタイムとワークロード ID が消えた。ECR の画像も消した |
+
+配置する側の権限で、実機で初めて分かったこと（#562、#580、#589）:
+
+- `CreateAgentRuntime` は名前で絞れない。作成の中で作られる既定のエンドポイント（`CreateAgentRuntimeEndpoint`）とワークロード ID（`CreateWorkloadIdentity`）も、名前の決まる前の `runtime/*`・`workload-identity/*` に対して、呼び出し側の権限で評価される
+- アカウントで最初のランタイムを作るとき、サービスにリンクされたロール `AWSServiceRoleForBedrockAgentCoreRuntimeIdentity` が作られる（`iam:CreateServiceLinkedRole` が要る。一度作れば残る）
+- `DeleteAgentRuntime` の中のワークロード ID の削除（`DeleteWorkloadIdentity`）も、呼び出し側の名前で CloudTrail に記録された。名前で絞った削除の権限では、ほかの名前で作ったランタイムのワークロード ID は消せない見込み（試していない）
+
 ### イメージの大きさ（#251、2026-10-08）
 
 `agent/Dockerfile` を、arm64 の使い捨てのビルド環境（Docker 28、BuildKit）でそのままビルドした値。ECR には送っていない（圧縮サイズは `docker save | gzip -9` で見積もった）。イメージとレイヤの MB・GB は 10 進（1 GB = 10^9 バイト）。パッケージごとの値は `du -sm` の MiB（切り上げ）。
