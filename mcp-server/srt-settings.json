@@ -1,7 +1,7 @@
 {
   "filesystem": {
     "allowWrite": ["/projects", "/tmp"],
-    "denyRead": ["/app/.env", "/root"],
+    "denyRead": ["/projects/.env", "/root"],
     "denyWrite": []
   },
   "network": {
