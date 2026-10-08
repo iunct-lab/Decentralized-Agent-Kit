@@ -107,7 +107,7 @@ class TestDefaultSettings(unittest.TestCase):
         with open(SETTINGS, encoding="utf-8") as f:
             settings = json.load(f)
         self.assertEqual(settings["filesystem"]["allowWrite"], ["/projects", "/tmp"])
-        self.assertEqual(settings["filesystem"]["denyRead"], ["/app/.env", "/root"])
+        self.assertEqual(settings["filesystem"]["denyRead"], ["/projects/.env", "/root"])
         self.assertEqual(settings["network"]["allowedDomains"], [])
         self.assertFalse(settings["network"]["allowLocalBinding"])
         self.assertNotIn("enableWeakerNestedSandbox", settings)
