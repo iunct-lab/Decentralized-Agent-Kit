@@ -216,5 +216,6 @@ tests/integration/artifacts/
 # scripts/license_check.sh の出力（PBI #344）
 license-report/
 
-# save_memory の記憶（mcp-server が /projects に書く。利用者の好みを含みうる、PBI #116）
-.dak/
+# save_memory の記憶（mcp-server が /projects に書く。利用者の好みを含みうる、PBI #116）。
+# .dak/ 全体ではない: cli/.dak/commands/ はコミットするもの
+/.dak/memory/
