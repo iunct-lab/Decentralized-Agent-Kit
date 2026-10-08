@@ -5,7 +5,8 @@ set -e
 
 # Read environment variables with defaults
 AGENT_NAME="${AGENT_NAME:-dak_agent}"
-AGENT_PUBLIC_URL="${AGENT_PUBLIC_URL:-http://localhost:8000/a2a/${AGENT_NAME}}"
+# The endpoint is /a2a/<ADK app directory> = /a2a/dak_agent; AGENT_NAME only names the card
+AGENT_PUBLIC_URL="${AGENT_PUBLIC_URL:-http://localhost:8000/a2a/dak_agent}"
 AGENT_DESCRIPTION="${AGENT_DESCRIPTION:-A helpful assistant powered by the Decentralized Agent Kit.}"
 AGENT_VERSION="${AGENT_VERSION:-0.1.0}"
 

@@ -83,10 +83,10 @@ Supports three authentication modes:
 
 Agent-to-Agent communication endpoints (A2A 1.0 over JSON-RPC; 0.3 peers are still accepted):
 
-- `GET /a2a/<AGENT_NAME>/.well-known/agent-card.json`: Agent Card (written by `entrypoint.sh` from `AGENT_NAME` / `AGENT_PUBLIC_URL`)
-- `POST /a2a/<AGENT_NAME>`: JSON-RPC (`SendMessage`, `SendStreamingMessage`, `GetTask`, … and the 0.3 `message/send` / `message/stream`)
+- `GET /a2a/dak_agent/.well-known/agent-card.json`: Agent Card (written by `entrypoint.sh`; `AGENT_NAME` sets the card's `name`, `AGENT_PUBLIC_URL` the endpoint it advertises)
+- `POST /a2a/dak_agent`: JSON-RPC (`SendMessage`, `SendStreamingMessage`, `GetTask`, … and the 0.3 `message/send` / `message/stream`)
 
-The gap to the A2A specification and the version policy: [docs/architecture/a2a.md](../docs/architecture/a2a.md).
+The path is the ADK app's directory (`dak_agent`), not `AGENT_NAME`. The gap to the A2A specification and the version policy: [docs/architecture/a2a.md](../docs/architecture/a2a.md).
 
 ## API Endpoints
 

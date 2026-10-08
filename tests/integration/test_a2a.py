@@ -71,6 +71,8 @@ def test_a2a_sdk_client_round_trip(fake_llm, streaming):
                               else event.task.artifacts if event.HasField("task") else [])
              for part in artifact.parts]
     assert "A2A 1.0 pong from DAK." in texts, events
+    # The client falls back to SendMessage when the card does not declare streaming.
+    assert any(event.HasField("status_update") for event in events) is streaming, events
 
 
 def test_a2a_v0_3_message_send_round_trip(fake_llm):

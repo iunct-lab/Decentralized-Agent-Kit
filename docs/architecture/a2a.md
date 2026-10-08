@@ -27,9 +27,9 @@ A2A 仕様 1.0 とのずれを測った結果と、版の混在（0.3 の相手�
 
 | 項目 | 場所 |
 |---|---|
-| Agent Card | `GET /a2a/<AGENT_NAME>/.well-known/agent-card.json`（`agent/entrypoint.sh` が起動時に `agent/dak_agent/agent.json` を書き、ADK がそれを読んで配る） |
-| JSON-RPC | `POST /a2a/<AGENT_NAME>` |
-| 組み立て | `agent/dak_agent/server.py` の `get_fast_api_app(..., a2a=True)`。ADK が `agents_dir` の下で `agent.json` のあるディレクトリごとに窓口を足す（`_compat.attach_a2a_routes_to_app`、`prefix=/a2a/<ディレクトリ名>`） |
+| Agent Card | `GET /a2a/dak_agent/.well-known/agent-card.json`（`agent/entrypoint.sh` が起動時に `agent/dak_agent/agent.json` を書き、ADK がそれを読んで配る） |
+| JSON-RPC | `POST /a2a/dak_agent` |
+| 組み立て | `agent/dak_agent/server.py` の `get_fast_api_app(..., a2a=True)`。ADK が `agents_dir` の下で `agent.json` のあるディレクトリごとに窓口を足す（`_compat.attach_a2a_routes_to_app`、`prefix=/a2a/<ディレクトリ名>`）。パスはディレクトリ名 `dak_agent` で決まり、`AGENT_NAME` はカードの `name` を変えるだけ |
 
 今の版: `a2a-sdk` 1.x（`agent/pyproject.toml` は `a2a-sdk>=1.1,<2`。#311）。カードは 1.0 の形で、`supportedInterfaces` に同じ JSON-RPC の URL を
 `protocolVersion` 1.0 と 0.3 の 2 つの窓口として書く（§4）。
@@ -52,7 +52,7 @@ google-adk 2.11 は `a2a-sdk` 0.3 と 1.x の両方を扱う（`_compat.py` が 
 | ストリーミングの宣言 | `"capabilities": {}`（宣言なし） | `capabilities.streaming: true` を宣言すると、相手は `SendStreamingMessage` を使う | #311（1.x で `SendStreamingMessage` の往復を確かめた。§3） |
 | 公式 SDK 1.x のクライアント | カードを読んだ後に `ValueError: no compatible transports found.` で止まる（非ストリーミング・ストリーミングとも） | カードの `supportedInterfaces` から窓口を選ぶ | #311 |
 | 版の混在 | 0.3 のクライアント（`a2a-sdk` 0.3.26）はカードを読んで往復できる | — | #311（§4 の方針で、1.x に上げても受け続ける） |
-| Consumer のカードの場所 | `a2a_peer_manager.py` の `create_remote_a2a_agents` が `peer.url + "/a2a/dak_agent/.well-known/agent-card.json"` と決め打ち。相手の `AGENT_NAME` が `dak_agent` でないとつながらない | カードの URL は相手が決める（既定は窓口の下の `/.well-known/agent-card.json`） | #312 |
+| Consumer のカードの場所 | `a2a_peer_manager.py` の `create_remote_a2a_agents` が `peer.url + "/a2a/dak_agent/.well-known/agent-card.json"` と決め打ち。相手の窓口が `/a2a/dak_agent` でない（DAK 以外の A2A エージェント、窓口の URL を `url` に書いた設定など）とつながらない | カードの URL は相手が決める（既定は窓口の下の `/.well-known/agent-card.json`） | #312 |
 | 適合テスト | 回帰テストは `tests/integration/test_a2a.py` だけで、0.3 の形を固定している | a2a-tck の MUST 段階 | #313 |
 | 文書 | `docs/architecture/overview.md` と `agent/README.md` が、今は無い `/task/send` を窓口として書いている | — | #311 |
 | メタデータのキー | ADK が Task・イベントの `metadata` に `adk_session_id` などの snake_case のキーを入れる（DAK の状態の `dak_compaction_count` なども `adk_actions` の中に出る） | a2a-tck の DM-SERIAL-001 は JSON のフィールド名を camelCase に限る（§3） | #313 で扱いを決める（ADK の変換が付けるキーで、DAK の中では直せない） |
@@ -133,7 +133,11 @@ MUST の要件 114 件のうち、PASS 56 件・FAIL 3 件・SKIPPED 33 件・NO
 - 窓口（JSON-RPC）は追加の作業なしで両方を受ける。google-adk 2.11 は `a2a-sdk` 1.x の JSON-RPC の窓口を `enable_v0_3_compat=True` で作るので、0.3 の `message/send` も 1.0 の `SendMessage` も同じ URL で通る（§3.3）
 - カードは、0.3 の窓口を並べると両方の版の相手が読める。`a2a-sdk` 1.x はカードを配るときに、`supportedInterfaces` に 0.3 の版の窓口があればそれを 0.3 の形（トップレベルの `url` など）にも書き足す（`a2a/server/request_handlers/response_helpers.py` の `agent_card_to_dict`）。1.0 の窓口だけだと、0.3 の相手（`a2a-sdk` 0.3 を使う古い DAK を含む）はカードを読めない
 - 1.0 の相手と a2a-tck は 1.0 の窓口を選び、結果は 1.0 だけのカードと変わらない（§3.2）
-- 0.3 の相手を切り捨てる理由が無い。混在している間に DAK 同士の委譲が切れるのを避けられる
+- 0.3 の相手を切り捨てる理由が無い。混在している間も、古い DAK から新しい DAK への委譲は切れない
+
+逆向き（新しい DAK が古い DAK に任せる）は切れる。新しい DAK の Consumer（`RemoteA2aAgent`、`a2a-sdk` 1.x のクライアント）は、
+古い DAK のカード（`protocolVersion: "0.2.6"`）を 0.3 より前の版の窓口として読み、使える窓口が無い（`no compatible transports found`。§3.3 の今の main の列と同じ）。
+相手の DAK を上げると直る。DAK 同士で混在させるときは、呼ばれる側から先に上げる。
 
 この形は `a2a-sdk` の移行ガイドの「6. Supporting v0.3 Clients」の 2 つの手順（`supported_interfaces` に 0.3 の `AgentInterface` を足す、route に `enable_v0_3_compat=True`）と同じで、後者は ADK が済ませている。互換の範囲（カードは 1.0 と 0.3 の項目の和で配る、など）は移行ガイドが参照する取りまとめの Issue [a2a-python#742](https://github.com/a2aproject/a2a-python/issues/742)（closed）にある。
 
