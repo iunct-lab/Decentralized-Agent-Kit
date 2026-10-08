@@ -229,7 +229,7 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 - 保存はモデルが明示的に `save_memory(text, scope)` を呼んだときだけ。`scope` は `user`（利用者の好み・癖）か `project`（この作業場所の決まり・コマンド）で、mcp-server がサーバの `/projects` の `.dak/memory/user.md` / `project.md` に追記する（スコープごとに別のファイルなので混ざらない。`/.dak/memory/` は `.gitignore` 済み）。既定の権限では承認を求める（`permission.py` の `default` の `ask`）。「常に許可」と答えると、そのセッションの以降の保存は内容を問わず承認なしで通る。要約・重複排除はしない。整理は利用者がファイルを直接直す。
 - 読むのは `load_memory(scope)`。`MCP_MEMORY_MAX_CHARS`（既定 8000 文字）を超えたら新しい方（ファイルの末尾）を残し、古い方は `[truncated: … kept in .dak/memory/<scope>.md …]` としてファイルにあると伝える。`scope` が空なら両方を `# User Memory` / `# Project Memory` の見出しで、それぞれ上限の半分ずつ返す。`SANDBOX_MODE` のどのモードでもサーバの `/projects` を使う（`docs/design/session-sandbox.md` の例外）。
 - agent はプロジェクトの指示と同じく、毎 invocation の始めに `load_memory(scope="")` を 1 回だけ自分で呼び（`_inject_memory`。`_inject_project_instructions` の直後）、結果を state の `dak_loaded_memory` に置く。空なら `None` にして消し、失敗・エラーの結果（`isError`、`Error loading memory`）では前の値を残し、変わったときだけ書く。呼ばない場合（古い mcp-server、既定の MCP サーバが無い、拒否される呼び出し、`dak:instruction`）もプロジェクトの指示と同じ。
-- 指示には Project Instructions の後ろ、計画の前に `# Remembered Context` として入る。モデルが書いた文なので `{var}` 置換を通さない。上限は mcp-server がかけたもので、agent では切らない（プロジェクトの指示のように窓に合わせて `plan_chars` で切ると、2 つのスコープを連結した文の末尾の project だけが残り、user が消える）。窓の小さいモデル（8K 前後）では既定の 8000 文字が窓の大きな割合になるので、`MCP_MEMORY_MAX_CHARS` を下げる。
+- 指示には Project Instructions の後ろ、計画の前に `# Remembered Context` として入る。モデルが書いた文なので `{var}` 置換を通さない。上限は mcp-server がかけたもので、agent では切らない（窓に合わせて `plan_chars` で切ると、user → project の順に連結した文のどちらかのスコープが消える。プロジェクトの指示のように先頭を残せば project、新しい方を残せば user）。窓の小さいモデル（8K 前後）では既定の 8000 文字が窓の大きな割合になるので、`MCP_MEMORY_MAX_CHARS` を下げる。
 - 検証: `mcp-server/tests/test_memory.py`、`test_adaptive_agent.py -k "memory or remembered"`。
 
 ### 調査サブエージェント（`dak_explorer`、#85）
