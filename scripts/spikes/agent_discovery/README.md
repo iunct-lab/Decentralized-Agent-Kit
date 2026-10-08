@@ -25,9 +25,11 @@ chmod -R a+rwX "$BIND/zones"            # BIND が動的更新のジャーナル
 docker compose -f "$BIND/docker-compose.yml" up -d    # --wait は使わない（同梱の healthcheck の dig がイメージに無く、unhealthy になる）
 until docker logs dns-aid-bind9 2>&1 | grep -q " running$"; do sleep 1; done
 
-# 2. DAK を fake-LLM の構成で立てる（agent は 8000、mcp-server は 8001）
+# 2. DAK を fake-LLM の構成で立てる（agent は 8000、mcp-server は 8001）。
+#    プロジェクト名を分け、手元の DAK のボリューム（postgres_data など）を使わない・消さない
+DAK="docker compose -p dak-discovery-spike -f docker-compose.yml -f docker-compose.test.yml"
 touch .env
-docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build --wait agent mcp-server
+$DAK up -d --build --wait agent mcp-server
 
 # 3. dns-aid だけを入れた venv を作り、依存の大きさを測る
 uv venv -q -p 3.12 "$W/venv"
@@ -43,7 +45,7 @@ export DDNS_KEY_SECRET="$(sed -n 's/.*secret "\(.*\)".*/\1/p' "$BIND/named.conf"
 (cd agent && uv sync -q && uv run python ../scripts/spikes/agent_discovery/sign_agent_card.py)
 
 # 6. 片づけ
-docker compose -f docker-compose.yml -f docker-compose.test.yml down -v
+$DAK down -v
 docker compose -f "$BIND/docker-compose.yml" down -v
 rm -rf "$W"
 ```
