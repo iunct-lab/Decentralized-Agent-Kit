@@ -1,0 +1,12 @@
+{
+  "filesystem": {
+    "allowWrite": ["/projects", "/tmp"],
+    "denyRead": ["/app/.env", "/root"],
+    "denyWrite": []
+  },
+  "network": {
+    "allowedDomains": [],
+    "deniedDomains": [],
+    "allowLocalBinding": false
+  }
+}
