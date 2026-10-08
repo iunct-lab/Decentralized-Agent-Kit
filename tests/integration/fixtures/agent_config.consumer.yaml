@@ -1,0 +1,14 @@
+# agent-consumer in docker-compose.test.yml: a DAK that hands tasks to agent-peer over A2A.
+mcp_servers:
+  - name: "local-mcp"
+    url: "http://mcp-server:8000/mcp"
+    type: "http"
+
+a2a_peers:
+  - name: "dak_peer"
+    # the peer's A2A endpoint; its card is under it. ADK fetches cards over https or
+    # plain http on a loopback name only (agent-peer.localhost: docker-compose.test.yml)
+    url: "http://agent-peer.localhost:8000/a2a/dak_agent"
+    capabilities: ["delegation test"]
+
+permissions: []

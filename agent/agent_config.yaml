@@ -5,7 +5,7 @@ mcp_servers:
 
 a2a_peers:
   - name: "agent_provider"
-    url: "http://agent-provider:8000"
+    url: "http://agent-provider:8000/a2a/dak_agent"  # the peer's A2A endpoint (https unless on localhost); or set card_url
     capabilities: ["premium_service"]
 
 # Tool permission rules, appended after the defaults in dak_agent/permission.py

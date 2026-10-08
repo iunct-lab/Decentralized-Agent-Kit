@@ -13,7 +13,7 @@ import uuid
 import httpx
 import pytest
 
-from conftest import AGENT_URL, APP_NAME
+from conftest import AGENT_URL, APP_NAME, event_texts
 
 MODEL = "fake-default"
 AGENT_CARD_URL = f"{AGENT_URL}/a2a/{APP_NAME}/.well-known/agent-card.json"
@@ -107,3 +107,19 @@ def test_a2a_v0_3_message_send_round_trip(fake_llm):
         for part in artifact.get("parts") or []
     ]
     assert "A2A pong from DAK." in texts, f"agent reply missing from artifacts: {result}"
+
+
+def test_delegation_to_peer_with_non_default_name(agent_consumer, fake_llm):
+    """A DAK hands a task to another DAK over A2A and gets the answer back.
+    The peer's card is named dak_peer; the consumer's a2a_peers names the
+    peer's endpoint (tests/integration/fixtures/agent_config.consumer.yaml),
+    and the card is looked up under it, not at a hardcoded /a2a/dak_agent."""
+    fake_llm.clear("fake-consumer")
+    fake_llm.clear("fake-peer")
+    fake_llm.script("fake-consumer", [fake_llm.tool_call("transfer_to_agent", agent_name="dak_peer")])
+    fake_llm.script("fake-peer", [fake_llm.text("Delegated answer from the peer DAK.")])
+
+    session_id = agent_consumer.create_session()
+    events = agent_consumer.run(session_id, "Ask the peer.")
+
+    assert "Delegated answer from the peer DAK." in event_texts(events), events

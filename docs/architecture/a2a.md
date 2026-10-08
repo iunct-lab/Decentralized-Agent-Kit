@@ -10,6 +10,7 @@ A2A 仕様 1.0 とのずれを測った結果と、版の混在（0.3 の相手�
 - §4 版の混在の方針
 - §5 Agent Communication Protocol を別に採用しない
 - §6 ほかのフレームワークのクライアント（候補）
+- §7 別の A2A エージェントに任せる（Consumer の `a2a_peers`）
 
 調べたもの（2026-10-07）:
 
@@ -162,3 +163,28 @@ MUST の要件 114 件のうち、PASS 56 件・FAIL 3 件・SKIPPED 33 件・NO
 - 公式 SDK の JavaScript（`@a2a-js/sdk`）・Java（`a2a-java`）・Go（`a2a-go`）
 - LangGraph の A2A 対応
 - google-adk の `RemoteA2aAgent`（DAK の Consumer が使う。#312 で DAK 同士の委譲として確かめる）
+
+## 7. 別の A2A エージェントに任せる（Consumer の `a2a_peers`）
+
+`ENABLE_A2A_CONSUMER=true` の DAK は、`agent_config.yaml` の `a2a_peers` に書いた相手を ADK の `RemoteA2aAgent`（sub-agent）にし、
+モデルが `transfer_to_agent` で任せる（`agent/dak_agent/a2a_peer_manager.py`）。相手のカードの場所は次の順で決める（`resolve_agent_card_url`）:
+
+| 書き方 | カードの場所 |
+|---|---|
+| `card_url: <URL>` | その URL |
+| `url:` がカードの URL（`…/.well-known/agent-card.json` で終わる） | そのまま |
+| `url:` が相手の A2A 窓口（例 `http://agent-peer:8000/a2a/dak_agent`） | 窓口の下の `/.well-known/agent-card.json` |
+| `url:` にパスが無い（例 `http://agent-provider:8000`。前の書き方） | DAK の既定の窓口 `/a2a/dak_agent` を補う。新しい書き方を示す警告をログに出す |
+
+```yaml
+a2a_peers:
+  - name: "dak_peer"                              # sub-agent の名前（transfer_to_agent で使う）
+    url: "http://agent-peer:8000/a2a/dak_agent"   # 相手の A2A 窓口。カードはその下
+    capabilities: ["..."]
+```
+
+ADK（2.11）の `RemoteA2aAgent` は、ネットワークから取るカードの URL と、カードが示す RPC の URL の両方に **https** を求める（http はループバックの名前 `localhost`・`*.localhost`・`127.0.0.1` などだけ。外す設定は無い）。
+カードの RPC の URL は、カードを取った URL と同じ origin でなければならない。別のホストの DAK に任せるときは、相手の窓口を https で公開する。
+
+DAK の窓口のパスは、相手の `AGENT_NAME` ではなく、ADK のアプリ（エージェントのディレクトリ）の名前 `dak_agent` で決まる。`AGENT_NAME` はカードの `name` を変えるだけ。
+fake-LLM の構成の `agent-consumer` → `agent-peer`（カードの名前は `dak_peer`。http で呼ぶため、compose のネットワークの別名 `agent-peer.localhost` を使う）で、この委譲を `tests/integration/test_a2a.py::test_delegation_to_peer_with_non_default_name` が確かめる。
