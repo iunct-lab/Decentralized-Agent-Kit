@@ -140,7 +140,10 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
 加えて:
 - mcp-server: `read_file(path, offset, limit)`（行範囲）を追加し、`read_file`/`run_command` は
   `MCP_MAX_OUTPUT_CHARS`（既定 50K 文字）、`list_files`/`search_files` は `MCP_MAX_LIST_ENTRIES`
-  （既定 500 件）で打ち切って、続きの取り方を示すようにした。
+  （既定 500 件）で打ち切って、続きの取り方を示すようにした。`read_file` は行の境界で切り、続きを読む
+  `offset`（次の行番号）をそのまま示す（1 行だけで上限を超えるときは、その行の先頭を見せて次の行から続ける）。
+  `run_command` は stdout / stderr それぞれ先頭 30% と末尾 70% を残し、間で落とした文字数を示す
+  （失敗の理由や要約は出力の末尾に出ることが多いため）。
 - `ModeManager`: トークン閾値トリガを削除した（圧縮はハーネスの担当）。モード切替は
   `switch_mode` 呼び出し時のみ行い、履歴は消さない。Meta-LLM プロンプトが存在しない
   `switch_mode(request_tool_list=True)` を指示していた不具合も直した。

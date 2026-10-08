@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch, mock_open, MagicMock, AsyncMock
 import os
+import re
 import sys
 import subprocess
 import tempfile
@@ -140,7 +141,8 @@ class TestMCPTools(unittest.IsolatedAsyncioTestCase):
             result = await main.read_file("/test/big.txt")
         self.assertLess(len(result), len(content))
         self.assertIn("truncated: 10000 more chars", result)
-        self.assertIn("offset=", result)
+        # One line longer than the bound: its head is shown, reading goes on after it
+        self.assertIn("offset=1,", result)
 
     async def test_read_file_reports_line_count_consistently(self):
         """The hint's line count must match what the range branch sees, or the
@@ -149,6 +151,38 @@ class TestMCPTools(unittest.IsolatedAsyncioTestCase):
         with patch('builtins.open', mock_open(read_data=content)):
             result = await main.read_file("/test/big.txt")
         self.assertIn("has 400 lines", result)
+        kept = main.MAX_OUTPUT_CHARS // 201  # whole lines that fit under the bound
+        self.assertIn(f"offset={kept},", result)
+        self.assertNotIn("offset=<line>", result)
+
+    async def test_read_file_continuation_offset_points_past_kept_lines(self):
+        """Reading on from the offset the hint gives returns the rest with no
+        line repeated or skipped."""
+        content = "".join(f"{i:04d}{'y' * 196}\n" for i in range(400))  # 400 lines of 201 chars
+        with patch('builtins.open', mock_open(read_data=content)):
+            first = await main.read_file("/test/big.txt")
+        body, hint = first.split("\n\n[truncated: ")
+        offset = int(re.search(r"offset=(\d+),", hint).group(1))
+        self.assertTrue(body.endswith("\n"))  # cut on a line boundary
+        with patch('builtins.open', mock_open(read_data=content)):
+            rest = await main.read_file("/test/big.txt", offset=offset)
+        self.assertEqual(body + rest, content)
+
+    async def test_run_command_stdout_keeps_tail_over_head(self):
+        """A failing command's reason is usually at the end: keep more of it."""
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stdout = "head_marker" + "y" * (main.MAX_OUTPUT_CHARS * 2) + "tail_marker"
+        mock_result.stderr = ""
+        with patch('subprocess.run', return_value=mock_result):
+            result = await main.run_command("make")
+        self.assertIn("tail_marker", result)
+        self.assertIn("head_marker", result)
+        head = int(main.MAX_OUTPUT_CHARS * 0.3)
+        omitted = len(mock_result.stdout) - main.MAX_OUTPUT_CHARS
+        self.assertIn(f"[truncated: {omitted} chars omitted from the middle; "
+                      f"kept the first {head} and the last {main.MAX_OUTPUT_CHARS - head} chars.", result)
+        self.assertIn("--- tail ---\n" + "y" * 100, result)
 
     async def test_env_bounds_ignore_invalid_values(self):
         """A typo in MCP_MAX_OUTPUT_CHARS must not crash the server at import."""
@@ -177,7 +211,7 @@ class TestMCPTools(unittest.IsolatedAsyncioTestCase):
             result = await main.run_command("build")
         self.assertIn("fatal: something broke", result)
         self.assertIn("Exit code: 2", result)
-        self.assertIn("truncated: 10000 more chars", result)
+        self.assertIn("truncated: 10000 chars omitted from the middle", result)
 
     async def test_run_command_caps_output(self):
         """Command output beyond the bound is truncated with a narrowing hint."""
