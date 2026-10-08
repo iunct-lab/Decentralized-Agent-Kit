@@ -71,10 +71,17 @@ MAX_INSTRUCTIONS_BYTES = _env_int("MCP_INSTRUCTIONS_MAX_BYTES", 32768)
 TRUSTED_WORKSPACE_PREFIXES = [os.path.normpath(p.strip()) for p in os.getenv("MCP_TRUSTED_WORKSPACE_PREFIXES", ".").split(":") if p.strip()]
 
 
-def _cap_text(text: str, hint: str, limit: int = MAX_OUTPUT_CHARS) -> str:
+def _cap_text(text: str, hint: str, limit: int = MAX_OUTPUT_CHARS, head_ratio: float = 1.0) -> str:
+    """Keep the first `head_ratio` of `limit` chars and the rest from the end."""
     if len(text) <= limit:
         return text
-    return f"{text[:limit]}\n\n[truncated: {len(text) - limit} more chars. {hint}]"
+    head = int(limit * head_ratio)
+    tail = limit - head
+    if tail <= 0:
+        return f"{text[:head]}\n\n[truncated: {len(text) - head} more chars. {hint}]"
+    omitted = len(text) - head - tail
+    return (f"{text[:head]}\n\n[truncated: {omitted} chars omitted from the middle; "
+            f"kept the first {head} and the last {tail} chars. {hint}]\n\n--- tail ---\n{text[-tail:]}")
 
 
 def _cap_entries(entries: list, hint: str, limit: int = MAX_LIST_ENTRIES) -> str:
@@ -208,14 +215,25 @@ async def read_file(path: str, offset: int = 0, limit: int = 0, ctx: Context | N
         return f"Error reading file: {e}"
     lines = content.splitlines(keepends=True)
     total_lines = len(lines)
-    if offset > 0 or limit > 0:
-        start = max(0, offset)
-        end = start + limit if limit > 0 else total_lines
-        content = "".join(lines[start:end])
-    return _cap_text(
-        content,
-        f"The file has {total_lines} lines; call read_file(path, offset=<line>, limit=<lines>) to read a range.",
-    )
+    start = max(0, offset)
+    end = start + limit if limit > 0 else total_lines
+    selected = lines[start:end]
+    text = "".join(selected)
+    if len(text) <= MAX_OUTPUT_CHARS:
+        return text
+    # Cut on a line boundary so the offset to continue from is exact.
+    kept, size = [], 0
+    for line in selected:
+        if size + len(line) > MAX_OUTPUT_CHARS:
+            break
+        kept.append(line)
+        size += len(line)
+    if kept:
+        shown, next_line = "".join(kept), start + len(kept)
+    else:  # one line longer than the bound: show its head, go on after it
+        shown, next_line = selected[0][:MAX_OUTPUT_CHARS], start + 1
+    return (f"{shown}\n\n[truncated: {len(text) - len(shown)} more chars. The file has {total_lines} lines; "
+            f"call read_file(path, offset={next_line}, limit=<lines>) to continue.]")
 
 @mcp.tool()
 async def write_file(path: str, content: str, ctx: Context | None = None) -> str:
@@ -268,9 +286,10 @@ async def run_command(command: str, ctx: Context | None = None) -> str:
         # Cap each stream on its own: capping the concatenation would drop the
         # stderr of a command that wrote a lot to stdout before failing.
         hint = "Narrow the command output (e.g. pipe through head, tail or grep)."
-        output = f"Exit code: {result.returncode}\nStdout:\n{_cap_text(result.stdout, hint)}\n"
+        # Most of each stream comes from its end, where errors and summaries are.
+        output = f"Exit code: {result.returncode}\nStdout:\n{_cap_text(result.stdout, hint, head_ratio=0.3)}\n"
         if result.stderr:
-            output += f"\nStderr:\n{_cap_text(result.stderr, hint)}"
+            output += f"\nStderr:\n{_cap_text(result.stderr, hint, head_ratio=0.3)}"
         return output
     except subprocess.TimeoutExpired:
         return "Error: Command timed out"
