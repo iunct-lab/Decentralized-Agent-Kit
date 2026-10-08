@@ -11,11 +11,6 @@ updates:
     labels: ["deps", "area:agent"]
     open-pull-requests-limit: 5
     commit-message: { prefix: "deps(agent)" }
-    # pyproject で major をピン中。移行 PR が入るまで major の再提案を止める。
-    # a2a-sdk 1.x はカード wire format 非互換（agent/pyproject.toml のピン参照）
-    ignore:
-      - dependency-name: "a2a-sdk"
-        update-types: ["version-update:semver-major"]
     groups:
       agent-minor-patch:
         update-types: ["minor", "patch"]

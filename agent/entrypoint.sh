@@ -15,16 +15,30 @@ AGENT_JSON_PATH="/app/dak_agent/agent.json"
 # Generate agent.json from template with environment variables
 cat > "${AGENT_JSON_PATH}" << EOF
 {
-    "capabilities": {},
+    "name": "${AGENT_NAME}",
+    "description": "${AGENT_DESCRIPTION}",
+    "version": "${AGENT_VERSION}",
+    "supportedInterfaces": [
+        {
+            "url": "${AGENT_PUBLIC_URL}",
+            "protocolBinding": "JSONRPC",
+            "protocolVersion": "1.0"
+        },
+        {
+            "url": "${AGENT_PUBLIC_URL}",
+            "protocolBinding": "JSONRPC",
+            "protocolVersion": "0.3"
+        }
+    ],
+    "capabilities": {
+        "streaming": true
+    },
     "defaultInputModes": [
         "text/plain"
     ],
     "defaultOutputModes": [
         "text/plain"
     ],
-    "description": "${AGENT_DESCRIPTION}",
-    "name": "${AGENT_NAME}",
-    "protocolVersion": "0.2.6",
     "skills": [
         {
             "description": "${AGENT_DESCRIPTION} that can help with various tasks using MCP tools.",
@@ -34,10 +48,7 @@ cat > "${AGENT_JSON_PATH}" << EOF
                 "llm"
             ]
         }
-    ],
-    "supportsAuthenticatedExtendedCard": false,
-    "url": "${AGENT_PUBLIC_URL}",
-    "version": "${AGENT_VERSION}"
+    ]
 }
 EOF
 
