@@ -32,7 +32,3 @@ services:
     user: "${DAK_UID:-1000}:${DAK_GID:-1000}"
     # `uv run` would need a writable uv cache, which a uid without a home lacks.
     command: [".venv/bin/python", "main.py"]
-    # /app belongs to root; save_memory writes to .dak/memory under it. Like the
-    # default container's /app, this is lost when the container is recreated.
-    tmpfs:
-      - /app/.dak:uid=${DAK_UID:-1000},gid=${DAK_GID:-1000}

@@ -30,7 +30,7 @@ def _run(command: str) -> str:
 @pytest.fixture(scope="module", autouse=True)
 def srt_enabled(stack_ready):
     out = _run("echo $MCP_COMMAND_SANDBOX")
-    if out.startswith("Exit code: 0\nStdout:\n\n"):  # unset: the default stack
+    if out.startswith(("Exit code: 0\nStdout:\n\n", "Exit code: 0\nStdout:\noff\n")):  # unset or off
         pytest.skip("mcp-server is not running with MCP_COMMAND_SANDBOX=srt")
     # Enabled but srt cannot run here is a failure, not a skip.
     assert "Stdout:\nsrt" in out, out
