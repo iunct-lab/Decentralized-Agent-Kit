@@ -74,6 +74,9 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     needs: unit
+    # third-party code (a2a-tck) runs in this job: a read-only token
+    permissions:
+      contents: read
     env:
       # a2a-tck (A2A conformance) is pinned; how to move it: docs/architecture/a2a.md §8
       A2A_TCK_REF: 263b9cfaf16a554bdfb166a7ba5b67716e946349
@@ -97,8 +100,8 @@ jobs:
           git clone -q https://github.com/a2aproject/a2a-tck.git "$RUNNER_TEMP/a2a-tck"
           git -C "$RUNNER_TEMP/a2a-tck" checkout -q "$A2A_TCK_REF"
           cd "$RUNNER_TEMP/a2a-tck"
-          uv venv && uv pip install -e .
-          uv run ./run_tck.py --sut-host http://localhost:8000/a2a/dak_agent --transport jsonrpc --level must -- \
+          uv sync --locked
+          uv run --locked ./run_tck.py --sut-host http://localhost:8000/a2a/dak_agent --transport jsonrpc --level must -- \
             --deselect "tests/compatibility/core_operations/test_artifacts.py::TestTextArtifact::test_task_has_text_artifact[jsonrpc]" \
             --deselect "tests/compatibility/core_operations/test_artifacts.py::TestFileArtifact::test_task_has_file_artifact[jsonrpc]" \
             --deselect "tests/compatibility/core_operations/test_artifacts.py::TestFileUrlArtifact::test_task_has_file_url_artifact[jsonrpc]" \

@@ -210,13 +210,13 @@ fake-LLM の構成の `agent-consumer` → `agent-peer`（カードの名前は 
 | `…::TestMessageResponse::test_returns_message_with_text_part[jsonrpc]` | DM-MSG-001 | Message での応答を期待する。ADK の窓口はいつも Task で返す |
 | `tests/compatibility/core_operations/test_data_model.py::TestCamelCaseFieldNames::test_no_snake_case_keys` | DM-SERIAL-001 | ADK が `metadata` に入れる `adk_session_id` などの snake_case のキーを違反と数える |
 
-手元で回すとき（fake-LLM の構成を立てた後。sb-offload でも同じ）:
+手元で回すとき（fake-LLM の構成を立てた後。sb-offload でも同じ）。`--deselect` に渡す完全な ID は `ci.yml` の手順からそのまま写す（表は 4 つを `…::` で縮めている。pytest は合わない ID を黙って無視する）:
 
 ```bash
 git clone https://github.com/a2aproject/a2a-tck.git && cd a2a-tck
 git checkout 263b9cfaf16a554bdfb166a7ba5b67716e946349
-uv venv && uv pip install -e .
-uv run ./run_tck.py --sut-host http://localhost:8000/a2a/dak_agent --transport jsonrpc --level must -- --deselect <上の 6 つ>
+uv sync --locked
+uv run --locked ./run_tck.py --sut-host http://localhost:8000/a2a/dak_agent --transport jsonrpc --level must -- --deselect <上の 6 つ>
 ```
 
 a2a-tck を上げるとき:
