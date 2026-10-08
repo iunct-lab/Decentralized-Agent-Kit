@@ -28,6 +28,8 @@ dependencies = [
     "solders>=0.21.0",
     # A2A 1.0 のカードを配る。移行の経緯と版の方針は docs/architecture/a2a.md
     "a2a-sdk>=1.1,<2",
+    # 支払いの意図（SD-JWT）の ES256 の検証。docs/design/verifiable_intent.md
+    "cryptography>=46",
 ]
 
 [build-system]

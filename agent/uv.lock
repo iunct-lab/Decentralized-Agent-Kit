@@ -524,6 +524,7 @@ source = { editable = "." }
 dependencies = [
     { name = "a2a-sdk" },
     { name = "asyncpg" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "google-adk", extra = ["a2a", "db", "mcp"] },
     { name = "httpx" },
@@ -555,6 +556,7 @@ dev = [
 requires-dist = [
     { name = "a2a-sdk", specifier = ">=1.1,<2" },
     { name = "asyncpg", specifier = ">=0.30" },
+    { name = "cryptography", specifier = ">=46" },
     { name = "fastapi", specifier = ">=0.139.0" },
     { name = "google-adk", extras = ["a2a", "db", "mcp"], specifier = ">=2.8.0,<3" },
     { name = "httpx", specifier = ">=0.28,<1" },
