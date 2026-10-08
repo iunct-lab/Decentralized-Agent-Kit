@@ -7,7 +7,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dak_agent import builtin_tools, plan_mode
-from dak_agent.adaptive_agent import PLAN_MODE_REMINDER, STATE_PROJECT_INSTRUCTIONS, AdaptiveAgent
+from dak_agent.adaptive_agent import PLAN_MODE_REMINDER, STATE_LOADED_MEMORY, STATE_PROJECT_INSTRUCTIONS, AdaptiveAgent
 from dak_agent.mode_manager import ModeManager, FIRST_TURN_DONE_KEY
 from google.adk.tools import FunctionTool
 
@@ -870,6 +870,75 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(instruction.startswith("Initial instruction"))
         self.assertIn("# Project Instructions\nroot rules", instruction)
         self.assertNotIn("# Project Instructions", agent._resolve_session_instruction({}, {}))
+
+    async def test_inject_memory_stores_state_from_mcp_tool(self):
+        """PBI #116 criterion 2: the agent itself calls load_memory once (both
+        scopes, already capped by the server) and keeps the text in state."""
+        memory = "# User Memory\nlikes concise answers\n\n"
+        agent, toolset, tools = self._project_instructions_agent(
+            {"content": [{"type": "text", "text": memory}]}, names=("load_memory",))
+        state = {}
+        context = self._session_context(agent, state)
+
+        with patch.object(AdaptiveAgent, "_cached_mcp_toolset", return_value=toolset):
+            await agent._inject_memory(context)
+
+        tools[0].run_async.assert_awaited_once_with(args={"scope": ""}, tool_context=context)
+        self.assertEqual(state[STATE_LOADED_MEMORY], memory)
+
+    async def test_inject_memory_empty_result_is_noop(self):
+        """Nothing saved: nothing is kept, and a stale memory is cleared."""
+        from google.adk.sessions.state import State
+
+        agent, toolset, _ = self._project_instructions_agent(
+            {"content": [{"type": "text", "text": ""}]}, names=("load_memory",))
+        state = {}
+        with patch.object(AdaptiveAgent, "_cached_mcp_toolset", return_value=toolset):
+            await agent._inject_memory(self._session_context(agent, state))
+        self.assertEqual(state, {})
+
+        state = State({STATE_LOADED_MEMORY: "stale"}, {})
+        with patch.object(AdaptiveAgent, "_cached_mcp_toolset", return_value=toolset):
+            await agent._inject_memory(self._session_context(agent, state))
+        self.assertFalse(state.get(STATE_LOADED_MEMORY))
+        self.assertIn(STATE_LOADED_MEMORY, state._delta)
+
+    async def test_inject_memory_keeps_the_last_text_on_an_error_result(self):
+        from google.adk.sessions.state import State
+
+        for result in ({"content": [{"type": "text", "text": "Error executing tool"}], "isError": True},
+                       {"content": [{"type": "text", "text": "Error loading memory: denied"}]}):
+            agent, toolset, _ = self._project_instructions_agent(result, names=("load_memory",))
+            state = State({STATE_LOADED_MEMORY: "likes concise answers"}, {})
+
+            with patch.object(AdaptiveAgent, "_cached_mcp_toolset", return_value=toolset):
+                await agent._inject_memory(self._session_context(agent, state))
+
+            self.assertEqual(state[STATE_LOADED_MEMORY], "likes concise answers")
+            self.assertEqual(state._delta, {})
+
+    async def test_restore_session_config_injects_memory_into_the_instruction(self):
+        """The memory read at the start of the invocation reaches this turn's
+        instruction, sent as is (a `{…}` in it is not session-state injection)."""
+        agent, toolset, _ = self._project_instructions_agent(
+            {"content": [{"type": "text", "text": "# Project Memory\nrun {tests} with pytest\n\n"}]},
+            names=("load_memory",))
+        state = {}
+
+        with patch.object(AdaptiveAgent, "_cached_mcp_toolset", return_value=toolset):
+            await agent._restore_session_config(self._session_context(agent, state))
+
+        self.assertIn("# Project Memory\nrun {tests} with pytest", agent._verbatim_sections(state))
+
+    def test_resolve_session_instruction_includes_remembered_context_when_present(self):
+        agent = AdaptiveAgent(model="test-model", name="test_agent",
+                              instruction="Initial instruction", tools=self.mock_tools)
+
+        instruction = agent._resolve_session_instruction({STATE_LOADED_MEMORY: "likes concise answers"}, {})
+
+        self.assertTrue(instruction.startswith("Initial instruction"))
+        self.assertIn("# Remembered Context\nlikes concise answers", instruction)
+        self.assertNotIn("# Remembered Context", agent._resolve_session_instruction({}, {}))
 
     def test_project_instructions_section_is_capped_by_the_window(self):
         agent = AdaptiveAgent(model="test-model", name="test_agent",
