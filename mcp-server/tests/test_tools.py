@@ -141,7 +141,10 @@ class TestMCPTools(unittest.IsolatedAsyncioTestCase):
             result = await main.read_file("/test/big.txt")
         self.assertLess(len(result), len(content))
         self.assertIn("truncated: 10000 more chars", result)
-        # One line longer than the bound: its head is shown, reading goes on after it
+        # One line longer than the bound: its head is shown, and the hint says the
+        # rest of that line cannot be paged with read_file before pointing past it
+        self.assertIn(f"line 0 is {len(content)} chars; only its first {main.MAX_OUTPUT_CHARS} are shown "
+                      "and the other 10000 cannot be read with read_file", result)
         self.assertIn("offset=1,", result)
 
     async def test_read_file_reports_line_count_consistently(self):
@@ -154,6 +157,13 @@ class TestMCPTools(unittest.IsolatedAsyncioTestCase):
         kept = main.MAX_OUTPUT_CHARS // 201  # whole lines that fit under the bound
         self.assertIn(f"offset={kept},", result)
         self.assertNotIn("offset=<line>", result)
+
+    async def test_read_file_truncated_range_offset_counts_from_the_start(self):
+        """Truncating a range that starts past 0 gives an absolute line number."""
+        content = "".join(f"{'x' * 200}\n" for _ in range(1000))
+        with patch('builtins.open', mock_open(read_data=content)):
+            result = await main.read_file("/test/big.txt", offset=100, limit=500)
+        self.assertIn(f"offset={100 + main.MAX_OUTPUT_CHARS // 201},", result)
 
     async def test_read_file_continuation_offset_points_past_kept_lines(self):
         """Reading on from the offset the hint gives returns the rest with no
@@ -183,6 +193,16 @@ class TestMCPTools(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f"[truncated: {omitted} chars omitted from the middle; "
                       f"kept the first {head} and the last {main.MAX_OUTPUT_CHARS - head} chars.", result)
         self.assertIn("--- tail ---\n" + "y" * 100, result)
+
+    async def test_run_command_stderr_keeps_tail_over_head(self):
+        mock_result = MagicMock()
+        mock_result.returncode = 2
+        mock_result.stdout = ""
+        mock_result.stderr = "warning: noise\n" * (main.MAX_OUTPUT_CHARS // 5) + "fatal: something broke"
+        with patch('subprocess.run', return_value=mock_result):
+            result = await main.run_command("build")
+        self.assertTrue(result.endswith("fatal: something broke"))
+        self.assertIn(f"the last {main.MAX_OUTPUT_CHARS - int(main.MAX_OUTPUT_CHARS * 0.3)} chars", result)
 
     async def test_env_bounds_ignore_invalid_values(self):
         """A typo in MCP_MAX_OUTPUT_CHARS must not crash the server at import."""
