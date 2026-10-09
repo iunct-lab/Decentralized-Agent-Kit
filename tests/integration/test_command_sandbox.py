@@ -1,14 +1,22 @@
 """run_command inside srt (MCP_COMMAND_SANDBOX=srt, docs/design/command-sandbox.md).
 
 Runs only against the stack started with docker-compose.command-sandbox.yml on
-top; the default stack skips the whole module.
+top; the default stack skips the whole module. Needs only mcp-server, so it also
+runs against that service started alone (`up --no-deps mcp-server`).
 """
 import uuid
 
 import httpx
 import pytest
 
+from conftest import MCP_URL, wait_for
 from test_mcp_server import _initialize, _mcp_request, _parse_mcp_body
+
+
+@pytest.fixture(scope="module", autouse=True)
+def stack_ready():
+    # Overrides conftest's: wait for mcp-server only, not the agent or fake-LLM.
+    wait_for(MCP_URL)
 
 
 def _call(tool: str, **arguments) -> str:
@@ -51,8 +59,9 @@ def test_write_outside_allowed_fails():
 
 def test_denied_read_fails():
     # srt masks a denied file with /dev/null: the .env compose reads (API keys),
-    # mounted at /projects/.env, reads as an empty character device.
-    out = _run("stat -c %F /projects/.env && wc -c < /projects/.env")
+    # mounted at /projects/.env, is a character device whose read gives no bytes
+    # (empty, or refused where the mount is nodev, as with rootless Docker).
+    out = _run("stat -c %F /projects/.env; cat /projects/.env | wc -c")
     assert "Exit code: 0" in out
     assert "character special file" in out
     assert "\n0\n" in out

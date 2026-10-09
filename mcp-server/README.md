@@ -137,7 +137,7 @@ DAK_UID=$(id -u) DAK_GID=$(id -g) \
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MCP_COMMAND_SANDBOX` | `off` | `off`: commands run as before. `srt`: `srt --settings <MCP_SRT_SETTINGS> <command>`, starting in `/projects` (`/app` is read-only inside srt). If srt or the settings file is missing, or `SANDBOX_MODE=docker` is set too, the command is **not run** and an error is returned. Any other value is an error too, so a typo never drops the sandbox. |
+| `MCP_COMMAND_SANDBOX` | `off` | `off`: commands run as before. `srt`: `srt --settings <MCP_SRT_SETTINGS> -c <command>`, starting in `/projects` (`/app` is read-only inside srt). If srt or the settings file is missing, or `SANDBOX_MODE=docker` is set too, the command is **not run** and an error is returned. Any other value is an error too, so a typo never drops the sandbox. |
 | `MCP_SRT_SETTINGS` | `/app/srt-settings.json` | srt's settings file |
 | `DAK_UID` / `DAK_GID` | `1000` | The user the server runs as in `docker-compose.command-sandbox.yml`. Use yours so the server can write the files mounted at `/projects`. With rootless Docker a container uid other than 0 maps to another host uid and cannot write your files. |
 
@@ -146,7 +146,7 @@ DAK_UID=$(id -u) DAK_GID=$(id -g) \
 | Key | Default | Meaning |
 |---|---|---|
 | `filesystem.allowWrite` | `["/projects", "/tmp"]` | The only writable paths; everything else is read-only |
-| `filesystem.denyRead` | `["/projects/.env", "/root"]` | Hidden: a file reads as empty (`/dev/null`), a directory as an empty one. `/projects/.env` is the `.env` with the API keys |
+| `filesystem.denyRead` | `["/projects/.env", "/root"]` | Hidden: a file is replaced by `/dev/null` (reads as empty, or is refused where `/projects` is mounted `nodev` as with rootless Docker), a directory by an empty one. `/projects/.env` is the `.env` with the API keys |
 | `filesystem.denyWrite` | `[]` | Read-only paths inside `allowWrite` |
 | `network.allowedDomains` | `[]` | Destinations a command may reach through srt's proxy. Empty: no network. To let commands call the agent: `["agent:8000"]` |
 | `network.deniedDomains` | `[]` | Destinations refused even when allowed above |
@@ -177,7 +177,21 @@ environment variables.
 
 **Where it was tried.** Linux arm64 (kernel 6.18) with rootless Docker 29.8.1
 (the design doc). `tests/integration/test_command_sandbox.py` checks the
-override's stack. Docker Desktop, hosts with AppArmor (Ubuntu 24.04 and later
+override's stack; it needs only mcp-server, so it also runs against that service
+started alone:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.test.yml -f docker-compose.command-sandbox.yml \
+  up -d --build --wait --no-deps mcp-server
+cd tests/integration && uv run pytest test_command_sandbox.py -q
+```
+
+On that host the 5 tests pass with a checkout every directory of which uid 1000
+can write (rootless Docker maps the container uid to another host uid): srt
+puts empty placeholders over protected paths that do not exist yet (such as
+`.claude/commands`) and removes them when the command ends, so the server's
+uid must be able to write the directories under `/projects`, not only
+`/projects` itself. Rootful Docker, Docker Desktop, hosts with AppArmor (Ubuntu 24.04 and later
 restrict unprivileged user namespaces by default) and x86_64 are untested.
 The host kernel must be Linux 5.2 or later: on 4.14, bubblewrap 0.12 stops with
 `Can't open source /: Function not implemented` (no `open_tree`), and every
