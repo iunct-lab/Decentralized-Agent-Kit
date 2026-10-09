@@ -46,7 +46,7 @@ run_smoke_stack() {
 
     echo "==> Running real-LLM smoke tests..."
     set +e
-    (cd tests/integration && uv sync -q && DAK_SMOKE_REAL_LLM=1 uv run pytest test_smoke_real_llm.py -v -p no:cacheprovider)
+    (cd tests/integration && uv sync -q --group smoke && DAK_SMOKE_REAL_LLM=1 uv run pytest test_smoke_real_llm.py -v -rP -p no:cacheprovider)
     local result=$?
     set -e
 
