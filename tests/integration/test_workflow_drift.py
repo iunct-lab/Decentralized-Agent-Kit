@@ -24,10 +24,10 @@ def _lines(name: str) -> list[str]:
     return (WORKFLOWS / name).read_text().splitlines()
 
 
-def _step(name: str) -> list[str]:
-    """Lines of the step named STEP, without its `- name:` line."""
+def _step(name: str, step: str = STEP) -> list[str]:
+    """Lines of the named step, without its `- name:` line."""
     lines = _lines(name)
-    start = next(i for i, line in enumerate(lines) if line.strip() == f"- name: {STEP}")
+    start = next(i for i, line in enumerate(lines) if line.strip() == f"- name: {step}")
     indent = len(lines[start]) - len(lines[start].lstrip())
     body = []
     for line in lines[start + 1:]:
@@ -43,8 +43,8 @@ def _run_block(name: str) -> list[str]:
     return body[start + 1:]
 
 
-def _key(name: str, key: str) -> str | None:
-    for line in _step(name):
+def _key(name: str, key: str, step: str = STEP) -> str | None:
+    for line in _step(name, step):
         m = re.match(rf"\s*{key}:\s*(.+)$", line)
         if m:
             return m.group(1).strip()
@@ -75,3 +75,16 @@ def test_capture_golden_passes_its_model_input_to_the_step():
 
 def test_capture_golden_default_model_matches_nightly_eval():
     assert _model_default("capture-golden.yml") == _model_default("nightly-eval.yml")
+
+
+def test_capture_golden_opens_pr_with_its_own_token():
+    # A PR opened with GITHUB_TOKEN does not start CI, and the repository does not
+    # let Actions create PRs (#498).
+    token = _key("capture-golden.yml", "token", "Open PR with the new golden")
+    assert token == "${{ secrets.GOLDEN_PR_TOKEN }}"
+
+
+def test_capture_golden_token_permissions_are_read_only():
+    text = (WORKFLOWS / "capture-golden.yml").read_text()
+    assert "pull-requests: write" not in text
+    assert "contents: write" not in text
