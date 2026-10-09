@@ -168,6 +168,7 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 | `DAK_COMPACTION_INPUT_RATIO` | `0.5` | 1 回の要約リクエストに入れる履歴の上限（窓占有率）。残りは要約の出力枠 |
 | `DAK_REQUEST_BUDGET_RATIO` | `0.85` | 最終ガードの上限 |
 | `DAK_COMPACTION_WARNING_COUNT` | `3` | 圧縮がこの回数を超えたら `dak_recommend_new_session` を立てる |
+| `DAK_OUTPUT_RESERVE_TOKENS` | `4096` | 出力の予約。`get_context_remaining` が返す使える量（`usable_context_tokens` = 窓 − これ）と残量から引く。自動圧縮とハード上限の値は変えない |
 | `DAK_TAIL_RESERVE_RATIO` | `0.2` | 最終ガードが原文のまま残す直近 tail（窓占有率、最低 256 トークン。ユーザーターンの境界から） |
 | `DAK_MODEL_ERROR_RETRY_ATTEMPTS` | `2` | 窓超過のエラーを受けたときの呼び直しの回数（予算は毎回半分）。`0` で呼び直さずに説明文を返す |
 | `DAK_TOOL_OUTPUT_MAX_CHARS` | 窓の 15%（2K〜40K 文字） | 1 回のツール結果の上限 |
@@ -212,6 +213,13 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 - 指示は計画と同じく state から組み直され、`# Current Plan` の後に `# Original Request` として入る。要約の `User request` 節はモデルの出来に左右されるが、こちらは圧縮の出来によらず残る。
 - 計画と同じく、利用者が書いた文なので ADK の `{var}` 置換を通さない。長さは計画と同じ上限（`HarnessSettings.plan_chars`）で切り、切ったら `[truncated — call read_original_request for the full text]` を付ける。全文は組み込みツール `read_original_request` が state から返す（`read_plan` と同じく Pact で絞っていても呼べる）。`dak:instruction` を渡した呼び出しには入れない（指示全体を置き換えるため）。
 - 検証: `test_adaptive_agent.py::test_original_request_reaches_later_turns_verbatim`（2 ターン目の指示に 1 ターン目の発話がそのまま入る）。
+
+### 残量の確認（`get_context_remaining`、#113）
+
+- ハーネスが有効なとき、組み込みツール `get_context_remaining` でモデル自身が残量を確かめられる（Pact で絞っていても呼べる）。返すのは、推定使用量 `estimated_tokens`、窓 `context_window`、出力の予約を引いた `usable_context_tokens` と残量 `remaining_tokens`、圧縮回数 `compaction_count`（`dak_compaction_count`）、`recommend_new_session`（`dak_recommend_new_session`）。
+- しきい値は 2 つを分けて返す。`auto_compact_threshold`（`DAK_COMPACTION_THRESHOLD_RATIO`、既定 窓の 60%）は古い履歴の要約が始まるところ、`hard_limit`（`DAK_REQUEST_BUDGET_RATIO`、既定 85%）はリクエストから古いツール結果を削る最終ガード。どちらの値も出力の予約では変えない。
+- 推定使用量は、セッションのイベントから次のリクエストの履歴を ADK と同じ規則で見積もる（圧縮された範囲の生のイベントは要約の分だけ数え、大きな圧縮に含まれる圧縮は数えない）。指示とツール宣言は含まない。
+- 検証: `test_harness.py::TestGetContextRemainingTool`。
 
 ### 引き継ぎ情報（`write_handoff`、#114）
 
