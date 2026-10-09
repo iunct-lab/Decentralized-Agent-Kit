@@ -6,7 +6,7 @@ the command (#109).
 
 MCP_COMMAND_SANDBOX:
   off  (default) the command runs as before (`shell=True`).
-  srt  the command runs as `srt --settings <MCP_SRT_SETTINGS> <command>`. When
+  srt  the command runs as `srt --settings <MCP_SRT_SETTINGS> -c <command>`. When
        srt or the settings file is missing, the command is not run at all.
 Any other value is an error, so a typo never silently drops the sandbox.
 """
@@ -35,7 +35,9 @@ def settings_path() -> str:
 
 def build_argv(command: str, mode: str, settings: str) -> list[str] | str:
     if mode == "srt":
-        return ["srt", "--settings", settings, command]
+        # -c: srt hands the string to a shell, as shell=True does. Without it srt
+        # takes the whole string as one program name ("echo hi: command not found").
+        return ["srt", "--settings", settings, "-c", command]
     return command
 
 
