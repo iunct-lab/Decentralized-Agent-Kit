@@ -10,6 +10,7 @@
   "dak_explorer",
   "read_tool_output",
   "get_context_remaining",
+  "new_context",
   "list_skills",
   "enable_skill"
 ]
