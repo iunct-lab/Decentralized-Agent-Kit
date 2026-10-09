@@ -88,3 +88,12 @@ def test_capture_golden_token_permissions_are_read_only():
     text = (WORKFLOWS / "capture-golden.yml").read_text()
     assert "pull-requests: write" not in text
     assert "contents: write" not in text
+
+
+def test_capture_golden_checks_the_token_before_installing_ollama():
+    # A missing secret should fail in seconds, not after the ~15 min Ollama pull.
+    steps = [line.strip() for line in _lines("capture-golden.yml") if line.strip().startswith("- name: ")]
+    assert steps.index("- name: Check GOLDEN_PR_TOKEN") < steps.index(f"- name: {STEP}")
+    step = "Check GOLDEN_PR_TOKEN"
+    assert _key("capture-golden.yml", "GOLDEN_PR_TOKEN", step) == "${{ secrets.GOLDEN_PR_TOKEN }}"
+    assert '[ -n "$GOLDEN_PR_TOKEN" ]' in _key("capture-golden.yml", "run", step)
