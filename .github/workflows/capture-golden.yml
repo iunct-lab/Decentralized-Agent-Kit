@@ -3,6 +3,8 @@ name: Capture golden
 # 実LLMスタックでプロンプトを実行し、観測したツール系列を決定論的 golden として
 # 凍結し、PR として提案する（要件6「使うほど育つテスト資産」の自動化）。
 # 手動起動。nightly-eval とは独立。
+# PR は専用トークン GOLDEN_PR_TOKEN で作る（GITHUB_TOKEN で作った PR では CI が
+# 起動せず、リポジトリ設定でも Actions の PR 作成を許していない。#498）。
 on:
   workflow_dispatch:
     inputs:
@@ -17,14 +19,18 @@ on:
         default: "llama3.1:8b"
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   capture:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+
+      - name: Check GOLDEN_PR_TOKEN
+        env:
+          GOLDEN_PR_TOKEN: ${{ secrets.GOLDEN_PR_TOKEN }}
+        run: '[ -n "$GOLDEN_PR_TOKEN" ] || { echo "::error::secret GOLDEN_PR_TOKEN is not set (docs/maintenance/README.md)"; exit 1; }'
 
       - name: Cache Ollama models
         uses: actions/cache@v6
@@ -81,6 +87,7 @@ jobs:
       - name: Open PR with the new golden
         uses: peter-evans/create-pull-request@v8
         with:
+          token: ${{ secrets.GOLDEN_PR_TOKEN }}
           branch: golden/${{ github.event.inputs.name }}
           title: "test(golden): add replay case ${{ github.event.inputs.name }}"
           commit-message: "test(golden): capture ${{ github.event.inputs.name }}"
