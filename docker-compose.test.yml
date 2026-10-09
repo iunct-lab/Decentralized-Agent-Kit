@@ -97,6 +97,36 @@ services:
       retries: 30
       start_period: 20s
 
+  # tests/integration/test_payment_intent_flow.py: agent-ap2 with the payment
+  # intent check on. Only a PUBLIC key is trusted; its private key was thrown
+  # away, so no intent here can be valid (the allowed case is a unit test).
+  agent-ap2-intent:
+    build: ./agent
+    ports:
+      - "8014:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://username:password@postgres:5432/postgres
+      - SESSION_SERVICE_URI=postgresql+asyncpg://username:password@postgres:5432/postgres
+      - MCP_SERVER_URL=http://mcp-server:8000/mcp
+      - MODEL_NAME=openai/fake-ap2-intent
+      - OPENAI_API_BASE=http://fake-llm:8080/v1
+      - OPENAI_API_KEY=dummy
+      - ENABLE_AP2_PROTOCOL=true
+      - SOLANA_USE_MOCK=true
+      - AGENT_SKILLS_DIRS=/app/skills:/app/provider_skills
+      - ENABLE_PAYMENT_INTENT_CHECK=true
+      - 'DAK_PAYMENT_INTENT_TRUSTED_JWKS={"keys":[{"kty":"EC","crv":"P-256","kid":"it-user","x":"10T0cg1VD4XY7uiC_j1OnEOyks2PccGKKLoaJwqBt5M","y":"NQtXiLZUlbuiycVr-d6rnJ5H9FUGpveTaqi6Vr8bH9c"}]}'
+    depends_on:
+      - postgres
+      - fake-llm
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/list-apps')"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+
   # tests/integration/test_request_snapshot.py: the sliding-window compaction
   # runs every 3 invocations (the fake LLM's usage never reaches the token threshold).
   agent-harness-eval:

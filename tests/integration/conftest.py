@@ -15,6 +15,7 @@ AGENT_ENFORCER_URL = os.getenv("DAK_AGENT_ENFORCER_URL", "http://localhost:8010"
 AGENT_AP2_URL = os.getenv("DAK_AGENT_AP2_URL", "http://localhost:8011")
 AGENT_HARNESS_EVAL_URL = os.getenv("DAK_AGENT_HARNESS_EVAL_URL", "http://localhost:8012")
 AGENT_CONSUMER_URL = os.getenv("DAK_AGENT_CONSUMER_URL", "http://localhost:8013")
+AGENT_AP2_INTENT_URL = os.getenv("DAK_AGENT_AP2_INTENT_URL", "http://localhost:8014")
 MCP_URL = os.getenv("DAK_MCP_URL", "http://localhost:8001/mcp")
 BFF_URL = os.getenv("DAK_BFF_URL", "http://localhost:8002")
 FAKE_LLM_URL = os.getenv("DAK_FAKE_LLM_URL", "http://localhost:8089")
@@ -90,10 +91,10 @@ class AgentClient:
         self.base_url = base_url
         self.user_id = user_id or f"it_user_{uuid.uuid4().hex[:8]}"
 
-    def create_session(self) -> str:
+    def create_session(self, state: dict | None = None) -> str:
         resp = httpx.post(
             f"{self.base_url}/apps/{APP_NAME}/users/{self.user_id}/sessions",
-            json={},
+            json={"state": state} if state else {},
             timeout=30.0,
         )
         resp.raise_for_status()
@@ -125,6 +126,11 @@ def agent_enforcer():
 @pytest.fixture
 def agent_ap2():
     return AgentClient(AGENT_AP2_URL)
+
+
+@pytest.fixture
+def agent_ap2_intent():
+    return AgentClient(AGENT_AP2_INTENT_URL)
 
 
 @pytest.fixture
