@@ -353,13 +353,13 @@ P3 の「プロンプトキャッシュ」について決めたこと（既定�
 P3 の「モデル別ハーネスプロファイル」（PBI #110）について決めたこと:
 
 - **プロファイルの解決**（#267）: `agent/profiles/<名前>.yaml` は `pattern`（LiteLLM のモデル名への glob）と `HarnessSettings` の値を持つ。`DAK_HARNESS_PROFILE` で名前を指定すればそれを使い（無い名前なら起動時に `ValueError`）、指定が無ければ `pattern` が最初に合ったものを使う。`default.yaml`（`pattern: "*"`、今の既定値と同じ）は最後に試す。値の優先は「環境変数 → プロファイル → `HarnessSettings` の既定値」。同梱の `qwen-small.yaml`（`*qwen*`）はツール出力を 8,000 文字に絞る。`tool_allowlist` / `max_tools` は `HarnessSettings` に解決するだけで、エージェントのツールをまだ絞らない（動的ツール削減 #81 とモード切替 #92 の判断と重なるため）。検証: `agent/tests/test_profiles.py`
-- **text-action フォールバック（tool-calling を使わず、応答のコードブロック 1 個 = 1 コマンドとして読む方式。mini-SWE-agent 型）は採らない**（#269 の Spike、2026-10-09）。根拠は nightly-eval（`.github/workflows/nightly-eval.yml`、GitHub の CPU ランナー上の Ollama、`tests/integration/test_smoke_real_llm.py` の 4 件）:
-  - 2026-10-09 に `workflow_dispatch` で 2 モデルを流した。`llama3.1:8b` は 3/4（落ちたのは `test_skill_discovery_and_use`: `list_skills` ではなく `dak_explorer` を呼び、`list_skills` の結果をでっち上げて答えた）。`qwen2.5:7b` は 3/4（落ちたのは `test_ap2_payment_flow_with_real_llm` の応答待ちのタイムアウト。ツール呼び出しの誤りではない）
-  - 2026-09-26〜10-09 の `llama3.1:8b` の 15 回（上の 1 回を含む）で落ちた 10 件の内訳は、ツールの選び間違い（`dak_explorer` に回す 5 件、`read_file` の代わりに `read_tool_output` 1 件）6 件、求めたツールを呼ばない（支払いが要ると分かってもウォレットを呼ばない）1 件、CPU 推論のタイムアウト 3 件。**tool call の書式が崩れた（引数がスキーマに合わない・存在しないツール名・JSON が壊れる）失敗は 0 件**
-  - text-action が直すのは書式の失敗だけで、上の失敗はどれも直さない（どのツールを呼ぶかの判断はテキストにしても同じ。タイムアウトはむしろ応答が長くなる）。書式の失敗で全滅していたのは `llama3.2:3b`（2026-07-06〜08-27 の 53 回すべて pass_rate 0.0）だけで、nightly はこれを外して 8B に替えた（README の推奨と同じ）
-  - 採ると、MCP / A2A / ADK のツール定義（スキーマ・承認・ハーネスのガード）をテキストのパーサの上にもう一組作ることになり、モデルの種類で経路が分かれる（憲章の Multi-LLM 中立・疎結合に対して、得るものが 3B 級の救済だけ）
-  - 見直す条件: 対象にしたいモデルの nightly で、書式の失敗（スキーマ違反・存在しないツール名・壊れた JSON）が失敗の多数を占めたとき。そのときはプロファイルの `text_actions` を入口にして実装の Issue を起こす（今の `text_actions: false` はどこからも読まれない）
-  - ついでに見えたこと: 2026-10-07 以降の `llama3.1:8b` の pass_rate の低下（1.0 → 0.25〜0.75）は、主に調査サブエージェント `dak_explorer` への取り違えから来ている。小型モデルにツールを絞る `tool_allowlist` / `max_tools` の適用（#81 / #92）の判断材料になる
+- **text-action フォールバック（tool-calling を使わず、応答のコードブロック 1 個 = 1 コマンドとして読む方式。mini-SWE-agent 型）は今は採らない**（#269 の Spike、2026-10-09）。見たのは nightly-eval（`.github/workflows/nightly-eval.yml`、GitHub の CPU ランナー上の Ollama、`tests/integration/test_smoke_real_llm.py` の 4 件）のテストの失敗の行（`FAILED` と `AssertionError`）だけで、エージェント側のログやモデルの生の応答は見ていない。text-action と tool-calling を同じテストで比べてもいない:
+  - 2026-10-09 に `workflow_dispatch` で 2 モデルを流した。`llama3.1:8b` は 3/4（落ちたのは `test_skill_discovery_and_use`: `list_skills` ではなく `dak_explorer` を呼び、`list_skills` の結果を見たかのように答えた）。`qwen2.5:7b` は 3/4（落ちたのは `test_ap2_payment_flow_with_real_llm` の `httpx.ReadTimeout`。応答が時間内に返らなかったことしか分からず、その間にツール呼び出しで何が起きたかは記録に無い）
+  - 2026-09-26〜10-09 の `llama3.1:8b` の 16 回（上の 1 回を含む）で落ちた 10 件の内訳は、別のツールを呼んだ（`dak_explorer` に回す 5 件、`read_file` の代わりに `read_tool_output` 1 件）6 件、求めたツールを呼ばなかった（支払いが要ると分かってもウォレットを呼ばない）1 件、`httpx.ReadTimeout` 3 件。**失敗の行に書式の失敗（引数がスキーマに合わない・存在しないツール名・壊れた JSON）として出たものは 0 件**。ただしテストは呼ばれたツールの名前しか確かめないので、途中で起きて回復した書式の誤りは数えられていない
+  - text-action が狙うのは、構造化した tool call をモデルが正しく出せないことへの対処で、観測した失敗（別のツールを選ぶ・呼ばない）はその種類ではない。text-action で選び方が良くなるかは試していないので、ここでは「この失敗を直す根拠が無い」までしか言わない。`llama3.2:3b` は 2026-07-06〜08-27 の 53 回すべて pass_rate 0.0 だったが、`history.jsonl` には失敗の理由が無く、書式の失敗だったかは確かめていない（nightly はこれを外して `llama3.1:8b` に替えた。ワークフローのコメントは「構造化した tool call を確実に出さない」と書くが、記録からは確かめられない）
+  - 採ると、MCP / A2A / ADK のツール定義（スキーマ・承認・ハーネスのガード）に対応するテキストの経路をもう一つ持つことになり、モデルの種類で経路が分かれる。今の記録ではその手間に見合う失敗が見えていない
+  - 見直す条件: 対象にしたいモデルの nightly で、書式の失敗（スキーマ違反・存在しないツール名・壊れた JSON）が失敗の多数を占めたとき。分類にはテストの失敗の行では足りないので、そのときはエージェントのログ（LiteLLM の解析の失敗、ADK の関数呼び出しの誤り）も残す。実装はプロファイルの `text_actions` を入口にして Issue を起こす（今の `text_actions: false` はどこからも読まれない）
+  - ついでに見えたこと: 2026-10-07 以降の `llama3.1:8b` の pass_rate の低下（1.0 → 0.25〜0.75）の失敗の行には、調査サブエージェント `dak_explorer` を呼んだものが多い（10-07〜10-09 の 6 回で落ちた 9 件のうち 5 件）。小型モデルにツールを絞る `tool_allowlist` / `max_tools` の適用（#81 / #92）の判断材料になる
 
 ## 5. 2 度目の発端: 圧縮の要約リクエスト自身が窓を超えた（2026-09-14）
 
