@@ -2,7 +2,7 @@
 
 PBI #94 / Task #226。ADK の `ContextCacheConfig` を DAK で既定で有効にするかを、プロバイダごとに決める。
 根拠は #224 のテスト（`agent/tests/test_context_cache_interaction.py`）と、ADK / LiteLLM のソースを読んだ結果、偽の HTTP サーバに向けて実際に送った本文。
-実プロバイダでのトークン数と遅延は、Bedrock の Amazon Nova 2 モデルで測った（#225、5 章）。Anthropic・Gemini は測っていない（6 章）。
+実プロバイダでのトークン数と遅延は、Bedrock の Amazon Nova の 2 モデル（Micro と 2 Lite）で測った（#225、5 章）。Anthropic・Gemini 直と Bedrock の Claude は測っていない（6 章）。
 
 調べた版: google-adk 2.8.0、litellm 1.102.0。パスは `agent/.venv/lib/python3.12/site-packages/` からの相対（`<adk>` = `google/adk`、`<litellm>` = `litellm`）。
 
@@ -20,10 +20,10 @@ PBI #94 / Task #226。ADK の `ContextCacheConfig` を DAK で既定で有効に
 
 | 経路（`MODEL_NAME` の例） | 送信本文 | 仕組み（ソース） | トークン・遅延の実測 |
 |---|---|---|---|
-| Anthropic 直（`anthropic/claude-…`） | system と最後のメッセージに `cache_control: {"type": "ephemeral"}` が付く | Anthropic のプレフィックスキャッシュ（印を付けた所までを再利用） | 未検証（#225） |
-| Gemini 直（`gemini/gemini-…`） | 印の付いた範囲が 1024 トークン以上なら、先に `cachedContents` を GET（同じ内容の資源を探す）/ POST（作成）し、その資源を指して生成する。短ければ印は消えて通常の生成 | `<litellm>/llms/vertex_ai/context_caching/vertex_ai_context_caching.py` の `check_and_create_cache` と `transformation.py` の `separate_cached_messages`: 印の付いたメッセージのうち**先頭から連続したもの**だけを資源にする。system と最後のメッセージが隣り合う最初のリクエスト（`[system, user]`）だけは両方が資源に入るが、2 回目以降は離れているので、資源は **system 指示とツール定義だけ**になり、会話は資源を指した通常の contents で送られる（`[system, user, model, user]` で確かめた）。資源の名前は中身のハッシュなので、system とツールが変わらない限り同じ資源に当たる | 未検証（#225） |
-| Bedrock の Amazon Nova（`bedrock/apac.amazon.nova-micro-v1:0`、`bedrock/global.amazon.nova-2-lite-v1:0`、Converse） | system と最後のメッセージに `cachePoint` ブロックが付く | Claude と同じ変換。LiteLLM の表でキャッシュ対応 | 測った（5 章）。入力の費用は 2 回目の会話で 7 割強減り、遅延は差が無い |
-| Bedrock の Claude（`bedrock/us.anthropic.claude-sonnet-4-5-…`、Converse） | system と最後のメッセージに `cachePoint` ブロックが付く | `<litellm>/llms/bedrock/chat/converse_transformation.py`（`cache_control` → `cachePoint`） | 未検証（#225） |
+| Anthropic 直（`anthropic/claude-…`） | system と最後のメッセージに `cache_control: {"type": "ephemeral"}` が付く | Anthropic のプレフィックスキャッシュ（印を付けた所までを再利用） | 未検証（6 章） |
+| Gemini 直（`gemini/gemini-…`） | 印の付いた範囲が 1024 トークン以上なら、先に `cachedContents` を GET（同じ内容の資源を探す）/ POST（作成）し、その資源を指して生成する。短ければ印は消えて通常の生成 | `<litellm>/llms/vertex_ai/context_caching/vertex_ai_context_caching.py` の `check_and_create_cache` と `transformation.py` の `separate_cached_messages`: 印の付いたメッセージのうち**先頭から連続したもの**だけを資源にする。system と最後のメッセージが隣り合う最初のリクエスト（`[system, user]`）だけは両方が資源に入るが、2 回目以降は離れているので、資源は **system 指示とツール定義だけ**になり、会話は資源を指した通常の contents で送られる（`[system, user, model, user]` で確かめた）。資源の名前は中身のハッシュなので、system とツールが変わらない限り同じ資源に当たる | 未検証（6 章） |
+| Bedrock の Amazon Nova（`bedrock/apac.amazon.nova-micro-v1:0`、`bedrock/global.amazon.nova-2-lite-v1:0`、Converse） | system と最後のメッセージに `cachePoint` ブロックが付く | Claude と同じ変換。LiteLLM の表でキャッシュ対応 | 測った（5 章）。入力と出力を合わせた費用は 2 回目の会話で 7 割強減り、遅延は差が無い |
+| Bedrock の Claude（`bedrock/us.anthropic.claude-sonnet-4-5-…`、Converse） | system と最後のメッセージに `cachePoint` ブロックが付く | `<litellm>/llms/bedrock/chat/converse_transformation.py`（`cache_control` → `cachePoint`） | 未検証（6 章） |
 | Bedrock の GPT-5.6 Luna（`bedrock/us.openai.gpt-5.6-luna`、Converse。`docs/getting-started/bedrock.md` の書き方） | `cachePoint` は付かない（印は消える） | `<litellm>/llms/bedrock/common_utils.py` の `bedrock_model_accepts_cache_points`: LiteLLM のモデル表でこのモデルの Converse の項目は `supports_prompt_caching` が無いので送らない。表でキャッシュ対応なのは `bedrock_mantle/openai.gpt-5.6-luna`（Responses API）の項目だけ。これは litellm 1.102.0 に同梱の表での結果で、LiteLLM は既定では起動時にリモートの表を取りに行く（`LITELLM_LOCAL_MODEL_COST_MAP` が未設定のとき。`<litellm>/litellm_core_utils/get_model_cost_map.py`）ので、表が更新されれば版を変えなくても `cachePoint` が送られ始めうる。2026-09-21 の PBI #94 の決定ログ（モデルカード: Luna のキャッシュは Responses API だけで効き、Converse では効かない）と一致する | 未検証。Responses API 経路への切り替えは別に要る（「未検証事項」） |
 | OpenAI 直（`openai/gpt-…`、api.openai.com） | 印は消える | `<litellm>/llms/openai/chat/gpt_transformation.py:422-435` の `_should_preserve_cache_control_for_endpoint`: openai.com のホストでは除く | 未検証。OpenAI は印に依らず自動でキャッシュするので、`ContextCacheConfig` の有無は関係しない見込み |
 | ローカル: Ollama（`ollama_chat/llama3.1:8b`、`docker-compose.local-llm.yml`） | 印は消える（テスト `test_local_llm_routes[ollama_chat…]`） | `<litellm>/llms/ollama/chat/transformation.py` の `OllamaChatConfig.transform_request` が role と content からメッセージを作り直す（`gpt_transformation.py` は通らない。Task #224 本文の推定とは理由が違い、結論は同じ） | 対象外（課金も印も無い） |
@@ -78,7 +78,6 @@ PBI #94 / Task #226。ADK の `ContextCacheConfig` を DAK で既定で有効に
 - **印のぶん入力が増える**: キャッシュありのリクエストは、入力トークンが毎回約 180 増えた（`cachePoint` の扱いと見られる。費用の計算には含めた）
 - **書き込みが繰り返される**: Nova Micro の 1 回目は、2 つ目のリクエストでも読み込みが 0 で全体を書き直した（直前の書き込みがまだ使えなかったと見られる）。Nova 2 Lite では 2 つ目から system とツールのぶん（約 7,450）を読んだ
 - 圧縮・刈り込み・計画の書き換え（3 章）が起きる長い会話では測っていない。上の数は、先頭が変わらない短い会話での上限に近い
-- 2 モデルは、開発用のロールに計測の間だけ権限を足して測った（iunct-lab/Decentralized-Agent-Kit#483）。Claude Haiku 4.5 も候補にしたが、アカウントで Anthropic のモデルを使える状態になっておらず（ユースケースのフォームと AWS Marketplace の同意）、Nova 2 Lite に替えた
 
 費用の式と単価（LiteLLM の同梱表 `model_prices_and_context_window_backup.json`、100 万トークンあたり USD）:
 
@@ -119,8 +118,8 @@ PBI #94 / Task #226。ADK の `ContextCacheConfig` を DAK で既定で有効に
 
 ## 6. 未検証事項
 
-- **Anthropic・Gemini 直でのトークン数と遅延**: 測っていない。Anthropic は書き込みに割増しがあるので、Nova の結果をそのまま当てはめない
+- **Anthropic・Gemini 直と Bedrock の Claude でのトークン数と遅延**: 測っていない。Anthropic は書き込みに割増しがあるので、Nova の結果をそのまま当てはめない
 - **Bedrock の GPT-5.6 Luna の Responses API 経路**: LiteLLM では `bedrock_mantle/openai.gpt-5.6-luna` の経路になる。DAK がこの経路で動くか（ツール呼び出し、ストリーミング）とキャッシュの効果の実測は、着手前に利用者の承認を得てから行う別の Task とする
 - **llama-server が `cache_control` を受け付けるか**: 今の送信本文では届く。無視されるのか、エラーになるのかは実機で確かめていない
-- **圧縮・刈り込み・計画の書き換えで実際にどれだけミスするか**: 3 章の見立ては仕組みからの推定。ヒット率は #225 の実測か、#105 のプレフィックスの規律と合わせて測る
+- **圧縮・刈り込み・計画の書き換えで実際にどれだけミスするか**: 3 章の見立ては仕組みからの推定。ヒット率は、長い会話での実測か #105 のプレフィックスの規律と合わせて測る
 - Gemini の暗黙のキャッシュ（印が無くても効くもの）と OpenAI の自動キャッシュが DAK の会話でどれだけ効くかは、この PBI の比較の外（`ContextCacheConfig` の有無で変わらない）

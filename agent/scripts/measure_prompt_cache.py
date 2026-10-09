@@ -25,7 +25,7 @@ from google.adk.sessions import InMemorySessionService
 from google.adk.tools import FunctionTool
 from google.genai import types
 
-# ~6K tokens: above the largest minimum cacheable prefix among Bedrock models (4,096 for Claude Haiku 4.5).
+# ~7.5K tokens: above the largest minimum cacheable prefix among Bedrock models (4,096 for Claude Haiku 4.5).
 INSTRUCTION = "You are an operations assistant. Answer in one short sentence.\n\n" + "\n".join(
     f"Rule {i}: when a log line mentions service-{i % 37}, check its queue depth, its error rate and "
     f"its last deploy before answering, and never restart it without a ticket numbered {1000 + i}."
