@@ -19,6 +19,7 @@ from dak_agent.harness import (
     make_compaction_config,
     build_reset_compaction,
     make_get_context_remaining_tool,
+    make_new_context_tool,
     make_read_tool_output_tool,
 )
 
@@ -1565,6 +1566,50 @@ class TestGetContextRemainingTool:
         assert "get_context_remaining" in ALWAYS_ALLOWED
 
 
+
+class TestNewContextTool:
+    """PBI #113 AC1: an explicit reset keeps only the original request and the
+    handoff, through ADK's compaction event."""
+
+    def _context(self, state):
+        from google.adk.events.event import Event
+        from google.adk.events.event_actions import EventActions
+
+        ctx = MagicMock()
+        ctx.state = state
+        ctx.actions = EventActions()
+        ctx.session = MagicMock(events=[
+            Event(author="user", timestamp=1.0, content=types.Content(role="user", parts=[types.Part(text="ログを読んで")])),
+            Event(author="dak_agent", timestamp=2.0, content=types.Content(role="model", parts=[types.Part(text="x")])),
+        ])
+        return ctx
+
+    def test_new_context_without_handoff_asks_to_write_handoff_first(self):
+        ctx = self._context({})
+        result = make_new_context_tool().func(tool_context=ctx)
+
+        assert result == "No handoff recorded. Call write_handoff first, then new_context."
+        assert ctx.actions.compaction is None
+
+    def test_new_context_sets_compaction_action_from_handoff_and_original_request(self):
+        from dak_agent.builtin_tools import STATE_HANDOFF, STATE_ORIGINAL_REQUEST, format_handoff
+
+        handoff = {"objective": "inspect logs", "done": ["read pages 1-2"], "next_steps": ["write the summary"]}
+        ctx = self._context({STATE_HANDOFF: handoff, STATE_ORIGINAL_REQUEST: "ログを読んで"})
+        result = make_new_context_tool().func(tool_context=ctx)
+
+        assert result == "Context reset. Continuing from handoff and the original request."
+        assert ctx.actions.compaction == build_reset_compaction(
+            ctx.session.events, format_handoff(handoff), "ログを読んで")
+        assert ctx.actions.compaction.start_timestamp == 1.0 and ctx.actions.compaction.end_timestamp == 2.0
+
+    def test_new_context_is_registered_and_always_allowed(self):
+        from dak_agent.enforcer import ALWAYS_ALLOWED
+
+        assert make_new_context_tool().name == "new_context"
+        assert "new_context" in ALWAYS_ALLOWED
+
+
 class TestPerCallHarnessSettings:
     """PBI #138 AC3: the request budget follows the model chosen per call
     (`dak:model`); the default model keeps the startup settings."""
@@ -2151,6 +2196,85 @@ async def test_reset_compaction_lets_the_scripted_task_complete_from_handoff_alo
     assert max(llm.request_tool_results[:reset_at]) == 2
     assert llm.request_tool_results[reset_at:] == [0] * len(after)  # the tool results are gone
     assert max(llm.request_tokens[reset_at:]) < first_turn_tokens // 4
+
+
+
+@pytest.mark.asyncio
+async def test_new_context_tool_call_lets_the_scripted_task_continue_from_handoff():
+    """PBI #113 AC1: the model itself resets at a milestone (write_handoff,
+    then new_context). The requests after that carry the original request and
+    the handoff instead of the tool results, stay small, and the task finishes
+    from the handoff's next step, in this turn and the next."""
+    from google.adk.apps import App
+    from google.adk.models.base_llm import BaseLlm
+    from google.adk.models.llm_response import LlmResponse
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+    from google.adk.tools import FunctionTool
+
+    from dak_agent.adaptive_agent import AdaptiveAgent
+    from dak_agent.builtin_tools import write_handoff
+
+    handoff = {"objective": "inspect logs", "done": ["read pages 1-2"], "decisions": [],
+               "next_steps": ["write the summary"], "files": [], "open_questions": []}
+    script = [("big_tool", {"page": 1}), ("big_tool", {"page": 2}), ("write_handoff", handoff), ("new_context", {})]
+
+    class ScriptedLlm(BaseLlm):
+        """Reads two pages, records a handoff and resets; then answers "done"
+        only when the request carries the handoff's next step."""
+        steps: int = 0
+        request_tokens: list = []
+        request_texts: list = []
+        request_tool_results: list = []
+
+        async def generate_content_async(self, llm_request, stream=False):
+            contents = llm_request.contents or []
+            self.request_tokens.append(_request_tokens(llm_request))
+            self.request_texts.append("".join(p.text or "" for c in contents for p in c.parts or []))
+            self.request_tool_results.append(sum(
+                1 for c in contents for p in c.parts or []
+                if p.function_response and p.function_response.name == "big_tool"))
+            if self.steps < len(script):
+                name, args = script[self.steps]
+                part = types.Part(function_call=types.FunctionCall(id=f"fc-{self.steps}", name=name, args=args))
+            elif "write the summary" in self.request_texts[-1]:
+                part = types.Part(text="done")
+            else:
+                part = types.Part(text="unfinished")
+            self.steps += 1
+            yield LlmResponse(content=types.Content(role="model", parts=[part]))
+
+    llm = ScriptedLlm(model="scripted")
+    settings = HarnessSettings(context_window=WINDOW)
+    agent = AdaptiveAgent(model=llm, name="dak_agent", instruction="Inspect the logs.", tools=[
+        FunctionTool(big_tool), FunctionTool(write_handoff), make_new_context_tool()])
+    app = App(name="dak_agent", root_agent=agent, plugins=[ContextHarnessPlugin(settings, "test-model")])
+    sessions = InMemorySessionService()
+    runner = Runner(app=app, session_service=sessions)
+    session = await sessions.create_session(app_name="dak_agent", user_id="u")
+
+    async def turn(message):
+        final_text = None
+        async for event in runner.run_async(
+            user_id="u", session_id=session.id,
+            new_message=types.Content(role="user", parts=[types.Part(text=message)]),
+        ):
+            for part in (event.content.parts if event.content else None) or []:
+                if part.text and not part.thought:
+                    final_text = part.text
+        return final_text
+
+    request = "ログを全部読んで要約して"
+    assert await turn(request) == "done"
+    reset_at = len(script)  # the request right after the new_context call
+    assert llm.request_tool_results[:reset_at] == [0, 1, 2, 2]
+    assert await turn("続けて") == "done"
+
+    after = llm.request_texts[reset_at:]
+    assert len(after) == 2
+    assert all(f"User request: {request}" in t and "read pages 1-2" in t for t in after)
+    assert llm.request_tool_results[reset_at:] == [0, 0]  # the tool results are gone
+    assert max(llm.request_tokens[reset_at:]) < max(llm.request_tokens[:reset_at]) // 4
 
 
 async def _run_turns(overflows: int, messages: list[str]):

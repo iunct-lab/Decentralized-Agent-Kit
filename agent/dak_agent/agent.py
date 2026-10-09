@@ -31,6 +31,7 @@ from .harness import (
     harness_enabled,
     make_compaction_config,
     make_get_context_remaining_tool,
+    make_new_context_tool,
     make_read_tool_output_tool,
 )
 from .mcp_headers import session_key_header
@@ -89,6 +90,7 @@ harness_settings = HarnessSettings.from_env(formatted_model_name)
 if use_harness:
     root_agent_tools.append(make_read_tool_output_tool(harness_settings.tool_output_chars))
     root_agent_tools.append(make_get_context_remaining_tool(harness_settings, formatted_model_name))
+    root_agent_tools.append(make_new_context_tool())
     logger.info(
         "Context harness: window=%d tokens, compaction at %d, tool output <= %d chars",
         harness_settings.context_window,
