@@ -48,7 +48,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, replace
-from typing import Any, Dict, MutableMapping, Optional
+from typing import Any, Dict, MutableMapping, Optional, Tuple
 
 from google.adk.apps.app import EventsCompactionConfig
 from google.adk.apps.llm_event_summarizer import LlmEventSummarizer
@@ -60,7 +60,7 @@ from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools import FunctionTool
 from google.genai import types
 
-from . import builtin_tools, hooks
+from . import builtin_tools, hooks, profiles
 from .config import get_litellm_model_name
 from .mode_manager import ModeManager
 
@@ -193,27 +193,42 @@ class HarnessSettings:
     tail_reserve_ratio: float = 0.2
     compaction_warning_count: int = 3
     output_reserve_tokens: int = 4096
+    # Resolved from the harness profile only; nothing applies them to the
+    # agent's tools yet (PBI #110, #81).
+    tool_allowlist: Optional[Tuple[str, ...]] = None
+    max_tools: Optional[int] = None
 
     @classmethod
     def from_env(cls, model_name: str) -> "HarnessSettings":
+        """Each value: its environment variable if set, else the harness
+        profile's (``profiles.py``), else the field default."""
+        profile = profiles.resolve_profile(
+            model_name,
+            os.getenv("DAK_HARNESS_PROFILE"),
+            profiles.load_profile_files([os.path.join(os.path.dirname(__file__), "..", "profiles")]),
+        )
+        p = profile.get
+        allowlist = p("tool_allowlist")
         return cls(
             context_window=ModeManager.resolve_context_window(model_name),
-            compaction_threshold_ratio=_env_float("DAK_COMPACTION_THRESHOLD_RATIO", 0.6, 0.0, 1.0),
-            compaction_retain_events=_env_int("DAK_COMPACTION_RETAIN_EVENTS", 4, 0),
-            compaction_interval=_env_int("DAK_COMPACTION_INTERVAL", 20, 1),
-            request_budget_ratio=_env_float("DAK_REQUEST_BUDGET_RATIO", 0.85, 0.0, 1.0),
-            tool_output_max_chars=_env_int("DAK_TOOL_OUTPUT_MAX_CHARS", 0, 0) or None,
-            compaction_input_ratio=_env_float("DAK_COMPACTION_INPUT_RATIO", 0.5, 0.0, 1.0),
-            model_error_retry_attempts=_env_int("DAK_MODEL_ERROR_RETRY_ATTEMPTS", 2, 0),
-            max_repeated_tool_calls=_env_int("DAK_MAX_REPEATED_TOOL_CALLS", 3, 1),
-            max_invocation_tool_calls=_env_int("DAK_MAX_TOOL_CALLS", 40, 1),
-            max_wall_seconds=_env_float("DAK_MAX_WALL_SECONDS", 300.0, 0.0, float("inf")),
-            prune_protect_tokens=_env_int("DAK_PRUNE_PROTECT_TOKENS", 0, 0) or None,
-            prune_protect_user_turns=_env_int("DAK_PRUNE_PROTECT_USER_TURNS", 2, 0),
-            prune_minimum_tokens=_env_int("DAK_PRUNE_MINIMUM_TOKENS", 512, 0),
-            tail_reserve_ratio=_env_float("DAK_TAIL_RESERVE_RATIO", 0.2, 0.0, 1.0),
-            compaction_warning_count=_env_int("DAK_COMPACTION_WARNING_COUNT", 3, 1),
-            output_reserve_tokens=_env_int("DAK_OUTPUT_RESERVE_TOKENS", 4096, 0),
+            compaction_threshold_ratio=_env_float("DAK_COMPACTION_THRESHOLD_RATIO", p("compaction_threshold_ratio", 0.6), 0.0, 1.0),
+            compaction_retain_events=_env_int("DAK_COMPACTION_RETAIN_EVENTS", p("compaction_retain_events", 4), 0),
+            compaction_interval=_env_int("DAK_COMPACTION_INTERVAL", p("compaction_interval", 20), 1),
+            request_budget_ratio=_env_float("DAK_REQUEST_BUDGET_RATIO", p("request_budget_ratio", 0.85), 0.0, 1.0),
+            tool_output_max_chars=_env_int("DAK_TOOL_OUTPUT_MAX_CHARS", p("tool_output_max_chars") or 0, 0) or None,
+            compaction_input_ratio=_env_float("DAK_COMPACTION_INPUT_RATIO", p("compaction_input_ratio", 0.5), 0.0, 1.0),
+            model_error_retry_attempts=_env_int("DAK_MODEL_ERROR_RETRY_ATTEMPTS", p("model_error_retry_attempts", 2), 0),
+            max_repeated_tool_calls=_env_int("DAK_MAX_REPEATED_TOOL_CALLS", p("max_repeated_tool_calls", 3), 1),
+            max_invocation_tool_calls=_env_int("DAK_MAX_TOOL_CALLS", p("max_invocation_tool_calls", 40), 1),
+            max_wall_seconds=_env_float("DAK_MAX_WALL_SECONDS", p("max_wall_seconds", 300.0), 0.0, float("inf")),
+            prune_protect_tokens=_env_int("DAK_PRUNE_PROTECT_TOKENS", p("prune_protect_tokens") or 0, 0) or None,
+            prune_protect_user_turns=_env_int("DAK_PRUNE_PROTECT_USER_TURNS", p("prune_protect_user_turns", 2), 0),
+            prune_minimum_tokens=_env_int("DAK_PRUNE_MINIMUM_TOKENS", p("prune_minimum_tokens", 512), 0),
+            tail_reserve_ratio=_env_float("DAK_TAIL_RESERVE_RATIO", p("tail_reserve_ratio", 0.2), 0.0, 1.0),
+            compaction_warning_count=_env_int("DAK_COMPACTION_WARNING_COUNT", p("compaction_warning_count", 3), 1),
+            output_reserve_tokens=_env_int("DAK_OUTPUT_RESERVE_TOKENS", p("output_reserve_tokens", 4096), 0),
+            tool_allowlist=tuple(allowlist) if allowlist is not None else None,
+            max_tools=p("max_tools"),
         )
 
     @property

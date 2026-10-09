@@ -1,0 +1,10 @@
+# Fallback for every model no other profile matches. The values are
+# HarnessSettings' defaults (agent/dak_agent/harness.py), written out so a
+# profile can be compared against them.
+pattern: "*"
+compaction_threshold_ratio: 0.6
+compaction_retain_events: 4
+compaction_interval: 20
+request_budget_ratio: 0.85
+compaction_input_ratio: 0.5
+tail_reserve_ratio: 0.2
