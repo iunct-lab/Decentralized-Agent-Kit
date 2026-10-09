@@ -42,7 +42,7 @@ class TestCommandSandbox(unittest.IsolatedAsyncioTestCase):
                 patch("command_sandbox.shutil.which", return_value="/usr/local/bin/srt"), \
                 patch("main.subprocess.run", return_value=_ok()) as run:
             result = await main.run_command("echo hi")
-        self.assertEqual(run.call_args.args[0], ["srt", "--settings", SETTINGS, "echo hi"])
+        self.assertEqual(run.call_args.args[0], ["srt", "--settings", SETTINGS, "-c", "echo hi"])
         self.assertFalse(run.call_args.kwargs["shell"])
         # /app (the server's code) is read-only inside srt; commands run in the workspace.
         self.assertEqual(run.call_args.kwargs["cwd"], "/projects")
