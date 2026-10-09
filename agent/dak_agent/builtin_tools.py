@@ -46,13 +46,30 @@ def attempt_answer(answer: str, confidence: str, sources_used: list[str], tool_c
     return f"Answer (Confidence: {confidence}):\n{answer}{sources_str}"
 
 
-def ask_question(questions: list[str], context: str, tool_context) -> str:
+def _sibling_calls(tool_context) -> list[str]:
+    """Names of the other function calls in the model response that made this
+    call. ADK stores that response in the session before running its tools."""
+    for event in reversed(tool_context.session.events):
+        calls = event.get_function_calls()
+        if any(c.id == tool_context.function_call_id for c in calls):
+            return [c.name for c in calls if c.id != tool_context.function_call_id]
+    return []
+
+
+def ask_question(questions: list[str], context: str, tool_context):
     """
-    Ask clarifying questions to the user.
+    Ask clarifying questions to the user. Call it alone: not in the same response as any other tool.
     Args:
         questions: List of questions to ask.
         context: Why these questions are needed.
     """
+    # With other calls, a confirmation could wait alongside the question, and
+    # answering one would drop the other (#427): only the others go on.
+    siblings = _sibling_calls(tool_context)
+    if siblings:
+        return {"error": f"ask_question must be called alone, not in the same response as other tools "
+                         f"({', '.join(siblings)}). Call it again by itself after seeing their results."}
+
     # End the invocation after asking questions
     tool_context._invocation_context.end_invocation = True
 

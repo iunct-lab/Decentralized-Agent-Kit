@@ -3,9 +3,19 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
+from google.adk.agents import LlmAgent
+from google.adk.apps import App
+from google.adk.artifacts import InMemoryArtifactService
+from google.adk.events import Event
+from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_response import LlmResponse
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.adk.tools import FunctionTool
 from google.adk.tools.tool_confirmation import ToolConfirmation
+from google.genai import types
 
-from dak_agent import plan_mode
+from dak_agent import approvals, plan_mode
 from dak_agent.builtin_tools import (
     ask_question,
     attempt_answer,
@@ -23,6 +33,16 @@ from dak_agent.builtin_tools import (
     write_handoff,
     write_todos,
 )
+
+
+def _tool_context_called_with(*names):
+    """A tool context for the first call of one model response calling `names`."""
+    tool_context = MagicMock()
+    calls = [types.Part(function_call=types.FunctionCall(id=f"fc-{i}", name=n, args={}))
+             for i, n in enumerate(names)]
+    tool_context.session.events = [Event(author="dak_agent", content=types.Content(role="model", parts=calls))]
+    tool_context.function_call_id = "fc-0"
+    return tool_context
 
 
 class TestBuiltinTools(unittest.TestCase):
@@ -115,11 +135,20 @@ class TestBuiltinTools(unittest.TestCase):
         self.assertIn("deep_think", result)
 
     def test_ask_question_ends_invocation(self):
-        tool_context = MagicMock()
+        tool_context = _tool_context_called_with("ask_question")
         result = ask_question(["What OS?"], "Need environment info", tool_context)
         self.assertTrue(tool_context._invocation_context.end_invocation)
         self.assertIn("What OS?", result)
         self.assertIn("Need environment info", result)
+
+    def test_ask_question_with_other_calls_returns_error_and_keeps_invocation(self):
+        """A question and a confirmation would both wait, and answering one drops the other (#427)."""
+        tool_context = _tool_context_called_with("ask_question", "planner")
+        tool_context._invocation_context.end_invocation = False
+        result = ask_question(["What OS?"], "Need environment info", tool_context)
+        self.assertIn("error", result)
+        self.assertIn("planner", result["error"])
+        self.assertFalse(tool_context._invocation_context.end_invocation)
 
 
     def test_write_todos_persists_state_and_normalizes_status(self):
@@ -351,6 +380,62 @@ class TestBuiltinTools(unittest.TestCase):
     def test_format_todos_never_exceeds_a_tiny_limit(self):
         items = [{"step": "x" * 50, "status": "pending"} for _ in range(3)]
         self.assertLessEqual(len(format_todos(items, max_chars=20)), 20)
+
+
+class ScriptedLlm(BaseLlm):
+    """Answers the first request with `calls`, then with text. Records what it was sent."""
+    calls: list
+    requests: list = []
+
+    async def generate_content_async(self, llm_request, stream=False):
+        self.requests.append(llm_request)
+        if len(self.requests) == 1:
+            parts = [types.Part(function_call=types.FunctionCall(id=f"fc-{i}", **c)) for i, c in enumerate(self.calls)]
+        else:
+            parts = [types.Part(text="done")]
+        yield LlmResponse(content=types.Content(role="model", parts=parts))
+
+
+def test_question_and_confirmation_in_one_response_leave_only_the_confirmation():
+    """#427: only the confirmation waits; answering it brings the model both its result and ask_question's error."""
+    def delete_file(path: str) -> dict:
+        return {"deleted": path}
+
+    llm = ScriptedLlm(model="scripted", requests=[], calls=[
+        {"name": "ask_question", "args": {"questions": ["Which file?"], "context": "ctx"}},
+        {"name": "delete_file", "args": {"path": "x.txt"}},
+    ])
+    agent = LlmAgent(model=llm, name="dak_agent", instruction="x", tools=[
+        FunctionTool(ask_question, require_confirmation=False),
+        FunctionTool(delete_file, require_confirmation=True),
+    ])
+    sessions = InMemorySessionService()
+    runner = Runner(app=App(name="dak_agent", root_agent=agent), session_service=sessions,
+                    artifact_service=InMemoryArtifactService())
+    session = asyncio.run(sessions.create_session(app_name="dak_agent", user_id="u"))
+
+    def send(message):
+        async def go():
+            return [e async for e in runner.run_async(user_id="u", session_id=session.id, new_message=message)]
+        return asyncio.run(go())
+
+    def stored_events():
+        stored = asyncio.run(sessions.get_session(app_name="dak_agent", user_id="u", session_id=session.id))
+        return [e.model_dump(mode="json", by_alias=True, exclude_none=True) for e in stored.events]
+
+    send(types.Content(role="user", parts=[types.Part(text="delete the file")]))
+
+    pending = approvals.list_pending(stored_events())
+    assert [(p["kind"], p["tool_name"]) for p in pending] == [("approval", "delete_file")]
+
+    send(types.Content.model_validate(approvals.build_reply_function_response(pending[0]["id"], "once")))
+
+    responses = {p.function_response.name: p.function_response.response
+                 for c in llm.requests[1].contents for p in c.parts if p.function_response}
+    assert "ask_question must be called alone" in responses["ask_question"]["error"]
+    assert "delete_file" in responses["ask_question"]["error"]
+    assert responses["delete_file"] == {"deleted": "x.txt"}
+    assert approvals.list_pending(stored_events()) == []
 
 
 if __name__ == "__main__":
