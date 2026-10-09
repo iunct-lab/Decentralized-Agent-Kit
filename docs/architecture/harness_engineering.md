@@ -67,6 +67,11 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
      `note_argument_violation(tool_context, invocation_id)` で数える。同じ上限
      （`DAK_MAX_REPEATED_TOOL_CALLS`）を超えて続くと `True` を返すので、呼び出し側は訂正のヒントの代わりに
      止める Observation を返す。正常に実行できたら `note_call_success` で数え直す（#171）。
+   - 引数はほかのガードより先に、ツールの宣言のスキーマ（`parameters_json_schema`、無ければ `parameters`）で
+     確かめる。必須の引数が無い・トップレベルの型が違う → 実行せずに
+     `{"observation": "invalid_arguments", "tool", "errors", "hint"}`。違反は `note_argument_violation` で数え、
+     上限を超えると hint に「繰り返したので止めた」を足す。検証を通って実行された呼び出しで数え直す。
+     ネストした中身は確かめない（`validate_tool_args`、#186）。
    - 圧縮を何度も挟む長い invocation でも、カウンタは state にあって圧縮では消えないので、呼び出し数の上限で
      有限回に止まる。`test_tool_loop_stops_at_step_limit_without_raising` が上限より 3 回多く呼び続ける台本モデルで、
      圧縮 2 回以上のあとに `step_limit_exceeded` が返り、例外が出ないことを確かめている。

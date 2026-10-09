@@ -542,6 +542,135 @@ class TestToolCallGuard:
         plugin.note_call_success(ctx, "inv-1")
         assert [plugin.note_argument_violation(ctx, "inv-1") for _ in range(limit)] == [False] * limit
 
+    @staticmethod
+    def _declared_tool(parameters=None, parameters_json_schema=None):
+        tool = _tool("read_file")
+        tool._get_declaration.return_value = types.FunctionDeclaration(
+            name="read_file", parameters=parameters, parameters_json_schema=parameters_json_schema)
+        return tool
+
+    @staticmethod
+    def _function_tool():
+        from google.adk.tools import FunctionTool
+
+        def read_file(path: str, limit: int = 10, tags: list[str] | None = None) -> str:
+            """Read a file."""
+            return path
+
+        return FunctionTool(read_file)
+
+    @pytest.mark.asyncio
+    async def test_missing_required_argument_is_blocked_as_invalid_arguments(self):
+        plugin, ctx = self._plugin(), self._ctx()
+        result = await plugin.before_tool_callback(tool=self._function_tool(), tool_args={}, tool_context=ctx)
+        assert result["observation"] == "invalid_arguments"
+        assert result["tool"] == "read_file"
+        assert result["errors"] == ["missing required argument 'path'"]
+        assert "blocked" not in result["hint"]
+
+    @pytest.mark.asyncio
+    async def test_type_mismatch_is_blocked_as_invalid_arguments(self):
+        plugin, ctx = self._plugin(), self._ctx()
+        result = await plugin.before_tool_callback(
+            tool=self._function_tool(), tool_args={"path": 123, "limit": "ten", "tags": None}, tool_context=ctx)
+        assert result["observation"] == "invalid_arguments"
+        assert result["errors"] == ["argument 'path' expected type string but got int",
+                                    "argument 'limit' expected type integer but got str"]
+
+    @pytest.mark.asyncio
+    async def test_gemini_schema_declaration_is_checked_too(self):
+        """With ADK's JSON_SCHEMA_FOR_FUNC_DECL off, the declaration carries a types.Schema."""
+        tool = self._declared_tool(parameters=types.Schema(
+            type="OBJECT", required=["path"],
+            properties={"path": types.Schema(type="STRING"), "limit": types.Schema(type="INTEGER")}))
+        plugin, ctx = self._plugin(), self._ctx()
+        result = await plugin.before_tool_callback(tool=tool, tool_args={"limit": True}, tool_context=ctx)
+        assert result["errors"] == ["missing required argument 'path'",
+                                    "argument 'limit' expected type integer but got bool"]
+
+    @pytest.mark.asyncio
+    async def test_valid_arguments_pass_through_to_existing_guards(self):
+        plugin, ctx = self._plugin(), self._ctx()
+        tool = self._declared_tool(parameters_json_schema={
+            "type": "object", "required": ["path"],
+            "properties": {"path": {"type": "string"}, "limit": {"type": "integer"},
+                           "ratio": {"anyOf": [{"type": "number"}, {"type": "null"}]}, "any": {}}})
+        args = {"path": "a.txt", "limit": 3.0, "ratio": 1, "any": [1], "extra": 1}
+        results = [await plugin.before_tool_callback(tool=tool, tool_args=args, tool_context=ctx) for _ in range(4)]
+        assert results[:3] == [None, None, None]
+        assert results[3]["observation"] == "repeated_call"
+
+    @pytest.mark.asyncio
+    async def test_repeated_invalid_arguments_trigger_blocked_hint(self):
+        plugin, ctx = self._plugin(), self._ctx()
+        limit = plugin.settings.max_repeated_tool_calls
+        results = [await plugin.before_tool_callback(tool=self._function_tool(), tool_args={}, tool_context=ctx)
+                   for _ in range(limit + 1)]
+        assert {r["observation"] for r in results} == {"invalid_arguments"}
+        assert ["blocked after repeated invalid attempts" in r["hint"] for r in results] == [False] * limit + [True]
+
+    @pytest.mark.asyncio
+    async def test_after_tool_callback_resets_violation_streak(self):
+        plugin, ctx = self._plugin(), self._ctx()
+        tool = self._function_tool()
+        for n in range(2):
+            ctx.function_call_id = f"bad-{n}"
+            result = await plugin.before_tool_callback(tool=tool, tool_args={}, tool_context=ctx)
+            await plugin.after_tool_callback(tool=tool, tool_args={}, tool_context=ctx, result=result)
+        assert harness._guard_state(ctx.state, "inv-1")["violation_streak"] == 2  # an answered call is no success
+        ctx.function_call_id = "good"
+        assert await plugin.before_tool_callback(tool=tool, tool_args={"path": "a.txt"}, tool_context=ctx) is None
+        await plugin.after_tool_callback(tool=tool, tool_args={"path": "a.txt"}, tool_context=ctx, result="a")
+        assert harness._guard_state(ctx.state, "inv-1")["violation_streak"] == 0
+
+    @pytest.mark.asyncio
+    async def test_invalid_call_is_not_run_and_the_corrected_call_succeeds(self):
+        """Through ADK's Runner: a call missing `path`, then one with a wrong
+        type, are answered with invalid_arguments; the corrected call runs."""
+        from google.adk.agents import LlmAgent
+        from google.adk.apps import App
+        from google.adk.models.base_llm import BaseLlm
+        from google.adk.models.llm_response import LlmResponse
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
+        from google.adk.tools import FunctionTool
+
+        ran = []
+
+        def read_file(path: str, limit: int = 10) -> str:
+            """Read a file."""
+            ran.append((path, limit))
+            return f"contents of {path}"
+
+        calls = [{}, {"path": "a.txt", "limit": "ten"}, {"path": "a.txt", "limit": 5}]
+        requests = []
+
+        class FixesItsArguments(BaseLlm):
+            async def generate_content_async(self, llm_request, stream=False):
+                requests.append(llm_request)
+                n = len(requests)
+                part = (types.Part(function_call=types.FunctionCall(id=f"fc-{n}", name="read_file", args=calls[n - 1]))
+                        if n <= len(calls) else types.Part(text="done"))
+                yield LlmResponse(content=types.Content(role="model", parts=[part]))
+
+        agent = LlmAgent(model=FixesItsArguments(model="m"), name="dak_agent", instruction="i",
+                         tools=[FunctionTool(read_file)])
+        sessions = InMemorySessionService()
+        session = await sessions.create_session(app_name="dak_agent", user_id="u")
+        app = App(name="dak_agent", root_agent=agent, plugins=[self._plugin()])
+        async for _ in Runner(app=app, session_service=sessions).run_async(
+                user_id="u", session_id=session.id,
+                new_message=types.Content(role="user", parts=[types.Part(text="hi")])):
+            pass
+
+        answers = [p.function_response.response for c in requests[-1].contents for p in c.parts
+                   if p.function_response]
+        assert [a.get("observation") for a in answers] == ["invalid_arguments", "invalid_arguments", None]
+        assert answers[0]["errors"] == ["missing required argument 'path'"]
+        assert answers[1]["errors"] == ["argument 'limit' expected type integer but got str"]
+        assert answers[2] == {"result": "contents of a.txt"}
+        assert ran == [("a.txt", 5)]  # only the corrected call ran
+
     @patch.dict(os.environ, {"MODEL_CONTEXT_WINDOW": "8192", "DAK_MAX_REPEATED_TOOL_CALLS": "5",
                              "DAK_MAX_TOOL_CALLS": "12", "DAK_MAX_WALL_SECONDS": "90"})
     def test_limits_from_env(self):

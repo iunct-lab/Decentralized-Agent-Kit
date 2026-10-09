@@ -949,6 +949,68 @@ def _count_call(guard: dict, tool_name: str, tool_args: Optional[dict]) -> None:
     guard["last_signature"] = signature
 
 
+# JSON Schema type -> Python type of an argument as it arrives from the model.
+_SCHEMA_TYPE_PYTHON = {"string": str, "integer": int, "number": (int, float), "boolean": bool,
+                       "array": list, "object": dict}
+
+
+def _parameters_schema(tool) -> Optional[dict]:
+    """The tool's declared parameters as a JSON Schema dict. ADK puts them in
+    ``parameters_json_schema`` (JSON_SCHEMA_FOR_FUNC_DECL, on by default) or,
+    with that off, in ``parameters`` (a ``types.Schema``)."""
+    decl = tool._get_declaration()
+    schema = getattr(decl, "parameters_json_schema", None)
+    if isinstance(schema, dict):
+        return schema
+    parameters = getattr(decl, "parameters", None)
+    if isinstance(parameters, types.Schema):
+        return parameters.model_dump(mode="json", by_alias=True, exclude_none=True)
+    return None
+
+
+def _declared_types(prop: dict) -> Optional[set[str]]:
+    """The JSON types an argument may take, or None when the schema does not say plainly."""
+    names = set()
+    for branch in prop.get("anyOf") or prop.get("oneOf") or [prop]:
+        declared = branch.get("type") if isinstance(branch, dict) else None
+        if declared is None:
+            return None
+        names.update(t.lower() for t in (declared if isinstance(declared, list) else [declared]))
+    return names
+
+
+def _type_matches(value: Any, name: str) -> bool:
+    if name == "null":
+        return value is None
+    if name not in _SCHEMA_TYPE_PYTHON:
+        return True
+    if isinstance(value, bool) and name in ("integer", "number"):
+        return False
+    if name == "integer" and isinstance(value, float):
+        return value.is_integer()
+    return isinstance(value, _SCHEMA_TYPE_PYTHON[name])
+
+
+def validate_tool_args(tool, tool_args: dict) -> list[str]:
+    """Missing required arguments and top-level type mismatches against the
+    tool's declared schema (nested objects and arrays are not checked)."""
+    schema = _parameters_schema(tool)
+    if schema is None:
+        return []
+    errors = [f"missing required argument '{name}'" for name in schema.get("required") or []
+              if name not in tool_args]
+    properties = schema.get("properties") or {}
+    for key, value in tool_args.items():
+        prop = properties.get(key)
+        if value is None or not isinstance(prop, dict):
+            continue
+        allowed = _declared_types(prop)
+        if allowed and not any(_type_matches(value, name) for name in allowed):
+            errors.append(f"argument '{key}' expected type {'|'.join(sorted(allowed))} "
+                          f"but got {type(value).__name__}")
+    return errors
+
+
 COMPACTED_USER_QUERY = (
     "[The earlier conversation, including my original request, was compacted "
     "into the summary that follows. Continue the task from it.]"
@@ -1009,19 +1071,37 @@ class ContextHarnessPlugin(BasePlugin):
         return settings
 
     async def before_tool_callback(self, *, tool, tool_args, tool_context) -> Optional[dict]:
-        """Stop a runaway tool loop (see ``_guard_tool_call``), then run the
+        """Answer arguments that break the tool's schema (see ``_check_arguments``),
+        stop a runaway tool loop (see ``_guard_tool_call``), then run the
         PreToolUse hooks of DAK_HOOKS. Whatever stops the call is returned as
         the observation the model sees instead of the tool's result."""
         guard = _guard_state(tool_context.state, tool_context.invocation_id)
         tool_name = getattr(tool, "name", "tool")
         _count_call(guard, tool_name, tool_args)
         guard["checked_calls"].append(tool_context.function_call_id)
-        blocked = self._guard_tool_call(guard, tool_name)
+        blocked = self._check_arguments(tool, tool_name, tool_args, tool_context)
+        if blocked is None:
+            blocked = self._guard_tool_call(guard, tool_name)
         if blocked is None:
             blocked = await self._run_pre_tool_hooks(guard, tool_name, tool_args, tool_context)
         if blocked is not None:
             guard["blocked_calls"].append(tool_context.function_call_id)
         return blocked
+
+    def _check_arguments(self, tool, tool_name: str, tool_args, tool_context) -> Optional[dict]:
+        """Arguments missing a required field or of the wrong type are not run:
+        the model gets the errors to rewrite the call. The violations in a row
+        count toward ``max_repeated_tool_calls`` (``note_argument_violation``)."""
+        errors = validate_tool_args(tool, tool_args)
+        if not errors:
+            return None
+        blocked = self.note_argument_violation(tool_context, tool_context.invocation_id)
+        logger.info("Tool guard: %s called with invalid arguments: %s", tool_name, errors)
+        hint = "Rewrite the call so every argument matches the tool's schema."
+        if blocked:
+            hint += (" This tool has been blocked after repeated invalid attempts; "
+                     "try a different approach or ask the user.")
+        return {"observation": "invalid_arguments", "tool": tool_name, "errors": errors, "hint": hint}
 
     def _guard_tool_call(self, guard: dict, tool_name: str) -> Optional[dict]:
         """Past the invocation's wall-time or tool-call limit, or when the same
@@ -1134,6 +1214,8 @@ class ContextHarnessPlugin(BasePlugin):
             # Left to the agent's own after_tool_callback (_restore_reject_reason runs
             # only when no plugin answers); the call comes back after the user's answer.
             return None
+        if ran:  # its arguments passed the schema check
+            self.note_call_success(tool_context, tool_context.invocation_id)
         rewrite = {} if original_args is None else {"original_args": original_args, "updated_args": dict(tool_args)}
         if tool_name == READ_TOOL_OUTPUT_NAME:  # already paged to the budget; not a call to audit
             return {"observation": "hook_rewrote_input", **rewrite, "result": result} if rewrite else None
