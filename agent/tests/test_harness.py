@@ -1604,9 +1604,10 @@ class TestNewContextTool:
         assert ctx.actions.compaction.start_timestamp == 1.0 and ctx.actions.compaction.end_timestamp == 2.0
 
     def test_new_context_is_registered_and_always_allowed(self):
+        from dak_agent import agent
         from dak_agent.enforcer import ALWAYS_ALLOWED
 
-        assert make_new_context_tool().name == "new_context"
+        assert "new_context" in [getattr(t, "name", None) for t in agent.root_agent_tools]
         assert "new_context" in ALWAYS_ALLOWED
 
 
