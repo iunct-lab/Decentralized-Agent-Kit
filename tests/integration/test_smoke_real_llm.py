@@ -8,11 +8,13 @@ a sane outcome, not exact wording.
 Enable with DAK_SMOKE_REAL_LLM=1 after starting the stack with the
 docker-compose.local-llm.yml overlay (see scripts/smoke_local_llm.sh).
 """
+import json
 import os
 
+import httpx
 import pytest
 
-from conftest import event_texts, function_calls, function_responses
+from conftest import AGENT_RUN_TIMEOUT, AGENT_URL, APP_NAME, event_texts, function_calls, function_responses
 
 pytestmark = pytest.mark.skipif(
     os.getenv("DAK_SMOKE_REAL_LLM") != "1",
@@ -102,3 +104,59 @@ def test_ap2_payment_flow_with_real_llm(agent_ap2):
     assert any(name in all_calls for name in ("check_solana_balance", "send_sol_payment")), (
         f"model never touched the wallet; calls={all_calls}, texts={event_texts(events)}"
     )
+
+
+# The model the stack runs, as the smoke runners export it (LiteLLM format).
+SMOKE_MODEL = os.getenv("CLOUD_MODEL_NAME") or os.getenv("LOCAL_MODEL_NAME")
+OVERHEAD_INSTRUCTION = "Reply with a JSON object that says whether the user's sentence is a greeting."
+OVERHEAD_PROMPT = "Good morning, everyone."
+OVERHEAD_SCHEMA = {"type": "object", "properties": {"greeting": {"type": "boolean"}}, "required": ["greeting"]}
+
+
+def test_minimal_overhead_matches_direct_call(agent):
+    """PBI #139: the minimal DAK call (no tools) against the same call made
+    directly with LiteLLM, on the real model. Usage is model-reported, so this
+    only records the difference (docs/architecture/serverless.md section 4);
+    the fixed bound is in test_minimal_overhead.py with the fake LLM."""
+    if not SMOKE_MODEL:
+        pytest.skip("set CLOUD_MODEL_NAME or LOCAL_MODEL_NAME to the stack's model (the smoke runners export it)")
+    litellm = pytest.importorskip("litellm", reason="install the smoke group: uv sync --group smoke")
+
+    # What ADK sends for this output schema (google/adk/models/lite_llm.py, _to_litellm_response_format)
+    strict_schema = {**OVERHEAD_SCHEMA, "additionalProperties": False}
+    direct = litellm.completion(
+        model=SMOKE_MODEL,
+        messages=[{"role": "system", "content": OVERHEAD_INSTRUCTION}, {"role": "user", "content": OVERHEAD_PROMPT}],
+        response_format={"type": "json_schema",
+                         "json_schema": {"name": "response", "strict": True, "schema": strict_schema}},
+    )
+
+    resp = httpx.post(f"{AGENT_URL}/run", json={
+        "app_name": APP_NAME,
+        "user_id": agent.user_id,
+        "session_id": agent.create_session(),
+        "new_message": {"parts": [{"text": OVERHEAD_PROMPT}]},
+        # A reply that fails the schema is regenerated, and the regenerated
+        # reply replaces the first one's event, usage included. One call at
+        # most turns that into a failure reply instead (asserted below).
+        "state_delta": {"dak:instruction": OVERHEAD_INSTRUCTION, "dak:output_schema": OVERHEAD_SCHEMA,
+                        "dak:tools": [], "dak:max_llm_calls": 1},
+    }, timeout=AGENT_RUN_TIMEOUT)
+    resp.raise_for_status()
+    usages = [e["usageMetadata"] for e in resp.json() if e.get("usageMetadata")]
+    reply = json.loads(event_texts(resp.json())[-1])
+
+    dak_in = sum(u.get("promptTokenCount", 0) for u in usages)
+    dak_out = sum(u.get("candidatesTokenCount", 0) for u in usages)
+    print(json.dumps({
+        "model": SMOKE_MODEL,
+        "direct": {"calls": 1, "prompt_tokens": direct.usage.prompt_tokens,
+                   "completion_tokens": direct.usage.completion_tokens},
+        "dak": {"calls": len(usages), "prompt_tokens": dak_in, "completion_tokens": dak_out},
+        "diff": {"prompt_tokens": dak_in - direct.usage.prompt_tokens,
+                 "completion_tokens": dak_out - direct.usage.completion_tokens},
+        "dak_reply": reply,
+    }))
+    assert "greeting" in reply, reply  # not a failure reply: the first call was the only one
+    assert len(usages) == 1, usages
+    assert dak_in > 0 and direct.usage.prompt_tokens > 0
