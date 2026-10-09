@@ -217,7 +217,7 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 ### 残量の確認（`get_context_remaining`、#113）
 
 - ハーネスが有効なとき、組み込みツール `get_context_remaining` でモデル自身が残量を確かめられる（Pact で絞っていても呼べる）。返すのは、推定使用量 `estimated_tokens`、窓 `context_window`、出力の予約を引いた `usable_context_tokens` と残量 `remaining_tokens`、圧縮回数 `compaction_count`（`dak_compaction_count`）、`recommend_new_session`（`dak_recommend_new_session`）。
-- しきい値は 2 つを分けて返す。`auto_compact_threshold`（`DAK_COMPACTION_THRESHOLD_RATIO`、既定 窓の 60%）は古い履歴の要約が始まるところ、`hard_limit`（`DAK_REQUEST_BUDGET_RATIO`、既定 85%）はリクエストから古いツール結果を削る最終ガード。どちらの値も出力の予約では変えない。
+- しきい値は 2 つを分けて返す。`auto_compact_threshold`（`DAK_COMPACTION_THRESHOLD_RATIO`、既定 窓の 60%）は古い履歴の要約が始まるところ、`hard_limit`（`DAK_REQUEST_BUDGET_RATIO`、既定 85%）はリクエストから古いツール結果を削る最終ガード。どちらの値も出力の予約では変えない。窓・使える量・ハード上限は、リクエストガードと同じくその呼び出しのモデル（`dak:model`、#138）のもの。自動圧縮のしきい値は起動時のモデルのまま（ADK の圧縮の設定は App を組むときに決まる）。
 - 推定使用量は、セッションのイベントから次のリクエストの履歴を ADK と同じ規則で見積もる（圧縮された範囲の生のイベントは要約の分だけ数え、大きな圧縮に含まれる圧縮は数えない）。指示とツール宣言は含まない。
 - 検証: `test_harness.py::TestGetContextRemainingTool`。
 
