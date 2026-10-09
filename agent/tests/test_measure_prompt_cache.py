@@ -19,7 +19,7 @@ def _load():
 
 @pytest.fixture
 def converse_server(monkeypatch):
-    """Answers Converse; counts the cache points of each request and reports a cache read when there are any."""
+    """Answers Converse; counts the cache points of each request and reports a cache read and write when there are any."""
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "unused")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "unused")
     monkeypatch.setenv("AWS_REGION_NAME", "ap-northeast-1")
@@ -32,7 +32,7 @@ def converse_server(monkeypatch):
             n = sum(1 for b in blocks if "cachePoint" in b)
             points.append(n)
             usage = {"inputTokens": 100, "outputTokens": 2, "totalTokens": 102,
-                     "cacheReadInputTokens": 6000 if n else 0, "cacheWriteInputTokens": 0}
+                     "cacheReadInputTokens": 6000 if n else 0, "cacheWriteInputTokens": 500 if n else 0}
             data = json.dumps({"output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
                                "stopReason": "end_turn", "usage": usage, "metrics": {"latencyMs": 1}}).encode()
             self.send_response(200)
@@ -63,3 +63,5 @@ async def test_one_record_per_request_and_cache_points_only_with_the_config(conv
     assert points == [2 if cache else 0] * len(points)  # system and the last message, only with ContextCacheConfig
     assert all(r["output"] == 2 and r["seconds"] >= 0 for r in records)
     assert [r["cache_read"] for r in records] == [6000 if cache else 0] * len(records)
+    assert [r["cache_write"] for r in records] == [500 if cache else 0] * len(records)
+    assert [r["input"] for r in records] == [6600 if cache else 100] * len(records)  # LiteLLM adds cache reads and writes

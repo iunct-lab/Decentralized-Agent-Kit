@@ -80,6 +80,43 @@ PBI #94 / Task #226。ADK の `ContextCacheConfig` を DAK で既定で有効に
 - 圧縮・刈り込み・計画の書き換え（3 章）が起きる長い会話では測っていない。上の数は、先頭が変わらない短い会話での上限に近い
 - 2 モデルは、開発用のロールに計測の間だけ権限を足して測った（iunct-lab/Decentralized-Agent-Kit#483）。Claude Haiku 4.5 も候補にしたが、アカウントで Anthropic のモデルを使える状態になっておらず（ユースケースのフォームと AWS Marketplace の同意）、Nova 2 Lite に替えた
 
+費用の式と単価（LiteLLM の同梱表 `model_prices_and_context_window_backup.json`、100 万トークンあたり USD）:
+
+- 費用 = （入力 − 読み込み）× 入力の単価 + 読み込み × 読み込みの単価 + 出力 × 出力の単価。入力は LiteLLM の `prompt_tokens` で、読み込みと書き込みを含む。書き込みは入力の単価で数えた
+- Nova Micro（`apac.amazon.nova-micro-v1:0`）: 入力 0.037 / 読み込み 0.00925 / 出力 0.148
+- Nova 2 Lite（`global.amazon.nova-2-lite-v1:0`）: 入力 0.30 / 読み込み 0.075 / 出力 2.50
+
+<details><summary>リクエストごとの記録（スクリプトの出力そのまま）</summary>
+
+```jsonl
+{"model": "bedrock/apac.amazon.nova-micro-v1:0", "cache": false, "repeat": 0, "request": 1, "seconds": 7.255, "input": 7588, "cache_read": 0, "cache_write": 0, "output": 64}
+{"model": "bedrock/apac.amazon.nova-micro-v1:0", "cache": false, "repeat": 0, "request": 2, "seconds": 0.609, "input": 7667, "cache_read": 0, "cache_write": 0, "output": 64}
+{"model": "bedrock/apac.amazon.nova-micro-v1:0", "cache": false, "repeat": 0, "request": 3, "seconds": 0.428, "input": 7746, "cache_read": 0, "cache_write": 0, "output": 10}
+{"model": "bedrock/apac.amazon.nova-micro-v1:0", "cache": true, "repeat": 0, "request": 1, "seconds": 0.781, "input": 7769, "cache_read": 0, "cache_write": 7769, "output": 64}
+{"model": "bedrock/apac.amazon.nova-micro-v1:0", "cache": true, "repeat": 0, "request": 2, "seconds": 0.616, "input": 7848, "cache_read": 0, "cache_write": 7848, "output": 64}
+{"model": "bedrock/apac.amazon.nova-micro-v1:0", "cache": true, "repeat": 0, "request": 3, "seconds": 0.428, "input": 7927, "cache_read": 7572, "cache_write": 355, "output": 10}
+{"model": "bedrock/apac.amazon.nova-micro-v1:0", "cache": true, "repeat": 1, "request": 1, "seconds": 0.78, "input": 7769, "cache_read": 7769, "cache_write": 0, "output": 64}
+{"model": "bedrock/apac.amazon.nova-micro-v1:0", "cache": true, "repeat": 1, "request": 2, "seconds": 0.628, "input": 7848, "cache_read": 7848, "cache_write": 0, "output": 64}
+{"model": "bedrock/apac.amazon.nova-micro-v1:0", "cache": true, "repeat": 1, "request": 3, "seconds": 0.418, "input": 7927, "cache_read": 7927, "cache_write": 0, "output": 10}
+{"model": "bedrock/apac.amazon.nova-micro-v1:0", "cache": false, "repeat": 1, "request": 1, "seconds": 0.599, "input": 7588, "cache_read": 0, "cache_write": 0, "output": 64}
+{"model": "bedrock/apac.amazon.nova-micro-v1:0", "cache": false, "repeat": 1, "request": 2, "seconds": 0.633, "input": 7667, "cache_read": 0, "cache_write": 0, "output": 64}
+{"model": "bedrock/apac.amazon.nova-micro-v1:0", "cache": false, "repeat": 1, "request": 3, "seconds": 0.529, "input": 7746, "cache_read": 0, "cache_write": 0, "output": 10}
+{"model": "bedrock/global.amazon.nova-2-lite-v1:0", "cache": false, "repeat": 0, "request": 1, "seconds": 3.455, "input": 7458, "cache_read": 0, "cache_write": 0, "output": 11}
+{"model": "bedrock/global.amazon.nova-2-lite-v1:0", "cache": false, "repeat": 0, "request": 2, "seconds": 1.04, "input": 7480, "cache_read": 0, "cache_write": 0, "output": 13}
+{"model": "bedrock/global.amazon.nova-2-lite-v1:0", "cache": false, "repeat": 0, "request": 3, "seconds": 0.646, "input": 7503, "cache_read": 0, "cache_write": 0, "output": 15}
+{"model": "bedrock/global.amazon.nova-2-lite-v1:0", "cache": true, "repeat": 0, "request": 1, "seconds": 0.584, "input": 7636, "cache_read": 0, "cache_write": 7636, "output": 11}
+{"model": "bedrock/global.amazon.nova-2-lite-v1:0", "cache": true, "repeat": 0, "request": 2, "seconds": 0.532, "input": 7658, "cache_read": 7454, "cache_write": 204, "output": 13}
+{"model": "bedrock/global.amazon.nova-2-lite-v1:0", "cache": true, "repeat": 0, "request": 3, "seconds": 0.612, "input": 7682, "cache_read": 7459, "cache_write": 223, "output": 15}
+{"model": "bedrock/global.amazon.nova-2-lite-v1:0", "cache": true, "repeat": 1, "request": 1, "seconds": 0.615, "input": 7636, "cache_read": 7636, "cache_write": 0, "output": 11}
+{"model": "bedrock/global.amazon.nova-2-lite-v1:0", "cache": true, "repeat": 1, "request": 2, "seconds": 0.562, "input": 7658, "cache_read": 7658, "cache_write": 0, "output": 13}
+{"model": "bedrock/global.amazon.nova-2-lite-v1:0", "cache": true, "repeat": 1, "request": 3, "seconds": 1.012, "input": 7682, "cache_read": 7682, "cache_write": 0, "output": 15}
+{"model": "bedrock/global.amazon.nova-2-lite-v1:0", "cache": false, "repeat": 1, "request": 1, "seconds": 0.883, "input": 7458, "cache_read": 0, "cache_write": 0, "output": 11}
+{"model": "bedrock/global.amazon.nova-2-lite-v1:0", "cache": false, "repeat": 1, "request": 2, "seconds": 0.599, "input": 7480, "cache_read": 0, "cache_write": 0, "output": 13}
+{"model": "bedrock/global.amazon.nova-2-lite-v1:0", "cache": false, "repeat": 1, "request": 3, "seconds": 0.644, "input": 7503, "cache_read": 0, "cache_write": 0, "output": 15}
+```
+
+</details>
+
 ## 6. 未検証事項
 
 - **Anthropic・Gemini 直でのトークン数と遅延**: 測っていない。Anthropic は書き込みに割増しがあるので、Nova の結果をそのまま当てはめない
