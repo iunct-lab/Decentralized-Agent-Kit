@@ -6,7 +6,9 @@ before the stack starts, and that llama3.2:3b never passes; capture-golden
 drifted from both. This compares the two files so the drift fails a test.
 Reads files only, so it does not need the Docker stack.
 """
+import os
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -96,4 +98,7 @@ def test_capture_golden_checks_the_token_before_installing_ollama():
     assert steps.index("- name: Check GOLDEN_PR_TOKEN") < steps.index(f"- name: {STEP}")
     step = "Check GOLDEN_PR_TOKEN"
     assert _key("capture-golden.yml", "GOLDEN_PR_TOKEN", step) == "${{ secrets.GOLDEN_PR_TOKEN }}"
-    assert '[ -n "$GOLDEN_PR_TOKEN" ]' in _key("capture-golden.yml", "run", step)
+    run = _key("capture-golden.yml", "run", step).strip("'")
+    for token, code in (("", 1), ("set", 0)):
+        env = {"PATH": os.environ["PATH"], "GOLDEN_PR_TOKEN": token}
+        assert subprocess.run(["bash", "-c", run], env=env, capture_output=True).returncode == code
