@@ -986,8 +986,6 @@ def _type_matches(value: Any, name: str) -> bool:
         return True
     if isinstance(value, bool) and name in ("integer", "number"):
         return False
-    if name == "integer" and isinstance(value, float):
-        return value.is_integer()
     return isinstance(value, _SCHEMA_TYPE_PYTHON[name])
 
 
