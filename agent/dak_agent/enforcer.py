@@ -20,6 +20,7 @@ PLAN_KEY = "enforcer_allowed_tools"
 # client-side skill tools (list_skills/enable_skill) so the agent can always
 # discover and enable capabilities, transfer_to_agent for A2A delegation, and
 # read_tool_output so a truncated result of an allowed tool can be paged,
+# get_context_remaining so the context usage can always be checked,
 # write_todos/read_plan so the plan's progress can always be recorded and read,
 # read_original_request so the whole request can always be read, and
 # write_handoff/read_handoff so the handoff for a context reset can always be
@@ -36,6 +37,7 @@ ALWAYS_ALLOWED: Set[str] = {
     "enable_skill",
     "transfer_to_agent",
     "read_tool_output",
+    "get_context_remaining",
     "write_todos",
     "read_plan",
     "read_original_request",

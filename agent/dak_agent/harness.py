@@ -192,6 +192,7 @@ class HarnessSettings:
     prune_minimum_tokens: int = 512
     tail_reserve_ratio: float = 0.2
     compaction_warning_count: int = 3
+    output_reserve_tokens: int = 4096
 
     @classmethod
     def from_env(cls, model_name: str) -> "HarnessSettings":
@@ -212,6 +213,7 @@ class HarnessSettings:
             prune_minimum_tokens=_env_int("DAK_PRUNE_MINIMUM_TOKENS", 512, 0),
             tail_reserve_ratio=_env_float("DAK_TAIL_RESERVE_RATIO", 0.2, 0.0, 1.0),
             compaction_warning_count=_env_int("DAK_COMPACTION_WARNING_COUNT", 3, 1),
+            output_reserve_tokens=_env_int("DAK_OUTPUT_RESERVE_TOKENS", 4096, 0),
         )
 
     @property
@@ -232,6 +234,11 @@ class HarnessSettings:
     @property
     def request_token_budget(self) -> int:
         return max(1, int(self.context_window * self.request_budget_ratio))
+
+    @property
+    def usable_context_tokens(self) -> int:
+        """The window minus the room kept for the model's answer."""
+        return max(1, self.context_window - self.output_reserve_tokens)
 
     @property
     def tool_output_chars(self) -> int:
@@ -643,6 +650,60 @@ def make_read_tool_output_tool(max_chars: int) -> FunctionTool:
         }
 
     return FunctionTool(read_tool_output, require_confirmation=False)
+
+
+def _history_tokens(events: list) -> int:
+    """Estimated tokens of the history the next request is built from. Like
+    ADK's history assembly, raw events inside a compacted range count as their
+    summary, and a compaction inside a larger one (or an older one over the
+    same range) is dropped."""
+    compactions = []
+    for i, event in enumerate(events):
+        c = getattr(getattr(event, "actions", None), "compaction", None)
+        if c is not None and None not in (c.start_timestamp, c.end_timestamp, c.compacted_content):
+            compactions.append((i, c))
+    kept = [(i, c) for i, c in compactions if not any(
+        j != i and o.start_timestamp <= c.start_timestamp and o.end_timestamp >= c.end_timestamp
+        and (o.start_timestamp < c.start_timestamp or o.end_timestamp > c.end_timestamp or j > i)
+        for j, o in compactions)]
+    total = sum(_content_tokens(c.compacted_content) for _, c in kept)
+    for event in events:
+        if getattr(getattr(event, "actions", None), "compaction", None) is not None or event.content is None:
+            continue
+        if any(c.start_timestamp <= event.timestamp <= c.end_timestamp for _, c in kept):
+            continue
+        total += _content_tokens(event.content)
+    return total
+
+
+def make_get_context_remaining_tool(settings: HarnessSettings) -> FunctionTool:
+    """Lets the model see its own context usage and decide when to hand off."""
+
+    def get_context_remaining(tool_context=None) -> dict:
+        """
+        Report how much of the context window this session uses and how much is left.
+
+        `auto_compact_threshold` is where older history starts being summarized
+        automatically; `hard_limit` is where old tool results are trimmed from a
+        request. `remaining_tokens` already leaves room for your answer. When it
+        is low or `recommend_new_session` is true, record a handoff
+        (write_handoff) at the next milestone.
+        """
+        session = getattr(tool_context, "session", None)
+        estimated = _history_tokens(list(getattr(session, "events", None) or []))
+        state = tool_context.state
+        return {
+            "estimated_tokens": estimated,
+            "context_window": settings.context_window,
+            "usable_context_tokens": settings.usable_context_tokens,
+            "remaining_tokens": max(0, settings.usable_context_tokens - estimated),
+            "auto_compact_threshold": settings.compaction_token_threshold,
+            "hard_limit": settings.request_token_budget,
+            "compaction_count": state.get(STATE_COMPACTION_COUNT, 0),
+            "recommend_new_session": bool(state.get(STATE_RECOMMEND_NEW_SESSION, False)),
+        }
+
+    return FunctionTool(get_context_remaining, require_confirmation=False)
 
 
 # --- Request budget guard ---

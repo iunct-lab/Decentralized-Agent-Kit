@@ -18,6 +18,7 @@ from dak_agent.harness import (
     is_context_overflow_error,
     make_compaction_config,
     build_reset_compaction,
+    make_get_context_remaining_tool,
     make_read_tool_output_tool,
 )
 
@@ -1458,6 +1459,91 @@ class TestCompactionCount:
         ctx.state = {}
         await self._call(ctx)
         assert ctx.state == {}
+
+
+
+class TestGetContextRemainingTool:
+    """PBI #113: the model can see its estimated usage, the window, the
+    compaction count and the two thresholds (auto-compaction vs hard limit),
+    with the output reserve taken out of what is left."""
+
+    def _context(self, events=(), state=None):
+        ctx = MagicMock()
+        ctx.session = MagicMock(events=list(events))
+        ctx.state = {} if state is None else state
+        return ctx
+
+    @staticmethod
+    def _event(text, timestamp, compaction=None):
+        from google.adk.events.event import Event
+        from google.adk.events.event_actions import EventActions
+
+        content = types.Content(role="user", parts=[types.Part(text=text)]) if text is not None else None
+        return Event(author="user", timestamp=timestamp, content=content,
+                     actions=EventActions(compaction=compaction))
+
+    def test_output_reserve_setting(self):
+        assert HarnessSettings(context_window=8192).output_reserve_tokens == 4096
+        assert HarnessSettings(context_window=8192, output_reserve_tokens=10_000).usable_context_tokens == 1
+        with patch.dict(os.environ, {"MODEL_CONTEXT_WINDOW": "8192", "DAK_OUTPUT_RESERVE_TOKENS": "1000"}):
+            assert HarnessSettings.from_env("openai/llamacpp").usable_context_tokens == 7192
+        with patch.dict(os.environ, {"MODEL_CONTEXT_WINDOW": "8192", "DAK_OUTPUT_RESERVE_TOKENS": "-1"}):
+            assert HarnessSettings.from_env("openai/llamacpp").output_reserve_tokens == 4096
+
+    def test_get_context_remaining_returns_window_and_thresholds(self):
+        settings = HarnessSettings(context_window=32_768, output_reserve_tokens=2048)
+        result = make_get_context_remaining_tool(settings).func(tool_context=self._context())
+
+        assert result == {
+            "estimated_tokens": 0,
+            "context_window": 32_768,
+            "usable_context_tokens": 30_720,
+            "remaining_tokens": 30_720,
+            "auto_compact_threshold": 19_660,  # 60%: older history is summarized from here
+            "hard_limit": 27_852,              # 85%: old tool results are trimmed from a request
+            "compaction_count": 0,
+            "recommend_new_session": False,
+        }
+
+    def test_get_context_remaining_reads_compaction_count_and_recommend_flag_from_state(self):
+        ctx = self._context(state={harness.STATE_COMPACTION_COUNT: 4, harness.STATE_RECOMMEND_NEW_SESSION: True})
+        result = make_get_context_remaining_tool(HarnessSettings(context_window=8192)).func(tool_context=ctx)
+
+        assert result["compaction_count"] == 4
+        assert result["recommend_new_session"] is True
+
+    def test_get_context_remaining_estimated_tokens_sums_session_events(self):
+        texts = ["a" * 4000, "b" * 400, "c" * 40]
+        ctx = self._context(events=[self._event(t, n) for n, t in enumerate(texts)] + [self._event(None, 9)])
+        settings = HarnessSettings(context_window=8192, output_reserve_tokens=1024)
+        result = make_get_context_remaining_tool(settings).func(tool_context=ctx)
+
+        expected = sum(estimate_tokens(t) for t in texts)
+        assert result["estimated_tokens"] == expected
+        assert result["remaining_tokens"] == 8192 - 1024 - expected
+
+    def test_get_context_remaining_counts_compacted_events_as_their_summary(self):
+        from google.adk.events.event_actions import EventCompaction
+
+        def summary(text, start, end):
+            return EventCompaction(start_timestamp=start, end_timestamp=end,
+                                   compacted_content=types.Content(role="model", parts=[types.Part(text=text)]))
+
+        events = [self._event("x" * 4000, 1), self._event("y" * 4000, 2),
+                  self._event(None, 2.5, summary("first", 1, 2)),
+                  self._event("z" * 400, 3),
+                  self._event(None, 3.5, summary("second, covering the first", 1, 3)),
+                  self._event("tail", 4)]
+        result = make_get_context_remaining_tool(HarnessSettings(context_window=8192)).func(
+            tool_context=self._context(events=events))
+
+        assert result["estimated_tokens"] == estimate_tokens("second, covering the first") + estimate_tokens("tail")
+
+    def test_get_context_remaining_is_registered_and_always_allowed(self):
+        from dak_agent.enforcer import ALWAYS_ALLOWED
+
+        assert make_get_context_remaining_tool(HarnessSettings(context_window=8192)).name == "get_context_remaining"
+        assert "get_context_remaining" in ALWAYS_ALLOWED
 
 
 class TestPerCallHarnessSettings:
