@@ -21,6 +21,7 @@ RUN uv sync --no-install-project
 COPY dak_agent ./dak_agent
 COPY skills ./skills
 COPY provider_skills ./provider_skills
+COPY profiles ./profiles
 COPY agent_config.yaml ./agent_config.yaml
 COPY README.md .
 COPY entrypoint.sh /app/entrypoint.sh

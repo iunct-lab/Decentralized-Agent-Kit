@@ -1,0 +1,9 @@
+# Small local models (Qwen on Ollama / llama.cpp). tool_allowlist and
+# max_tools are only resolved into HarnessSettings; nothing filters the
+# agent's tools by them yet (PBI #110, #81).
+pattern: "*qwen*"
+tool_output_max_chars: 8000
+tool_allowlist: ["read_file", "write_file", "list_files", "search_files", "switch_mode", "attempt_answer"]
+max_tools: 8
+small_model: null
+text_actions: false
