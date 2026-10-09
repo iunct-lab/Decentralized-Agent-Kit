@@ -136,11 +136,15 @@ def test_minimal_overhead_matches_direct_call(agent):
         "user_id": agent.user_id,
         "session_id": agent.create_session(),
         "new_message": {"parts": [{"text": OVERHEAD_PROMPT}]},
+        # A reply that fails the schema is regenerated, and the regenerated
+        # reply replaces the first one's event, usage included. One call at
+        # most turns that into a failure reply instead (asserted below).
         "state_delta": {"dak:instruction": OVERHEAD_INSTRUCTION, "dak:output_schema": OVERHEAD_SCHEMA,
-                        "dak:tools": []},
+                        "dak:tools": [], "dak:max_llm_calls": 1},
     }, timeout=AGENT_RUN_TIMEOUT)
     resp.raise_for_status()
     usages = [e["usageMetadata"] for e in resp.json() if e.get("usageMetadata")]
+    reply = json.loads(event_texts(resp.json())[-1])
 
     dak_in = sum(u.get("promptTokenCount", 0) for u in usages)
     dak_out = sum(u.get("candidatesTokenCount", 0) for u in usages)
@@ -151,7 +155,8 @@ def test_minimal_overhead_matches_direct_call(agent):
         "dak": {"calls": len(usages), "prompt_tokens": dak_in, "completion_tokens": dak_out},
         "diff": {"prompt_tokens": dak_in - direct.usage.prompt_tokens,
                  "completion_tokens": dak_out - direct.usage.completion_tokens},
-        "dak_reply": event_texts(resp.json())[-1:],
+        "dak_reply": reply,
     }))
+    assert "greeting" in reply, reply  # not a failure reply: the first call was the only one
     assert len(usages) == 1, usages
     assert dak_in > 0 and direct.usage.prompt_tokens > 0
