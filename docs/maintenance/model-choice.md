@@ -80,10 +80,15 @@ Gemini の無料枠に収まれば $0 だが、回数制限が未確認なので
 
 ## 結果
 
-保守の定期実行のモデルは、Amazon Bedrock の GPT-6 luna（`MAINT_LLM_MODEL=bedrock/global.openai.gpt-6-luna`、IAM（GitHub の OIDC）で呼ぶ）に決まっている。
-手動実行が Gemini の利用枠切れ（429）で確かめられなかったため、利用者の指示で決めた（PBI #157 の決定ログ 2026-09-26、コードは PR #384）。
-切り替えの準備は `docs/maintenance/README.md` の「Amazon Bedrock（IAM。API キー不要）」。
-Bedrock 上の価格は未確認（上の表と月額の `gpt-6-luna` は OpenAI の API の価格）。
+保守の定期実行のモデルは、Amazon Bedrock の Claude Haiku 4.5（`MAINT_LLM_MODEL=bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0`、US の inference profile、IAM（GitHub の OIDC）で呼ぶ）。2026-10-09 に切り替えた。
+経緯（PBI #348 の決定ログ）:
+- 最初は Bedrock の GPT-6 luna（`bedrock/global.openai.gpt-6-luna`）に決めていた。手動実行が Gemini の利用枠切れ（429）で確かめられなかったため、利用者の指示で決めた（PBI #157 の決定ログ 2026-09-26、コードは PR #384）
+- 2026-10-08、GPT-6 luna はこのアカウントで呼べなかった（`AccessDeniedException`「not available for this account」）。利用者は Claude Haiku 5.5 を選んだ
+- 2026-10-09、Anthropic の利用目的の申請のあと Haiku 4.5 は呼べたが、Haiku 5.5 は GPT-6 luna と同じ理由で呼べなかった。利用者の判断で、呼べる Haiku 4.5 にした。Haiku 5.5 が使えるようになったら、`MAINT_LLM_MODEL` と IAM ロールの権限を替える
+
+切り替えの準備は `docs/maintenance/README.md` の「Amazon Bedrock（IAM。API キー不要）」。IAM ロールの権限は、この inference profile と、それを通したときだけの基のモデル（`anthropic.claude-haiku-4-5-20251001-v1:0`）への `bedrock:InvokeModel`。
+切り替えたあと、tech-watch の手動実行（run 37941853160）が通り、提案 2 件が起票された（#611、#612）。
+Bedrock 上の価格は未確認（上の表に Claude のモデルは無い）。
 
 上の候補を `dak-maint compare-models` で同じ入力で比べる実行はしていない。モデルが決まっているので不要と利用者が判断した（PBI #348 の決定ログ 2026-10-07）。
 `compare-models` は、また別のモデルを検討するときに使える。
