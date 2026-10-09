@@ -185,7 +185,8 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 ### 最小の呼び出しの上乗せ（実 LLM の実測、#248、2026-10-09）
 
 `tests/integration/test_smoke_real_llm.py::test_minimal_overhead_matches_direct_call` で、同じ指示・入力・出力スキーマを、LiteLLM で直接 1 回と、DAK の最小の呼び出し（`dak:instruction` / `dak:output_schema` / `dak:tools: []`）で 1 回呼び、モデルが返した usage を比べた。
-モデルは Bedrock の Claude Haiku 4.5（`bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0`、us-east-1）。Luna ではないので、トークンの数は上の単価表にそのまま当てはまらない。各数値は 1 回の測定。
+モデルは Bedrock の Claude Haiku 4.5（`bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0`、us-east-1）。Luna ではないので、トークンの数は上の単価表にそのまま当てはまらない。2 回測って 2 回とも同じ値だった。
+DAK 経由には `dak:max_llm_calls: 1` も付けた。出力スキーマに合わない応答は作り直され、作り直した応答の usage だけが返るので、作り直しが起きれば失敗の応答になって分かるようにした（使ったのは上限だけで、プロンプトは変わらない）。
 
 | | LLM 呼び出し | 入力トークン | 出力トークン |
 |---|---:|---:|---:|
