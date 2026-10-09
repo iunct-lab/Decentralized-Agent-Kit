@@ -9,6 +9,7 @@
   "plan_exit",
   "dak_explorer",
   "read_tool_output",
+  "get_context_remaining",
   "list_skills",
   "enable_skill"
 ]
