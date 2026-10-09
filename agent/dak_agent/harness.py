@@ -652,6 +652,29 @@ def make_read_tool_output_tool(max_chars: int) -> FunctionTool:
     return FunctionTool(read_tool_output, require_confirmation=False)
 
 
+def call_settings(settings: HarnessSettings, default_model_name: str, cache: Dict[str, HarnessSettings],
+                  context) -> HarnessSettings:
+    """Settings for the model this call runs on (`dak:model`, else the
+    startup model). Only the context window differs per model; the ADK
+    compaction trigger stays at the startup model's (it is fixed when the App
+    is built). `cache` maps a model name to its settings."""
+    from . import call_config  # one-way: call_config never imports harness
+
+    requested = call_config.resolve_dak_settings(context).get(call_config.STATE_CALL_MODEL)
+    model_name = get_litellm_model_name(requested) if isinstance(requested, str) else default_model_name
+    found = cache.get(model_name)
+    if found is None:
+        # Not `from_env`: MODEL_CONTEXT_WINDOW states the startup model's
+        # window (e.g. a llama-server alias) and must not cap other models.
+        # A model litellm does not know (another local alias) has no known
+        # window; keep the startup one rather than assume 128K and overflow
+        # a small server.
+        window = ModeManager.known_context_window(model_name) or settings.context_window
+        found = replace(settings, context_window=window)
+        cache[model_name] = found
+    return found
+
+
 def _history_tokens(events: list) -> int:
     """Estimated tokens of the history the next request is built from. Like
     ADK's history assembly, raw events inside a compacted range count as their
@@ -676,8 +699,12 @@ def _history_tokens(events: list) -> int:
     return total
 
 
-def make_get_context_remaining_tool(settings: HarnessSettings) -> FunctionTool:
-    """Lets the model see its own context usage and decide when to hand off."""
+def make_get_context_remaining_tool(settings: HarnessSettings, default_model_name: str) -> FunctionTool:
+    """Lets the model see its own context usage and decide when to hand off.
+    The window and the limits are those of the model this call runs on, as in
+    ContextHarnessPlugin; the auto-compaction threshold stays the startup
+    model's (ADK's compaction trigger is fixed when the App is built)."""
+    cache: Dict[str, HarnessSettings] = {default_model_name: settings}
 
     def get_context_remaining(tool_context=None) -> dict:
         """
@@ -689,16 +716,17 @@ def make_get_context_remaining_tool(settings: HarnessSettings) -> FunctionTool:
         is low or `recommend_new_session` is true, record a handoff
         (write_handoff) at the next milestone.
         """
+        current = call_settings(settings, default_model_name, cache, tool_context)
         session = getattr(tool_context, "session", None)
         estimated = _history_tokens(list(getattr(session, "events", None) or []))
         state = tool_context.state
         return {
             "estimated_tokens": estimated,
-            "context_window": settings.context_window,
-            "usable_context_tokens": settings.usable_context_tokens,
-            "remaining_tokens": max(0, settings.usable_context_tokens - estimated),
+            "context_window": current.context_window,
+            "usable_context_tokens": current.usable_context_tokens,
+            "remaining_tokens": max(0, current.usable_context_tokens - estimated),
             "auto_compact_threshold": settings.compaction_token_threshold,
-            "hard_limit": settings.request_token_budget,
+            "hard_limit": current.request_token_budget,
             "compaction_count": state.get(STATE_COMPACTION_COUNT, 0),
             "recommend_new_session": bool(state.get(STATE_RECOMMEND_NEW_SESSION, False)),
         }
@@ -1109,25 +1137,7 @@ class ContextHarnessPlugin(BasePlugin):
         self._hooks = hooks.load_hooks()
 
     def _settings_for(self, callback_context) -> HarnessSettings:
-        """Settings for the model this call runs on (`dak:model`, else the
-        startup model). Only the context window differs per model; the ADK
-        compaction trigger stays at the startup model's (it is fixed when
-        the App is built)."""
-        from . import call_config  # one-way: call_config never imports harness
-
-        requested = call_config.resolve_dak_settings(callback_context).get(call_config.STATE_CALL_MODEL)
-        model_name = get_litellm_model_name(requested) if isinstance(requested, str) else self._default_model_name
-        settings = self._settings_cache.get(model_name)
-        if settings is None:
-            # Not `from_env`: MODEL_CONTEXT_WINDOW states the startup model's
-            # window (e.g. a llama-server alias) and must not cap other models.
-            # A model litellm does not know (another local alias) has no known
-            # window; keep the startup one rather than assume 128K and overflow
-            # a small server.
-            window = ModeManager.known_context_window(model_name) or self.settings.context_window
-            settings = replace(self.settings, context_window=window)
-            self._settings_cache[model_name] = settings
-        return settings
+        return call_settings(self.settings, self._default_model_name, self._settings_cache, callback_context)
 
     async def before_tool_callback(self, *, tool, tool_args, tool_context) -> Optional[dict]:
         """Answer arguments that break the tool's schema (see ``_check_arguments``),

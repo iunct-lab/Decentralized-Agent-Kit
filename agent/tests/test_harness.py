@@ -1467,6 +1467,12 @@ class TestGetContextRemainingTool:
     compaction count and the two thresholds (auto-compaction vs hard limit),
     with the output reserve taken out of what is left."""
 
+    MODEL = "openai/llamacpp"
+
+    def _call(self, settings, ctx, call_settings=None):
+        with patch("dak_agent.call_config.resolve_dak_settings", return_value=call_settings or {}):
+            return make_get_context_remaining_tool(settings, self.MODEL).func(tool_context=ctx)
+
     def _context(self, events=(), state=None):
         ctx = MagicMock()
         ctx.session = MagicMock(events=list(events))
@@ -1492,7 +1498,7 @@ class TestGetContextRemainingTool:
 
     def test_get_context_remaining_returns_window_and_thresholds(self):
         settings = HarnessSettings(context_window=32_768, output_reserve_tokens=2048)
-        result = make_get_context_remaining_tool(settings).func(tool_context=self._context())
+        result = self._call(settings, self._context())
 
         assert result == {
             "estimated_tokens": 0,
@@ -1507,7 +1513,7 @@ class TestGetContextRemainingTool:
 
     def test_get_context_remaining_reads_compaction_count_and_recommend_flag_from_state(self):
         ctx = self._context(state={harness.STATE_COMPACTION_COUNT: 4, harness.STATE_RECOMMEND_NEW_SESSION: True})
-        result = make_get_context_remaining_tool(HarnessSettings(context_window=8192)).func(tool_context=ctx)
+        result = self._call(HarnessSettings(context_window=8192), ctx)
 
         assert result["compaction_count"] == 4
         assert result["recommend_new_session"] is True
@@ -1516,7 +1522,7 @@ class TestGetContextRemainingTool:
         texts = ["a" * 4000, "b" * 400, "c" * 40]
         ctx = self._context(events=[self._event(t, n) for n, t in enumerate(texts)] + [self._event(None, 9)])
         settings = HarnessSettings(context_window=8192, output_reserve_tokens=1024)
-        result = make_get_context_remaining_tool(settings).func(tool_context=ctx)
+        result = self._call(settings, ctx)
 
         expected = sum(estimate_tokens(t) for t in texts)
         assert result["estimated_tokens"] == expected
@@ -1534,15 +1540,28 @@ class TestGetContextRemainingTool:
                   self._event("z" * 400, 3),
                   self._event(None, 3.5, summary("second, covering the first", 1, 3)),
                   self._event("tail", 4)]
-        result = make_get_context_remaining_tool(HarnessSettings(context_window=8192)).func(
-            tool_context=self._context(events=events))
+        result = self._call(HarnessSettings(context_window=8192), self._context(events=events))
 
         assert result["estimated_tokens"] == estimate_tokens("second, covering the first") + estimate_tokens("tail")
 
+    @patch.dict(os.environ, {}, clear=False)
+    def test_get_context_remaining_follows_the_call_model(self):
+        """`dak:model` changes the window and the hard limit, as in the
+        request guard; ADK's auto-compaction trigger stays the startup one."""
+        os.environ.pop("MODEL_CONTEXT_WINDOW", None)
+        settings = HarnessSettings(context_window=8192, output_reserve_tokens=1024)
+        result = self._call(settings, self._context(), {"dak:model": "gemini/gemini-2.5-flash"})
+
+        assert result["context_window"] == 1_048_576
+        assert result["usable_context_tokens"] == 1_048_576 - 1024
+        assert result["hard_limit"] == int(1_048_576 * 0.85)
+        assert result["auto_compact_threshold"] == settings.compaction_token_threshold
+
     def test_get_context_remaining_is_registered_and_always_allowed(self):
+        from dak_agent import agent
         from dak_agent.enforcer import ALWAYS_ALLOWED
 
-        assert make_get_context_remaining_tool(HarnessSettings(context_window=8192)).name == "get_context_remaining"
+        assert "get_context_remaining" in [getattr(t, "name", None) for t in agent.root_agent_tools]
         assert "get_context_remaining" in ALWAYS_ALLOWED
 
 

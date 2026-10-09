@@ -88,7 +88,7 @@ use_harness = harness_enabled()
 harness_settings = HarnessSettings.from_env(formatted_model_name)
 if use_harness:
     root_agent_tools.append(make_read_tool_output_tool(harness_settings.tool_output_chars))
-    root_agent_tools.append(make_get_context_remaining_tool(harness_settings))
+    root_agent_tools.append(make_get_context_remaining_tool(harness_settings, formatted_model_name))
     logger.info(
         "Context harness: window=%d tokens, compaction at %d, tool output <= %d chars",
         harness_settings.context_window,
