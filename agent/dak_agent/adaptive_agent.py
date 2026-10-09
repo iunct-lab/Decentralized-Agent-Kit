@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Tuple
 
 from google.adk.agents import LlmAgent
@@ -23,6 +24,7 @@ from .errors import PaymentRequiredError
 from .harness import HarnessSettings, _result_text
 from .handlers.payment_handler import PaymentHandler
 from .mode_manager import ModeManager
+from .payment_intent import sol_to_lamports, verify_payment_intent
 from .skill_registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,15 @@ STATE_PROJECT_INSTRUCTIONS = "dak_project_instructions"
 # The saved user/project memory (mcp-server's load_memory, capped there by
 # MCP_MEMORY_MAX_CHARS), read at the start of every invocation like the above.
 STATE_LOADED_MEMORY = "dak_loaded_memory"
+# The payment intent check (docs/design/verifiable_intent.md). Off by default.
+# When on, send_sol_payment runs only if the session's signed intent allows it.
+PAYMENT_INTENT_CHECK_ENV = "ENABLE_PAYMENT_INTENT_CHECK"
+# The user's PUBLIC keys (a JWKS JSON string). Private keys never go here.
+PAYMENT_INTENT_TRUSTED_JWKS_ENV = "DAK_PAYMENT_INTENT_TRUSTED_JWKS"
+# The signed intent (SD-JWT) the caller puts in the session state. No agent
+# tool writes this key.
+STATE_PAYMENT_INTENT = "dak:payment_intent"
+PAYMENT_TOOL = "send_sol_payment"
 # What DAK asks the model when its reply failed `dak:output_schema` / `dak:inspection`.
 INSPECTION_RETRY_PROMPT = ("Your previous response failed validation.\nValidation errors:\n{errors}\n\n"
                            "Produce a corrected response only, in the exact format required.")
@@ -81,6 +92,8 @@ class AdaptiveAgent(LlmAgent):
     _active_skills: List[str] = PrivateAttr(default_factory=list)
     _payment_handler: Optional[PaymentHandler] = PrivateAttr(default=None)
     _enable_ap2: bool = PrivateAttr(default=False)
+    _payment_intent_check: bool = PrivateAttr(default=False)
+    _payment_intent_jwks: Optional[dict] = PrivateAttr(default=None)
     _base_model_name: str = PrivateAttr(default="")
     _llm_model_cache: Dict[str, Any] = PrivateAttr(default_factory=dict)
 
@@ -114,6 +127,7 @@ class AdaptiveAgent(LlmAgent):
             "tools": builtin_tools,
             "before_agent_callback": self._restore_session_config,
             "after_model_callback": self._wrapped_callback,
+            "before_tool_callback": self._before_tool,
             "on_tool_error_callback": self._on_tool_error,
             "after_tool_callback": self._restore_reject_reason,
         }
@@ -169,6 +183,15 @@ class AdaptiveAgent(LlmAgent):
                 self._payment_handler = None
         else:
             logger.info("AP2 Protocol DISABLED (set ENABLE_AP2_PROTOCOL=true to enable)")
+
+        self._payment_intent_check = os.getenv(PAYMENT_INTENT_CHECK_ENV, "false").lower() == "true"
+        if self._payment_intent_check:
+            self._payment_intent_jwks = _load_trusted_jwks(os.getenv(PAYMENT_INTENT_TRUSTED_JWKS_ENV, ""))
+            if self._payment_intent_jwks is None:
+                logger.error(f"{PAYMENT_INTENT_CHECK_ENV}=true but {PAYMENT_INTENT_TRUSTED_JWKS_ENV} holds no usable "
+                             f"public key: every {PAYMENT_TOOL} call will be blocked")
+            else:
+                logger.info(f"Payment intent check ENABLED: {PAYMENT_TOOL} requires a signed intent")
 
         logger.info(f"AdaptiveAgent initialized with MCP URL: {self._mcp_url}")
 
@@ -634,6 +657,36 @@ class AdaptiveAgent(LlmAgent):
 
     # --- Callbacks ---
 
+    def _before_tool(self, tool, args: dict, tool_context) -> Optional[dict]:
+        """
+        Block send_sol_payment when the session's signed payment intent does not
+        allow it (only with ENABLE_PAYMENT_INTENT_CHECK=true). Returning None
+        lets the tool run as before; this never starts or approves a payment.
+
+        ADK runs the plugins' before-tool callbacks (PermissionPlugin's
+        deny / ask, ContextHarnessPlugin) first and calls this only when none of
+        them answered, so a denied or unconfirmed call never reaches the check.
+        Another agent-level before-tool check belongs in this method, after the
+        intent check, rather than in a second callback.
+        """
+        if not self._payment_intent_check or getattr(tool, "name", None) != PAYMENT_TOOL:
+            return None
+        if self._payment_intent_jwks is None:
+            return _payment_blocked(f"no trusted public key is configured ({PAYMENT_INTENT_TRUSTED_JWKS_ENV})")
+        intent = tool_context.state.get(STATE_PAYMENT_INTENT)
+        if not isinstance(intent, str) or not intent:
+            return _payment_blocked(f"no payment intent in this session ({STATE_PAYMENT_INTENT})")
+        try:
+            lamports = sol_to_lamports(float(args.get("amount")))
+        except (TypeError, ValueError, OverflowError):
+            return _payment_blocked(f"invalid amount {args.get('amount')!r}")
+        decision = verify_payment_intent(intent, self._payment_intent_jwks, payee=str(args.get("recipient", "")),
+                                         amount_minor=lamports, currency="SOL", now=datetime.now(timezone.utc))
+        if decision.allowed:
+            return None
+        logger.info(f"Payment intent blocked {PAYMENT_TOOL}: {decision.reason}")
+        return _payment_blocked(decision.reason, decision.constraint)
+
     def _on_tool_error(self, tool, args: dict, tool_context, error: Exception) -> Optional[dict]:
         """
         Gracefully turn tool errors into observations for the LLM.
@@ -905,3 +958,26 @@ class AdaptiveAgent(LlmAgent):
             logger.error(f"CRITICAL ERROR in _perform_mode_switch: {e}", exc_info=True)
 
         logger.info("Mode Switch Complete.")
+
+
+def _load_trusted_jwks(raw: str) -> Optional[dict]:
+    """The trusted JWKS, or None when it is missing, not JSON, or any key is
+    not a P-256 public key with string coordinates."""
+    try:
+        jwks = json.loads(raw)
+    except (ValueError, RecursionError):
+        return None
+    keys = jwks.get("keys") if isinstance(jwks, dict) else None
+    if not isinstance(keys, list) or not keys:
+        return None
+    for k in keys:
+        if not (isinstance(k, dict) and k.get("kty") == "EC" and k.get("crv") == "P-256"
+                and isinstance(k.get("x"), str) and isinstance(k.get("y"), str)):
+            return None
+    return jwks
+
+
+def _payment_blocked(reason: str, constraint: Optional[str] = None) -> dict:
+    # Says why and who can fix it; never suggests another way to pay.
+    detail = f"{reason} (constraint: {constraint})" if constraint else reason
+    return {"error": f"Payment blocked by payment intent: {detail}. Ask the user to review their payment intent."}
