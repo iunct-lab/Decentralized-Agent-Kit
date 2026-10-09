@@ -60,7 +60,7 @@ from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools import FunctionTool
 from google.genai import types
 
-from . import hooks
+from . import builtin_tools, hooks
 from .config import get_litellm_model_name
 from .mode_manager import ModeManager
 
@@ -714,7 +714,7 @@ def make_get_context_remaining_tool(settings: HarnessSettings, default_model_nam
         automatically; `hard_limit` is where old tool results are trimmed from a
         request. `remaining_tokens` already leaves room for your answer. When it
         is low or `recommend_new_session` is true, record a handoff
-        (write_handoff) at the next milestone.
+        (write_handoff) at the next milestone, then call new_context.
         """
         current = call_settings(settings, default_model_name, cache, tool_context)
         session = getattr(tool_context, "session", None)
@@ -732,6 +732,31 @@ def make_get_context_remaining_tool(settings: HarnessSettings, default_model_nam
         }
 
     return FunctionTool(get_context_remaining, require_confirmation=False)
+
+
+def make_new_context_tool() -> FunctionTool:
+    """Lets the model reset its context at a milestone: the history so far is
+    replaced by the original request and the handoff, through the same ADK
+    compaction event as automatic compaction (see build_reset_compaction)."""
+
+    def new_context(tool_context=None) -> str:
+        """
+        Start over from a fresh context: everything in this conversation so far
+        is replaced by the original request and your handoff. Call write_handoff
+        first so the handoff says what is done and what to do next.
+        """
+        handoff = tool_context.state.get(builtin_tools.STATE_HANDOFF)
+        if not handoff:
+            return "No handoff recorded. Call write_handoff first, then new_context."
+        session = getattr(tool_context, "session", None)
+        tool_context.actions.compaction = build_reset_compaction(
+            list(getattr(session, "events", None) or []),
+            builtin_tools.format_handoff(handoff),
+            tool_context.state.get(builtin_tools.STATE_ORIGINAL_REQUEST, ""),
+        )
+        return "Context reset. Continuing from handoff and the original request."
+
+    return FunctionTool(new_context, require_confirmation=False)
 
 
 # --- Request budget guard ---
