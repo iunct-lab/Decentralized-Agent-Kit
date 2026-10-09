@@ -150,6 +150,16 @@ class TestBuiltinTools(unittest.TestCase):
         self.assertIn("planner", result["error"])
         self.assertFalse(tool_context._invocation_context.end_invocation)
 
+    def test_two_ask_questions_in_one_response_both_return_errors(self):
+        """Siblings are found by call id, not by name: two questions are each other's siblings."""
+        for call_id in ("fc-0", "fc-1"):
+            tool_context = _tool_context_called_with("ask_question", "ask_question")
+            tool_context.function_call_id = call_id
+            tool_context._invocation_context.end_invocation = False
+            result = ask_question(["What OS?"], "Need environment info", tool_context)
+            self.assertIn("ask_question", result["error"].split("(", 1)[1])
+            self.assertFalse(tool_context._invocation_context.end_invocation)
+
 
     def test_write_todos_persists_state_and_normalizes_status(self):
         tool_context = MagicMock()
