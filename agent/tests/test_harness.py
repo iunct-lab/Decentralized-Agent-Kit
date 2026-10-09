@@ -595,10 +595,19 @@ class TestToolCallGuard:
             "type": "object", "required": ["path"],
             "properties": {"path": {"type": "string"}, "limit": {"type": "integer"},
                            "ratio": {"anyOf": [{"type": "number"}, {"type": "null"}]}, "any": {}}})
-        args = {"path": "a.txt", "limit": 3.0, "ratio": 1, "any": [1], "extra": 1}
+        args = {"path": "a.txt", "limit": 3, "ratio": 1, "any": [1], "extra": 1}
         results = [await plugin.before_tool_callback(tool=tool, tool_args=args, tool_context=ctx) for _ in range(4)]
         assert results[:3] == [None, None, None]
         assert results[3]["observation"] == "repeated_call"
+
+    @pytest.mark.asyncio
+    async def test_float_for_an_integer_argument_is_invalid(self):
+        """The paging tool slices with `offset`; 3.0 would raise TypeError inside it."""
+        plugin, ctx = self._plugin(), self._ctx()
+        result = await plugin.before_tool_callback(
+            tool=make_read_tool_output_tool(1000), tool_args={"artifact_name": "out.txt", "offset": 3.0},
+            tool_context=ctx)
+        assert result["errors"] == ["argument 'offset' expected type integer but got float"]
 
     @pytest.mark.asyncio
     async def test_repeated_invalid_arguments_trigger_blocked_hint(self):
