@@ -169,6 +169,7 @@ def test_anthropic_timeout_is_not_retried(monkeypatch):
 @pytest.mark.parametrize("model,url,key,expected", [
     ("anthropic/claude-haiku-5-5", "", "fake-test-key", "llm"),
     ("anthropic/claude-haiku-5-5", "", "", "heuristic"),
+    ("anthropic/claude-haiku-5-5", "https://old.example/v1", "", "heuristic"),
     ("ollama", "http://local/v1", "", "llm"),
     ("bedrock/x", "", "", "heuristic"),
 ])

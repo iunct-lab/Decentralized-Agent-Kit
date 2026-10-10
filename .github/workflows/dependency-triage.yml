@@ -59,7 +59,7 @@ jobs:
           deps_json=$(jq -c '[.[] | {package: .dependencyName, from: .prevVersion, to: .newVersion}]' <<< "$UPDATED_DEPS_JSON")
           assessor="$MAINT_ASSESSOR"
           if [ -z "$assessor" ]; then
-            if { [ -n "$MAINT_LLM_BASE_URL" ] && [ -n "$MAINT_LLM_MODEL" ]; } ||
+            if { [[ "$MAINT_LLM_MODEL" != anthropic/* ]] && [ -n "$MAINT_LLM_BASE_URL" ] && [ -n "$MAINT_LLM_MODEL" ]; } ||
                { [[ "$MAINT_LLM_MODEL" == anthropic/* ]] && [ -n "$MAINT_LLM_API_KEY" ]; }; then
               assessor="llm"
             else
