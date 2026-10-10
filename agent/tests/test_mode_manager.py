@@ -75,9 +75,12 @@ class TestModeManager(unittest.TestCase):
         manager = ModeManager(model_name="bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0")
         self.assertEqual(manager.max_context_tokens, 1000000)
 
-    def test_bedrock_gpt56_resolves_context_window(self):
+    @patch("litellm.get_model_info", return_value={"max_input_tokens": 1050000})
+    def test_bedrock_gpt56_resolves_context_window(self, mock_info):
+        # Verify propagation, without depending on the remotely updated model map.
         manager = ModeManager(model_name="bedrock/us.openai.gpt-5.6-luna")
-        self.assertEqual(manager.max_context_tokens, 1000000)
+        self.assertEqual(manager.max_context_tokens, 1050000)
+        mock_info.assert_called_with("bedrock/us.openai.gpt-5.6-luna")
 
     def test_unknown_model_uses_default_context_window(self):
         """IDs litellm can't map (e.g. a llama-server alias) get the conservative default."""
