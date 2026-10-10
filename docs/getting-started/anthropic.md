@@ -52,3 +52,7 @@ gh variable set MAINT_LLM_MODEL --body anthropic/claude-haiku-5-5
 本文のない応答は失敗として扱う。HTTP の再送は行わない。
 
 公式: [Haiku 5.5 移行ガイド](https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide)。
+
+設定後の最小通信確認は `gh workflow run verify-anthropic.yml`。既存の Actions secret を
+そのステップのプロセス環境だけで使用し、短い確認を 1 回送る。キーや応答本文はログに
+出さず、提案 Issue は起票しない。実通信には API 利用量が発生する。

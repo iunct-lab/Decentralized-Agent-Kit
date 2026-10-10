@@ -1,0 +1,32 @@
+name: Verify Anthropic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+      - name: Install maintenance dependencies
+        working-directory: maintenance
+        run: uv sync --locked
+      - name: Verify one Haiku 5.5 request
+        working-directory: maintenance
+        env:
+          MAINT_LLM_MODEL: anthropic/claude-haiku-5-5
+          MAINT_LLM_API_KEY: ${{ secrets.MAINT_LLM_API_KEY }}
+        run: |
+          uv run --locked python - <<'PYTHON'
+          from dak_maintenance.llm_client import make_complete
+
+          answer = make_complete(timeout=120)("Reply with exactly OK, with no other text.")
+          if answer.strip() != "OK":
+              raise SystemExit("Anthropic returned an unexpected verification answer.")
+          print("Anthropic Haiku 5.5: verified")
+          PYTHON
