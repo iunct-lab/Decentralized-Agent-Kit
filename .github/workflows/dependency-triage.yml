@@ -46,9 +46,8 @@ jobs:
           # 明示指定（vars.MAINT_ASSESSOR）があればそれを優先。未設定の場合、
           # 以前は常に 'heuristic' にフォールバックしており、MAINT_LLM_* を
           # 設定済みでも Tier1 LLM が一度も使われていなかった。dak-maint の
-          # make_complete() は BASE_URL/MODEL を必須・API_KEY を任意
-          # （keyless local な Ollama 等）としているため、その2つの有無で
-          # 自動選択する（API_KEY の有無で判定すると keyless 構成を誤検出する）。
+          # OpenAI 互換は BASE_URL/MODEL、Anthropic native は MODEL/API_KEY
+          # で選ぶ。keyless local な Ollama 等はキーを要求しない。
           MAINT_ASSESSOR: ${{ vars.MAINT_ASSESSOR }}
           # グループ化PR（複数パッケージ）でも各パッケージの実際の from/to を使うため
           # dependency-names（カンマ結合の単一文字列）ではなく updated-dependencies-json
@@ -60,7 +59,8 @@ jobs:
           deps_json=$(jq -c '[.[] | {package: .dependencyName, from: .prevVersion, to: .newVersion}]' <<< "$UPDATED_DEPS_JSON")
           assessor="$MAINT_ASSESSOR"
           if [ -z "$assessor" ]; then
-            if [ -n "$MAINT_LLM_BASE_URL" ] && [ -n "$MAINT_LLM_MODEL" ]; then
+            if { [ -n "$MAINT_LLM_BASE_URL" ] && [ -n "$MAINT_LLM_MODEL" ]; } ||
+               { [[ "$MAINT_LLM_MODEL" == anthropic/* ]] && [ -n "$MAINT_LLM_API_KEY" ]; }; then
               assessor="llm"
             else
               assessor="heuristic"

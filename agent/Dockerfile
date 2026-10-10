@@ -25,6 +25,7 @@ COPY profiles ./profiles
 COPY agent_config.yaml ./agent_config.yaml
 COPY README.md .
 COPY entrypoint.sh /app/entrypoint.sh
+COPY ssm_exec.py /app/ssm_exec.py
 RUN chmod +x /app/entrypoint.sh
 
 # Install project

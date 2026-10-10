@@ -56,4 +56,7 @@ EOF
 echo "[entrypoint] Generated agent.json with URL: ${AGENT_PUBLIC_URL}"
 
 # Execute the original command (uvicorn dak_agent.server:app ...)
+if [ -n "${ANTHROPIC_API_KEY_SSM_PARAMETER:-}" ]; then
+    exec uv run python /app/ssm_exec.py "$@"
+fi
 exec "$@"

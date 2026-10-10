@@ -4,6 +4,7 @@ import sys
 import types
 
 import pytest
+import httpx
 
 from dak_maintenance import llm_client
 
@@ -107,3 +108,79 @@ def test_bedrock_client_does_not_resend_on_read_timeouts(monkeypatch, fake_boto3
     config = made["config"]
     assert config.read_timeout >= 300
     assert config.retries["total_max_attempts"] == 1
+
+
+def test_anthropic_native_haiku55_with_thinking_and_usage(monkeypatch):
+    monkeypatch.setenv("MAINT_LLM_MODEL", "anthropic/claude-haiku-5-5")
+    monkeypatch.setenv("MAINT_LLM_API_KEY", "fake-test-key")
+    monkeypatch.setenv("MAINT_LLM_BASE_URL", "https://old.example/v1")
+    calls = []
+
+    def post(url, **kw):
+        calls.append((url, kw))
+        return httpx.Response(200, request=httpx.Request("POST", url), json={
+            "content": [{"type": "thinking", "thinking": "ignored"},
+                        {"type": "text", "text": "one"}, {"type": "text", "text": "two"}],
+            "stop_reason": "end_turn", "usage": {"input_tokens": 7, "output_tokens": 2}})
+
+    monkeypatch.setattr(llm_client.httpx, "post", post)
+    usage = []
+    assert llm_client.make_complete(on_usage=usage.append)("hello") == "onetwo"
+    url, kw = calls[0]
+    assert url == "https://api.anthropic.com/v1/messages"
+    assert kw["headers"] == {"x-api-key": "fake-test-key", "anthropic-version": "2023-06-01"}
+    assert kw["json"] == {"model": "claude-haiku-5-5", "max_tokens": 8192,
+                          "messages": [{"role": "user", "content": "hello"}]}
+    assert usage == [{"prompt_tokens": 7, "completion_tokens": 2}]
+
+
+@pytest.mark.parametrize("stop,content", [
+    ("max_tokens", [{"type": "text", "text": "partial"}]),
+    ("refusal", [{"type": "text", "text": "declined"}]),
+    ("end_turn", [{"type": "thinking", "thinking": "only thoughts"}]),
+    ("end_turn", [{"type": "text", "text": " "}]),
+])
+def test_anthropic_incomplete_answer_raises(monkeypatch, stop, content):
+    monkeypatch.setattr(llm_client.httpx, "post", lambda url, **kw: httpx.Response(
+        200, request=httpx.Request("POST", url), json={"stop_reason": stop, "content": content}))
+    with pytest.raises(RuntimeError, match="no complete answer"):
+        llm_client.make_complete(model="anthropic/claude-haiku-5-5", api_key="fake-test-key")("hello")
+
+
+def test_anthropic_explicit_empty_key_does_not_use_maintenance_key(monkeypatch):
+    monkeypatch.setenv("MAINT_LLM_API_KEY", "must-not-be-used")
+    with pytest.raises(ValueError, match="MAINT_LLM_API_KEY"):
+        llm_client.make_complete(model="anthropic/claude-haiku-5-5", api_key="")
+
+
+def test_anthropic_timeout_is_not_retried(monkeypatch):
+    calls = []
+
+    def post(*a, **kw):
+        calls.append(a)
+        raise httpx.ReadTimeout("timeout")
+
+    monkeypatch.setattr(llm_client.httpx, "post", post)
+    with pytest.raises(httpx.ReadTimeout):
+        llm_client.make_complete(model="anthropic/claude-haiku-5-5", api_key="fake-test-key")("hello")
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("model,url,key,expected", [
+    ("anthropic/claude-haiku-5-5", "", "fake-test-key", "llm"),
+    ("anthropic/claude-haiku-5-5", "", "", "heuristic"),
+    ("ollama", "http://local/v1", "", "llm"),
+    ("bedrock/x", "", "", "heuristic"),
+])
+def test_workflow_selects_native_anthropic_assessor(model, url, key, expected):
+    import os
+    import subprocess
+    from pathlib import Path
+    source = (Path(__file__).parents[2] / ".github/workflows/dependency-triage.yml").read_text()
+    start = source.index('          assessor="$MAINT_ASSESSOR"')
+    end = source.index('          uv run dak-maint triage', start)
+    result = subprocess.run(["bash", "-eu", "-c", source[start:end]], capture_output=True, text=True,
+                            env={**os.environ, "MAINT_ASSESSOR": "", "MAINT_LLM_MODEL": model,
+                                 "MAINT_LLM_BASE_URL": url, "MAINT_LLM_API_KEY": key})
+    assert result.returncode == 0
+    assert result.stdout.strip() == f"assessor={expected}"

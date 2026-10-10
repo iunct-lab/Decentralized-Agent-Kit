@@ -96,6 +96,13 @@ Understanding the connectivity between containers is crucial for debugging and d
 2.  **Python**: Use `uv` for dependency management. Do not use `pip` directly.
 3.  **Configuration**: Use `.env` files. Never hardcode secrets.
 
+### Switchboard-hosted credentials
+*   On the Switchboard host, credentials must be stored only in AWS Systems Manager Parameter Store as `SecureString`. This overrides the general `.env` guidance for secrets.
+*   Never ask the user to save credentials in local `.env` files, local credential files, or temporary files. GitHub maintenance uses the existing `MAINT_LLM_API_KEY` Actions secret only when explicitly authorized by the user. Never print decrypted values or include them in command arguments, logs, issues, or PRs.
+*   Follow the environment-layer pattern in the Switchboard repository's `scripts/host/claude-wrapper.sh`: read the authorized parameter at launch and pass the value only to the consuming process in memory. Keep API keys separate from Claude Code OAuth tokens.
+*   Before adding a credential, read Switchboard's `aws/README.md`, `aws/template.yaml`, and the relevant host wrapper. The host's SSM read permissions are an explicit list of parameter names; a new parameter needs the corresponding IAM permission and consuming wrapper.
+*   The requested Anthropic model is `claude-haiku-5-5` (`anthropic/claude-haiku-5-5` for LiteLLM). Check the provider's migration requirements before switching a running service; Haiku 5.5 rejects `temperature=0`.
+
 ### Component-Specific Guidelines
 
 #### Agent

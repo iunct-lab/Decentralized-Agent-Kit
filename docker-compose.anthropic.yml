@@ -1,0 +1,11 @@
+# Switchboard host: store only the SSM parameter name in Docker configuration.
+# The agent entrypoint reads the key inside the runtime, after container start.
+services:
+  agent:
+    environment:
+      MODEL_NAME: anthropic/claude-haiku-5-5
+      ANTHROPIC_API_KEY_SSM_PARAMETER: /switchboard/anthropic-api-key
+      ANTHROPIC_API_KEY: ""
+      OPENAI_API_KEY: ""
+      GOOGLE_API_KEY: ""
+      GEMINI_API_KEY: ""
