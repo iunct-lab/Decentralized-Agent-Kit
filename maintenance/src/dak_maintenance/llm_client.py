@@ -1,8 +1,8 @@
 """Provider-neutral `complete(prompt) -> str`, selectable at runtime.
 
-Every major provider exposes an OpenAI-compatible /chat/completions endpoint, so
-one httpx call covers all of them — no litellm, no hardcoded vendor. The one
-SDK is boto3, for Bedrock with IAM (SigV4 signing), imported only on that path.
+OpenAI-compatible providers use /chat/completions. Anthropic uses its native
+Messages API, selected by an anthropic/ model prefix. The one SDK is boto3,
+for Bedrock with IAM (SigV4 signing), imported only on that path.
 Pick a provider purely via env:
 
   MAINT_LLM_BASE_URL   OpenAI-compatible base URL
@@ -14,6 +14,11 @@ docs/maintenance/model-choice.md, checked 2026-10-01):
   Gemini  https://generativelanguage.googleapis.com/v1beta/openai   gemini-3.5-flash-lite   (GOOGLE_API_KEY)
   Ollama  http://localhost:11434/v1                                 llama3.1:8b             (any key)
   OpenAI  https://api.openai.com/v1                                 gpt-6-luna              (OPENAI_API_KEY)
+
+Anthropic: MAINT_LLM_MODEL=anthropic/claude-haiku-5-5 and MAINT_LLM_API_KEY.
+MAINT_LLM_BASE_URL is not used. No sampling parameters are sent (Haiku 5.5
+rejects temperature=0). Responses containing only thinking, refusals and
+truncated answers are errors, not empty proposals.
 
 Amazon Bedrock with IAM (no API key): MAINT_LLM_MODEL=bedrock/<model or
 inference profile id>, e.g. bedrock/global.openai.gpt-6-luna. Calls the
@@ -29,6 +34,36 @@ import httpx
 
 
 BEDROCK_PREFIX = "bedrock/"
+ANTHROPIC_PREFIX = "anthropic/"
+
+
+def _make_anthropic_complete(model_id: str, api_key: str, timeout: float, on_usage=None):
+    """Native Messages API: no sampling settings, no client-side resends."""
+    if not api_key:
+        raise ValueError("MAINT_LLM_API_KEY is required for Anthropic")
+
+    def complete(prompt: str) -> str:
+        resp = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            json={"model": model_id, "max_tokens": 8192,
+                  "messages": [{"role": "user", "content": prompt}]},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        usage = data.get("usage")
+        if on_usage and usage:
+            on_usage({"prompt_tokens": usage.get("input_tokens"),
+                      "completion_tokens": usage.get("output_tokens")})
+        text = "".join(block.get("text", "") for block in data.get("content", [])
+                       if block.get("type") == "text")
+        stop = data.get("stop_reason")
+        if stop != "end_turn" or not text.strip():
+            raise RuntimeError(f"Anthropic {model_id} gave no complete answer (stop_reason={stop}, {len(text)} chars)")
+        return text
+
+    return complete
 
 
 # Reasoning models can think for minutes; Bedrock keeps generating (and billing)
@@ -74,6 +109,9 @@ def make_complete(timeout: float = 60.0, *, base_url: str | None = None, model: 
     model = os.getenv("MAINT_LLM_MODEL") if model is None else model
     if model and model.startswith(BEDROCK_PREFIX):
         return _make_bedrock_complete(model[len(BEDROCK_PREFIX):], timeout, on_usage)
+    if model and model.startswith(ANTHROPIC_PREFIX):
+        key = os.getenv("MAINT_LLM_API_KEY", "") if api_key is None else api_key
+        return _make_anthropic_complete(model[len(ANTHROPIC_PREFIX):], key, timeout, on_usage)
     if not base_url or not model:
         return None
     api_key = os.getenv("MAINT_LLM_API_KEY", "not-needed") if api_key is None else (api_key or "not-needed")

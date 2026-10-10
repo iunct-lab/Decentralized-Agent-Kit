@@ -38,11 +38,12 @@
    - Settings → Branches → `main` の branch protection で **CI を必須チェック** に
 4. **LLM プロバイダ設定（provider 中立・実行時選択）**: reasoning 系ワークフロー
    （tech-watch / feature-sync / charter-review）と triage の LLM リスク評価は、以下の
-   env で任意のプロバイダを選ぶ（Gemini / Ollama / OpenAI / Anthropic すべて OpenAI 互換で叩ける）:
+   env で任意のプロバイダを選ぶ（Gemini / Ollama / OpenAI は OpenAI 互換、Anthropic は native Messages API）:
    - `gh variable set MAINT_LLM_BASE_URL --body "<base url>"`
    - `gh variable set MAINT_LLM_MODEL --body "<model id>"`
    - `gh secret set MAINT_LLM_API_KEY --body "<api key>"`（Ollama は任意の値でOK）
    - プリセット例（in/out per 1M tok、2026-10-01 確認。候補の比較・無料枠の条件・月額の見積もり・切り替えと元に戻す手順は [model-choice.md](model-choice.md)）:
+     - **Anthropic 直接 API（Haiku 5.5）**: `MAINT_LLM_MODEL=anthropic/claude-haiku-5-5` と Actions secret `MAINT_LLM_API_KEY`。`MAINT_LLM_BASE_URL` は不要。`MAINT_AWS_ROLE_ARN` を削除して Bedrock の認証手順を無効にする。ホストでの Parameter Store 運用は [anthropic.md](../getting-started/anthropic.md)。キーをローカルファイルへ保存しない。
      - **OpenAI**: `https://api.openai.com/v1` / `gpt-6-luna`（$0.10/$0.50）。`gpt-5.6-luna` $0.20/$1.20、`gpt-5-nano` $0.05/$0.40
      - **Gemini**: `https://generativelanguage.googleapis.com/v1beta/openai` / `gemini-3.5-flash-lite`（$0.30/$2.50、AI Studio 無料枠あり。無料枠の入出力は Google の製品改善に使われうる）。`gemini-3.5-flash` $1.50/$9.00、`gemini-3.8-flash` $0.75/$3.75（2026-12-31 まで。2027-01-01 から $1.50/$7.50）
      - **Ollama**: `http://<host>:11434/v1` / `llama3.1:8b`（無料・要ホスト）
