@@ -6,7 +6,10 @@ ID of each allowed tool call. A small mcp 2.x MCPServer runs in this test (mcp-s
 """
 import asyncio
 import logging
+import os
 import socket
+import subprocess
+import sys
 import threading
 import time
 
@@ -21,6 +24,7 @@ from google.adk.tools.mcp_tool import McpToolset, StreamableHTTPConnectionParams
 from google.genai import types
 from mcp.server.mcpserver import Context, MCPServer
 from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
@@ -125,3 +129,28 @@ def test_permission_logs_trace_id(server_url, spans, caplog):
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("tool_call ")]
     assert lines == [f"tool_call name=echo trace_id={_traceparent_trace_id()}"]
     assert _traceparent_trace_id() == _tool_span_trace_id(spans)
+
+
+def test_permission_line_reaches_stderr():
+    """No logging is configured at startup (uvicorn sets up only its own loggers); the line
+    still reaches stderr. Outside any span the trace ID is `-`."""
+    out = subprocess.run(
+        [sys.executable, "-c", "from dak_agent.permission import _log_tool_call; _log_tool_call('echo')"],
+        capture_output=True, text=True, check=True)
+    assert "tool_call name=echo trace_id=-" in out.stderr.splitlines()
+
+
+def test_setup_telemetry_installs_provider():
+    env = {k: v for k, v in os.environ.items() if not k.startswith("LANGFUSE_")}
+    code = ("from opentelemetry import trace; from opentelemetry.sdk.trace import TracerProvider; "
+            "from dak_agent.patches import setup_telemetry; setup_telemetry(); "
+            "print(isinstance(trace.get_tracer_provider(), TracerProvider))")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True, env=env)
+    assert out.stdout.strip() == "True"
+
+
+def test_existing_provider_is_kept(spans):
+    provider = trace.get_tracer_provider()
+    assert isinstance(provider, TracerProvider)
+    ensure_tracer_provider()
+    assert trace.get_tracer_provider() is provider
