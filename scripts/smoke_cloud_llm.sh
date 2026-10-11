@@ -25,11 +25,12 @@ KEEP="${1:-}"
 
 # A credential can come from the shell env or from .env (compose reads both).
 # test_minimal_overhead_matches_direct_call also calls the model from the host,
-# which sees the shell env only: export the credential to run it.
+# which sees the shell env only, so it skips when a credential is in .env.
+export DAK_SMOKE_CREDENTIAL_IN_DOTENV=0
 has_credential() {
     local var="$1"
     [ -n "${!var:-}" ] && return 0
-    grep -Eq "^${var}=.+" .env
+    grep -Eq "^${var}=.+" .env && DAK_SMOKE_CREDENTIAL_IN_DOTENV=1
 }
 
 echo "==> Model: ${CLOUD_MODEL_NAME}"

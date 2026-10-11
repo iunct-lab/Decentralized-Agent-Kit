@@ -120,20 +120,19 @@ def test_minimal_overhead_matches_direct_call(agent):
     the fixed bound is in test_minimal_overhead.py with the fake LLM."""
     if not SMOKE_MODEL:
         pytest.skip("set CLOUD_MODEL_NAME or LOCAL_MODEL_NAME to the stack's model (the smoke runners export it)")
+    if os.getenv("DAK_SMOKE_CREDENTIAL_IN_DOTENV") == "1":
+        # The stack reads .env (compose); this direct call runs on the host and does not.
+        pytest.skip("the direct call reads credentials from the shell env only: export them instead of .env")
     litellm = pytest.importorskip("litellm", reason="install the smoke group: uv sync --group smoke")
 
     # What ADK sends for this output schema (google/adk/models/lite_llm.py, _to_litellm_response_format)
     strict_schema = {**OVERHEAD_SCHEMA, "additionalProperties": False}
-    try:
-        direct = litellm.completion(
-            model=SMOKE_MODEL,
-            messages=[{"role": "system", "content": OVERHEAD_INSTRUCTION}, {"role": "user", "content": OVERHEAD_PROMPT}],
-            response_format={"type": "json_schema",
-                             "json_schema": {"name": "response", "strict": True, "schema": strict_schema}},
-        )
-    except Exception as e:
-        # Unlike the stack (compose also reads .env), this call runs on the host.
-        pytest.fail(f"direct call failed; it reads credentials from the shell env only, not .env: {e}")
+    direct = litellm.completion(
+        model=SMOKE_MODEL,
+        messages=[{"role": "system", "content": OVERHEAD_INSTRUCTION}, {"role": "user", "content": OVERHEAD_PROMPT}],
+        response_format={"type": "json_schema",
+                         "json_schema": {"name": "response", "strict": True, "schema": strict_schema}},
+    )
 
     resp = httpx.post(f"{AGENT_URL}/run", json={
         "app_name": APP_NAME,
