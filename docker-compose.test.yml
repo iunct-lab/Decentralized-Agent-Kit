@@ -26,6 +26,17 @@ services:
       timeout: 5s
       retries: 15
 
+  # tests/integration/test_a2a.py -k signature: the Agent Card signing key pair,
+  # made each time the stack comes up (no key in the repository). The host can
+  # read the public key, which the tests verify the served cards with.
+  card-keygen:
+    build: ./agent
+    entrypoint: []
+    command: ["uv", "run", "python", "/tools/make_card_keys.py", "/keys"]
+    volumes:
+      - ./tests/integration/tools:/tools:ro
+      - ./tests/integration/.keys:/keys
+
   agent:
     environment:
       - MODEL_NAME=openai/fake-default
@@ -38,10 +49,16 @@ services:
       # The stack's own mcp-server stands in for a caller's MCP server (dak:tools.mcp_servers).
       - DAK_ALLOWED_MCP_URLS=http://mcp-server:8000/mcp,http://caller-mcp-unreachable:8000/mcp
       - DAK_ALLOWED_INSPECTION_URLS=http://inspect-server:8080/validate
+      - AGENT_CARD_SIGNING_KEY_FILE=/keys/card-signing.pem
+      - AGENT_CARD_SIGNING_KID=test-1
+    volumes:
+      - ./tests/integration/.keys:/keys:ro
+    # map form: docker-compose.yml's list form is merged into it
     depends_on:
-      - postgres
-      - fake-llm
-      - inspect-server
+      postgres: {condition: service_started}
+      fake-llm: {condition: service_started}
+      inspect-server: {condition: service_started}
+      card-keygen: {condition: service_completed_successfully}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/list-apps')"]
       interval: 5s
@@ -144,9 +161,14 @@ services:
       - OPENAI_API_KEY=dummy
       - AGENT_NAME=dak_peer
       - AGENT_PUBLIC_URL=http://agent-peer.localhost:8000/a2a/dak_agent
+      - AGENT_CARD_SIGNING_KEY_FILE=/keys/card-signing.pem
+      - AGENT_CARD_SIGNING_KID=test-1
+    volumes:
+      - ./tests/integration/.keys:/keys:ro
     depends_on:
-      - postgres
-      - fake-llm
+      postgres: {condition: service_started}
+      fake-llm: {condition: service_started}
+      card-keygen: {condition: service_completed_successfully}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/list-apps')"]
       interval: 5s
@@ -169,10 +191,12 @@ services:
       - ENABLE_A2A_CONSUMER=true
     volumes:
       - ./tests/integration/fixtures/agent_config.consumer.yaml:/app/agent_config.yaml
+      - ./tests/integration/.keys:/keys:ro
+    # The consumer fetches agent-peer's card at startup to check its signature
     depends_on:
-      - postgres
-      - fake-llm
-      - agent-peer
+      postgres: {condition: service_started}
+      fake-llm: {condition: service_started}
+      agent-peer: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/list-apps')"]
       interval: 5s
