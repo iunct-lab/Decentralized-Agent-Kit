@@ -124,8 +124,12 @@ def test_traceparent_matches_tool_span(server_url, spans):
 
 
 def test_permission_logs_trace_id(server_url, spans, caplog):
-    with caplog.at_level(logging.INFO, logger="dak_agent.permission"):
+    log = logging.getLogger("dak_agent.permission")
+    log.addHandler(caplog.handler)  # the logger does not propagate to caplog's root handler
+    try:
         _call_echo(server_url)
+    finally:
+        log.removeHandler(caplog.handler)
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("tool_call ")]
     assert lines == [f"tool_call name=echo trace_id={_traceparent_trace_id()}"]
     assert _traceparent_trace_id() == _tool_span_trace_id(spans)
@@ -138,6 +142,14 @@ def test_permission_line_reaches_stderr():
         [sys.executable, "-c", "from dak_agent.permission import _log_tool_call; _log_tool_call('echo')"],
         capture_output=True, text=True, check=True)
     assert "tool_call name=echo trace_id=-" in out.stderr.splitlines()
+
+
+def test_permission_line_once_with_root_logging():
+    """An entrypoint that configures root logging does not get the line twice."""
+    code = ("import logging; logging.basicConfig(level=logging.INFO, format='%(message)s'); "
+            "from dak_agent.permission import _log_tool_call; _log_tool_call('echo')")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert out.stderr.splitlines().count("tool_call name=echo trace_id=-") == 1
 
 
 def test_setup_telemetry_installs_provider():
