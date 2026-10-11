@@ -22,7 +22,7 @@ from pydantic import ConfigDict
 from .a2a_peer_manager import get_a2a_sub_agents
 from .adaptive_agent import AdaptiveAgent
 from .builtin_tools import make_builtin_tools
-from .config import get_litellm_model_name, load_agent_config, resolve_model_name
+from .config import get_litellm_model_name, load_agent_config, resolve_model_name, skills_dirs_from_env
 from .enforcer import ENFORCER_INSTRUCTION, enforcer_validator
 from .explorer import DELEGATION_INSTRUCTION, make_explorer_tool
 from .harness import (
@@ -104,11 +104,8 @@ if a2a_sub_agents:
     logger.info(f"Loaded {len(a2a_sub_agents)} A2A peer agent(s)")
 
 # --- Skill directories (colon-separated) ---
-skills_dirs_env = os.getenv("AGENT_SKILLS_DIRS")
-skills_dirs = None
-if skills_dirs_env:
-    skills_dirs = [d.strip() for d in skills_dirs_env.split(":") if d.strip()]
-    logger.info(f"Configured skill directories: {skills_dirs}")
+skills_dirs = skills_dirs_from_env()
+logger.info(f"Configured skill directories: {skills_dirs}")
 
 root_agent = AdaptiveAgent(
     model=model,

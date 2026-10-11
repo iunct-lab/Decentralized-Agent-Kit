@@ -10,7 +10,9 @@ os.environ.setdefault("SESSION_SERVICE_URI", "memory://")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from dak_agent.server import app  # noqa: E402
+# Importing the server lists the skills in agent.json; keep the checked-in card as it is
+with patch("dak_agent.agent_card.add_skills_in_place", return_value=0):
+    from dak_agent.server import app  # noqa: E402
 
 CONFIRMATION = {
     "author": "dak_agent",

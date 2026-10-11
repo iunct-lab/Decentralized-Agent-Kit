@@ -18,7 +18,7 @@ from pydantic import ConfigDict, Field, PrivateAttr
 import inspect
 
 from . import builtin_tools, call_config, plan_mode, remote_tools, skill_tools
-from .config import get_litellm_model_name, load_agent_config
+from .config import DEFAULT_SKILLS_DIR, get_litellm_model_name, load_agent_config
 from .errors import PaymentRequiredError
 from .harness import HarnessSettings, _result_text
 from .handlers.payment_handler import PaymentHandler
@@ -123,11 +123,9 @@ class AdaptiveAgent(LlmAgent):
 
         super().__init__(**init_kwargs)
 
-        # Skill registry. Default skills dir is agent/skills; AGENT_SKILLS_DIRS
-        # (resolved by the caller) may add more.
-        current_dir = os.path.dirname(__file__)
+        # Skill registry. The caller resolves AGENT_SKILLS_DIRS (config.skills_dirs_from_env).
         if not skills_dirs:
-            skills_dirs = [os.path.abspath(os.path.join(current_dir, "..", "skills"))]
+            skills_dirs = [DEFAULT_SKILLS_DIR]
         else:
             skills_dirs = [d if os.path.isabs(d) else os.path.abspath(d) for d in skills_dirs]
 
