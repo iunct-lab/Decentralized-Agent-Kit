@@ -1,3 +1,4 @@
+# ローカル実行モードの検討・見送り理由は docs/design/local-mode.md を参照（PBI #15）
 import requests
 import json
 from typing import Dict, Any, Iterator, List, Optional
