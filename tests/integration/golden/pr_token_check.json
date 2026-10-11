@@ -1,0 +1,21 @@
+{
+  "name": "pr_token_check",
+  "prompt": "What skills do you have?",
+  "model": "fake-default",
+  "script": [
+    {
+      "tool_call": {
+        "name": "list_skills",
+        "args": {}
+      }
+    },
+    {
+      "text": "I have a variety of skills that I can use to assist you. Here are some of the skills that I have:\n\n*   **Curated Skills (Recommended)**\n\n    *   x402: Fetch external HTTP resources. When a resource answers HTTP 402 (x402), report the payment requirement instead of paying.\n    *   filesystem: Manage files and directories (list, read, write, search).\n    *   dependency_maintenance: Triage a dependency update: classify the semver bump, assess changelog risk, and recommend auto-merge vs. human review. Dogfoods the repo's own maintenance policy.\n    *   solana_wallet: Manage a Solana blockchain wallet for AP2/x402 payments. Check balance, send SOL, and verify transactions.\n*   **Individual Remote Tools**\n\n    *   deep_think: A tool for deep thinking and complex reasoning. Use this when the user asks for a deep analysis or \"deep think\" on a topic. Returns a thought process.\n    *   edit_file: Replace an exact string in a file. Args: path, old_string, new_string, replace_all.\n    *   get_project_instructions: Read the project's instruction files (AGENTS.md, else CLAUDE.md, else CONTEXT.md in each directory) from the workspace root down to path, root first: a later (deeper) section overrides an earlier one. Always reads the server's workspace (/projects), never a session sandbox. Args: path.\n    *   grep: Search file contents for lines matching a regular expression. Args: pattern, path, glob_pattern, ignore_case.\n    *   list_files: List files and directories in a given path. Args: path.\n    *   load_memory: Read the saved memory, capped at MCP_MEMORY_MAX_CHARS (the newest part is kept). Always reads the server's workspace (/projects), never a session sandbox. Args: scope.\n    *   read_file: Read the content of a file. For large files, read a range of lines. Args: path, offset, limit.\n    *   run_command: Execute a shell command. Args: command.\n    *   save_memory: Remember something across sessions by appending it to a memory file. Always writes the server's workspace (/projects), never a session sandbox. Args: text, scope.\n    *   search_files: Search for files matching a glob pattern. Args: pattern, path.\n    *   write_file: Write content to a file. Overwrites existing content. Args: path, content.\n\nI can use these skills to help you with various tasks. Please let me know what you need help with, and I'll do my best to assist you."
+    }
+  ],
+  "expect": {
+    "function_calls": [
+      "list_skills"
+    ]
+  }
+}
