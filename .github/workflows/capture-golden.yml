@@ -78,6 +78,9 @@ jobs:
 
       - name: Capture golden
         working-directory: tests/integration
+        env:
+          # CPU 推論の 1 ターンは 120 秒の既定を超えることがある。nightly-eval と同じ値。
+          DAK_AGENT_RUN_TIMEOUT: "600"
         run: |
           uv sync
           uv run python tools/capture_golden.py \

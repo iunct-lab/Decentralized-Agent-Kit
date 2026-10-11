@@ -102,3 +102,10 @@ def test_capture_golden_checks_the_token_before_installing_ollama():
     for token, code in (("", 1), ("set", 0)):
         env = {"PATH": os.environ["PATH"], "DAK_PROJECT_TOKEN": token}
         assert subprocess.run(["bash", "-c", run], env=env, capture_output=True).returncode == code
+
+
+def test_capture_golden_agent_timeout_matches_nightly_eval():
+    # Under the 120s default a CPU-only turn timed out (run 38119451908).
+    assert _key("capture-golden.yml", "DAK_AGENT_RUN_TIMEOUT", "Capture golden") == _key(
+        "nightly-eval.yml", "DAK_AGENT_RUN_TIMEOUT", "Run gated real-LLM smoke (tolerant)"
+    )
