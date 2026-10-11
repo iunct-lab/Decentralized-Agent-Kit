@@ -29,6 +29,11 @@ from .call_config import ALLOWED_MCP_URLS_ENV
 
 
 logger = logging.getLogger(__name__)
+# Uvicorn configures only its own loggers; the tool_call line goes to stderr on
+# its own, like the mcp-server's line it is matched with.
+if not logger.handlers:
+    logger.addHandler(logging.StreamHandler())
+    logger.setLevel(logging.INFO)
 
 Action = Literal["allow", "ask", "deny"]
 
