@@ -83,13 +83,14 @@ Supports three authentication modes:
 
 Agent-to-Agent communication endpoints (A2A 1.0 over JSON-RPC; 0.3 peers are still accepted):
 
-- `GET /a2a/dak_agent/.well-known/agent-card.json`: Agent Card (written by `entrypoint.sh`; `AGENT_NAME` sets the card's `name`, `AGENT_PUBLIC_URL` the endpoint it advertises)
+- `GET /a2a/dak_agent/.well-known/agent-card.json`: Agent Card (written by `entrypoint.sh`; `AGENT_NAME` sets the card's `name`, `AGENT_PUBLIC_URL` the endpoint it advertises; `skills` lists the skills loaded from `AGENT_SKILLS_DIRS`)
 - `POST /a2a/dak_agent`: JSON-RPC (`SendMessage`, `SendStreamingMessage`, `GetTask`, … and the 0.3 `message/send` / `message/stream`)
 
 The path is the ADK app's directory (`dak_agent`), not `AGENT_NAME`. The gap to the A2A specification and the version policy: [docs/architecture/a2a.md](../docs/architecture/a2a.md).
 
 Card signatures (off by default): with `AGENT_CARD_SIGNING_KEY_FILE` (an EC P-256 private key PEM file) set, the card is served with one ES256 signature (`kid` = `AGENT_CARD_SIGNING_KID`).
 A consumer checks a peer's card with the public key PEM file in that peer's `a2a_peers[].card_public_key_file`, and puts the result (`verified` / `unsigned` / `invalid` / `unchecked`) first in the sub-agent's description; no result drops the peer.
+A consumer also adds the peer card's description and skills to the sub-agent's description (cut at 1024 characters), so `a2a_peers[].capabilities` is optional.
 Key commands and the four states: [docs/architecture/a2a.md](../docs/architecture/a2a.md) §7.
 
 ## API Endpoints
