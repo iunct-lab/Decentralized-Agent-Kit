@@ -28,8 +28,8 @@ services:
 
   # tests/integration/test_a2a.py -k signature: the Agent Card signing key pair,
   # made when the stack comes up and tests/integration/.keys/ (gitignored) has
-  # none yet, so a fresh checkout or CI gets a new pair. No key is in the repository. The host can
-  # read the public key, which the tests verify the served cards with.
+  # none yet, so a fresh checkout or CI gets a new pair. No key is in the repository.
+  # agent and agent-peer sign with it; agent-consumer checks agent-peer's card.
   card-keygen:
     build: ./agent
     entrypoint: []
