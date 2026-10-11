@@ -24,6 +24,8 @@ KEEP="${1:-}"
 [ -f .env ] || touch .env
 
 # A credential can come from the shell env or from .env (compose reads both).
+# test_minimal_overhead_matches_direct_call also calls the model from the host,
+# which sees the shell env only: export the credential to run it.
 has_credential() {
     local var="$1"
     [ -n "${!var:-}" ] && return 0
