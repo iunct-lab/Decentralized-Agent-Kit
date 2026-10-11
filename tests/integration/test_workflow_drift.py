@@ -102,3 +102,13 @@ def test_capture_golden_checks_the_token_before_installing_ollama():
     for token, code in (("", 1), ("set", 0)):
         env = {"PATH": os.environ["PATH"], "DAK_PROJECT_TOKEN": token}
         assert subprocess.run(["bash", "-c", run], env=env, capture_output=True).returncode == code
+
+
+@pytest.mark.parametrize("component", ["bff", "mcp-server"])
+def test_dockerfile_copies_python_version_before_uv_sync(component):
+    # Without .python-version, uv picks the newest Python that requires-python
+    # allows (CPython 3.15 for bff) instead of the image's, and fails to build
+    # pydantic-core from source (capture-golden run 38119009119, #625).
+    lines = (WORKFLOWS.parents[1] / component / "Dockerfile").read_text().splitlines()
+    sync = next(i for i, line in enumerate(lines) if "uv sync" in line)
+    assert any(line.startswith("COPY") and ".python-version" in line for line in lines[:sync])
