@@ -8,7 +8,6 @@ an a2a-sdk 1.x client and with a 0.3 peer. The version policy is in
 docs/architecture/a2a.md.
 """
 import asyncio
-import os
 import uuid
 
 import httpx
@@ -19,8 +18,6 @@ from conftest import AGENT_ENFORCER_URL, AGENT_URL, APP_NAME, event_texts, syste
 MODEL = "fake-default"
 AGENT_CARD_URL = f"{AGENT_URL}/a2a/{APP_NAME}/.well-known/agent-card.json"
 A2A_RPC_URL = f"{AGENT_URL}/a2a/{APP_NAME}"
-# Made by the card-keygen service when the stack comes up and none is there (docker-compose.test.yml)
-CARD_PUBLIC_KEY = os.path.join(os.path.dirname(__file__), ".keys", "card-signing.pub.pem")
 
 
 @pytest.fixture
@@ -48,16 +45,22 @@ def test_agent_card_declares_a2a_1_0_jsonrpc_interface(agent_card):
     assert agent_card["url"] == interfaces[("JSONRPC", "1.0")]  # what a 0.3 peer reads
 
 
-def test_agent_card_signature_verifies_with_the_test_key(agent_card):
+def test_agent_card_signature_is_es256_with_the_test_kid(agent_card):
     """`agent` has AGENT_CARD_SIGNING_KEY_FILE set: the card it serves carries one
-    ES256 signature that verifies with the public key (docs/architecture/a2a.md §7)."""
-    from a2a.client.card_resolver import parse_agent_card
-    from a2a.utils.signing import create_signature_verifier
+    ES256 signature with the configured kid (docs/architecture/a2a.md §7).
+    That such a card verifies with the public key (a2a-sdk's
+    create_signature_verifier) is checked by a DAK, not here: agent-consumer
+    verifies agent-peer's card (test_delegation_to_peer_with_non_default_name).
+    This environment has no PyJWT, which a2a-sdk's verifier needs."""
+    import base64
+    import json
 
-    assert len(agent_card.get("signatures", [])) == 1, agent_card
-    with open(CARD_PUBLIC_KEY, "rb") as f:
-        public_pem = f.read()
-    create_signature_verifier(lambda kid, jku: public_pem, ["ES256"])(parse_agent_card(agent_card))
+    signatures = agent_card.get("signatures", [])
+    assert len(signatures) == 1, agent_card
+    protected = signatures[0]["protected"]
+    header = json.loads(base64.urlsafe_b64decode(protected + "=" * (-len(protected) % 4)))
+    assert header == {"kid": "test-1", "alg": "ES256", "typ": "JOSE"}
+    assert signatures[0]["signature"]
 
 
 def test_agent_card_without_a_key_has_no_signatures():
