@@ -7,6 +7,11 @@ import os
 from typing import List, Optional
 from urllib.parse import urlparse
 
+import httpx
+from a2a.client.card_resolver import parse_agent_card
+from a2a.types import AgentCard
+from a2a.utils.signing import NoSignatureError, create_signature_verifier
+
 from .config import load_agent_config
 
 logger = logging.getLogger(__name__)
@@ -22,14 +27,17 @@ except ImportError:
 class A2APeerConfig:
     """Configuration for a single A2A peer."""
 
-    def __init__(self, name: str, url: str, capabilities: List[str] = None, card_url: Optional[str] = None):
+    def __init__(self, name: str, url: str, capabilities: List[str] = None, card_url: Optional[str] = None,
+                 card_public_key_file: Optional[str] = None):
         self.name = name
         self.url = url
         self.capabilities = capabilities or []
         self.card_url = card_url
+        self.card_public_key_file = card_public_key_file
 
     def __repr__(self):
-        return f"A2APeer({self.name}, {self.url}, card_url={self.card_url}, caps={self.capabilities})"
+        return (f"A2APeer({self.name}, {self.url}, card_url={self.card_url}, "
+                f"card_public_key_file={self.card_public_key_file}, caps={self.capabilities})")
 
 
 def load_a2a_peers_from_config(config_path: str = None) -> List[A2APeerConfig]:
@@ -42,6 +50,7 @@ def load_a2a_peers_from_config(config_path: str = None) -> List[A2APeerConfig]:
             url=peer_config.get("url"),
             capabilities=peer_config.get("capabilities", []),
             card_url=peer_config.get("card_url"),
+            card_public_key_file=peer_config.get("card_public_key_file"),
         )
         peers.append(peer)
         logger.info(f"Loaded A2A peer: {peer}")
@@ -69,6 +78,45 @@ def resolve_agent_card_url(peer: A2APeerConfig) -> str:
     return url + CARD_PATH
 
 
+def fetch_agent_card(card_url: str, timeout: float = 10.0) -> AgentCard:
+    """The peer's card, fetched separately from the one ADK fetches on the
+    first delegation, so the signature can be checked before the agent decides."""
+    resp = httpx.get(card_url, timeout=timeout)
+    resp.raise_for_status()
+    return parse_agent_card(resp.json())
+
+
+def check_card_signature(card: Optional[AgentCard], public_key_file: Optional[str],
+                         fetch_error: Optional[str]) -> str:
+    """One line for the sub-agent's description and the log:
+    verified (kid) / unsigned / invalid (error) / unchecked (reason).
+
+    Any failure other than a missing signature is `invalid`, not only
+    InvalidSignaturesError: a broken signature fails while being decoded.
+    A public key file that cannot be read is a configuration mistake and raises.
+    """
+    if not public_key_file:
+        return "card signature: unchecked (no card_public_key_file)"
+    with open(public_key_file, "rb") as f:
+        public_pem = f.read()
+    if card is None:
+        return f"card signature: unchecked (card not fetched: {fetch_error})"
+    tried = []
+
+    def key_provider(kid, jku):  # one key per peer; jku is not followed
+        tried.append(kid)
+        return public_pem
+
+    try:
+        create_signature_verifier(key_provider, ["ES256"])(card)
+    except NoSignatureError:
+        return "card signature: unsigned"
+    except Exception as e:
+        return f"card signature: invalid ({type(e).__name__})"
+    # The verifier stops at the first signature that passes
+    return f"card signature: verified (kid={tried[-1]})"
+
+
 def create_remote_a2a_agents(peers: List[A2APeerConfig]) -> List["RemoteA2aAgent"]:
     """Create RemoteA2aAgent instances from peer configurations."""
     if not A2A_AVAILABLE:
@@ -77,12 +125,22 @@ def create_remote_a2a_agents(peers: List[A2APeerConfig]) -> List["RemoteA2aAgent
 
     agents = []
     for peer in peers:
+        agent_card_url = resolve_agent_card_url(peer)
+        card, fetch_error = None, None
+        if peer.card_public_key_file:  # without a key there is nothing to check the card with
+            try:
+                card = fetch_agent_card(agent_card_url)
+            except Exception as e:
+                fetch_error = type(e).__name__
+        # Outside the try below: an unreadable public key stops startup instead of dropping the peer
+        status = check_card_signature(card, peer.card_public_key_file, fetch_error)
+        log = logger.warning if status.startswith("card signature: invalid") else logger.info
+        log(f"A2A peer {peer.name}: {status}")
         try:
             caps_str = ", ".join(peer.capabilities) if peer.capabilities else "general purpose"
-            description = f"Remote agent '{peer.name}' at {peer.url}. Capabilities: {caps_str}"
+            description = f"{status}. Remote agent '{peer.name}' at {peer.url}. Capabilities: {caps_str}"
 
-            agent_card_url = resolve_agent_card_url(peer)
-
+            # ADK still gets the URL: its own https / same-origin checks stay
             agent = RemoteA2aAgent(
                 name=peer.name,
                 agent_card=agent_card_url,
