@@ -36,6 +36,8 @@ EXPOSE 8000
 
 # Use entrypoint to dynamically generate agent.json from AGENT_PUBLIC_URL
 ENTRYPOINT ["/app/entrypoint.sh"]
+# MCP 2026-07-28（#629）。旧仕様に戻すには 0
+ENV ADK_ENABLE_MCP_MODERN_PROTOCOL=1
 # ADK の app に /approvals を足した入口（dak_agent/server.py）。セッションの保存先は
 # SESSION_SERVICE_URI（docker-compose.yml）。google-adk v2 は async SQLAlchemy を使うため
 # async ドライバ(asyncpg)の URL が要る
