@@ -182,6 +182,7 @@ a2a_peers:
   - name: "dak_peer"                              # sub-agent の名前（transfer_to_agent で使う）
     url: "https://peer.example/a2a/dak_agent"     # 相手の A2A 窓口。カードはその下（https。下の段落）
     capabilities: ["..."]
+    card_public_key_file: "/run/secrets/peer-card.pub.pem"  # 相手のカードの署名を確かめる公開鍵（下の「カードの署名と検証」）。書かなければ unchecked
 ```
 
 ADK（2.11）の `RemoteA2aAgent` は、ネットワークから取るカードの URL と、カードが示す RPC の URL の両方に **https** を求める（http はループバックの名前 `localhost`・`*.localhost`・`127.0.0.1` などだけ。外す設定は無い）。
@@ -190,6 +191,50 @@ ADK（2.11）の `RemoteA2aAgent` は、ネットワークから取るカード�
 
 DAK の窓口のパスは、相手の `AGENT_NAME` ではなく、ADK のアプリ（エージェントのディレクトリ）の名前 `dak_agent` で決まる。`AGENT_NAME` はカードの `name` を変えるだけ。
 fake-LLM の構成の `agent-consumer` → `agent-peer`（カードの名前は `dak_peer`。http で呼ぶため、compose のネットワークの別名 `agent-peer.localhost` を使う）で、この委譲を `tests/integration/test_a2a.py::test_delegation_to_peer_with_non_default_name` が確かめる。
+
+### カードの署名と検証
+
+PBI #638。A2A 1.0 の署名付き Agent Card（仕様 §8.4。採否は [agent_discovery.md](agent_discovery.md) §6、PBI #318）。
+
+**自分のカードに署名する**（既定は署名しない）:
+
+| 環境変数 | 意味 |
+|---|---|
+| `AGENT_CARD_SIGNING_KEY_FILE` | 署名の秘密鍵の PEM ファイルのパス（EC P-256。鍵の値を環境変数に入れる口は無い）。無ければ署名しない |
+| `AGENT_CARD_SIGNING_KID` | 署名の保護ヘッダの `kid`。既定は `AGENT_NAME`、それも無ければ `dak_agent` |
+
+アルゴリズムは ES256 だけ（設定にしない）。`jku` は付けない。
+`entrypoint.sh` が書いた `agent.json` に、`agent/dak_agent/server.py` が ADK の読む前（`get_fast_api_app` の前）に `agent/dak_agent/agent_card.py` の `sign_card_from_env` で署名を 1 件足す。
+鍵のファイルが読めない・PEM でないときは起動を止める（設定ミスを黙って無署名にしない）。
+
+鍵の作り方（秘密鍵と、相手に渡す公開鍵）:
+
+```bash
+openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt -out card-signing.pem
+openssl ec -in card-signing.pem -pubout -out card-signing.pub.pem
+```
+
+秘密鍵はリポジトリ・設定ファイル・Issue に置かない。秘密管理（SSM など）からどう取り出して PEM ファイルにするかはデプロイ構成の仕事で、DAK はファイルのパスを受けるだけ。
+鍵を替えるときは、秘密鍵のファイルと相手の設定の公開鍵を書き換えて、両方を再起動する（複数の `kid` を同時には受けない）。
+
+**相手のカードを確かめる**: `a2a_peers` の相手ごとに、相手の公開鍵の PEM ファイルを `card_public_key_file` に書く（上の YAML）。
+書いた相手だけ、任せる側が起動時に相手のカードを取って検証する（`agent/dak_agent/a2a_peer_manager.py` の `fetch_agent_card` と `check_card_signature`。`create_remote_a2a_agents` が呼ぶ）。
+検証のためのカードは ADK が最初の委譲で取るものとは別に取り、`RemoteA2aAgent` には今どおりカードの URL を渡す（ADK の https・同じ origin の確かめは残る）。起動の後に取り直し・検証し直しはしない（再起動で直る）。
+
+結果は 4 つのどれかで、同じ文を相手の sub-agent の `description` の先頭とログに出す。モデルは `transfer_to_agent` の前にこの `description` を読む:
+
+| 文 | 意味 | ログ | エージェントから見ると |
+|---|---|---|---|
+| `card signature: verified (kid=<kid>)` | 設定の公開鍵で通った。`kid` は通った署名のもの | info | 設定した相手が署名したカード |
+| `card signature: unsigned` | カードに署名が無い（`NoSignatureError`） | info | 相手が署名していない。成りすましかどうかは分からない |
+| `card signature: invalid (<例外の名前>)` | 署名はあるが通らない。改ざん・別の鍵・壊れた署名（`InvalidSignaturesError` に限らない） | warning | 設定の鍵の持ち主のカードではない |
+| `card signature: unchecked (<理由>)` | 確かめていない。理由は `no card_public_key_file`（公開鍵を書いていない）か `card not fetched: <例外の名前>`（起動時にカードを取れなかった） | info | 確かめた結果が無い |
+
+検証の結果で接続を切らない。`invalid` と `unsigned` の相手も sub-agent に残り、任せるかはエージェントが決める（憲章の原則 1「System ENABLES, Agent DECIDES」、PBI #318 の決定）。
+運用者が止めたいときは、その相手を `a2a_peers` から外す。相手の公開鍵のファイルが読めないのは設定ミスとして起動を止める。
+
+fake-LLM の構成では、`docker-compose.test.yml` の `card-keygen` が起動のたびに鍵の組を作って `tests/integration/.keys/`（gitignore）に置き、`agent`・`agent-peer` がその鍵で署名し、`agent-consumer` が `agent-peer` を `verified` にする。
+署名なしの代表は `agent-enforcer`。`tests/integration/test_a2a.py -k signature` と `-k delegation` が確かめる。
 
 ## 8. 適合テスト（CI の a2a-tck）
 
