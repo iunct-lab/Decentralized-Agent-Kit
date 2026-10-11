@@ -65,6 +65,11 @@ class TestModeManager(unittest.TestCase):
         manager = ModeManager(model_name="gemini/gemini-2.5-flash")
         self.assertGreater(manager.max_context_tokens, ModeManager.MODEL_MAX_TOKENS["default"])
 
+    def test_context_window_tests_use_bundled_model_map(self):
+        """The window assertions here hold for the locked litellm, not upstream's live map (conftest.py, #618)."""
+        from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map_source_info
+        self.assertEqual(get_model_cost_map_source_info()["source"], "local")
+
     def test_bedrock_claude_resolves_context_window(self):
         """Bedrock inference-profile IDs resolve via litellm's model map."""
         manager = ModeManager(model_name="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0")
