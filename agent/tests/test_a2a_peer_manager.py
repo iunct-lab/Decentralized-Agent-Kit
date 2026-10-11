@@ -55,7 +55,11 @@ from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
 
 from dak_agent import a2a_peer_manager  # noqa: E402
-from dak_agent.a2a_peer_manager import check_card_signature, create_remote_a2a_agents  # noqa: E402
+from dak_agent.a2a_peer_manager import (  # noqa: E402
+    MAX_CARD_TEXT_CHARS,
+    check_card_signature,
+    create_remote_a2a_agents,
+)
 
 CARD = os.path.join(os.path.dirname(__file__), "..", "dak_agent", "agent.json")
 
@@ -194,8 +198,9 @@ def test_card_public_key_file_is_read_from_the_config(tmp_path):
     assert other.card_public_key_file is None
 
 
-def test_a_peer_without_a_url_is_skipped_and_the_others_stay(caplog):
+def test_a_peer_without_a_url_is_skipped_and_the_others_stay(caplog, monkeypatch):
     """One broken peer entry is logged and left out, as before; it does not stop startup."""
+    monkeypatch.setattr(a2a_peer_manager, "fetch_agent_card", lambda url, timeout=10.0: _card())
     broken = A2APeerConfig("broken", None)
     good = A2APeerConfig("good", "http://peer:8000/a2a/dak_agent")
 
@@ -204,3 +209,65 @@ def test_a_peer_without_a_url_is_skipped_and_the_others_stay(caplog):
 
     assert [a.name for a in agents] == ["good"]
     assert "broken" in caplog.text
+
+
+# --- the peer's card description and skills (PBI #639, docs/architecture/a2a.md §7) ---
+
+from a2a.types import AgentSkill  # noqa: E402
+
+
+def _card_with_skills(description="Answers questions about the weather.") -> AgentCard:
+    card = _card()
+    card.description = description
+    del card.skills[:]
+    card.skills.extend([
+        AgentSkill(id="forecast", name="forecast", description="Tomorrow's weather.", tags=["skill"]),
+        AgentSkill(id="premium_service", name="premium_service", description="A paid report.", tags=["skill"]),
+    ])
+    return card
+
+
+def test_card_description_includes_the_card_and_its_skills(keys, monkeypatch):
+    private, public = keys
+    signed = create_agent_card_signer(private, {"kid": "peer-1", "alg": "ES256", "typ": "JOSE"})(_card_with_skills())
+    monkeypatch.setattr(a2a_peer_manager, "fetch_agent_card", lambda url, timeout=10.0: signed)
+    peer = A2APeerConfig("peer", "http://peer:8000/a2a/dak_agent", ["search"], card_public_key_file=public)
+
+    (agent,) = create_remote_a2a_agents([peer])
+
+    # The signature status, then the config, then what the card says
+    assert agent.description == (
+        "card signature: verified (kid=peer-1). Remote agent 'peer' at http://peer:8000/a2a/dak_agent."
+        " Capabilities: search."
+        " Card: Answers questions about the weather."
+        " Skills: forecast: Tomorrow's weather.; premium_service: A paid report.")
+
+
+def test_card_description_is_truncated_at_1024(monkeypatch):
+    monkeypatch.setattr(a2a_peer_manager, "fetch_agent_card", lambda url, timeout=10.0: _card_with_skills("x" * 2000))
+    (agent,) = create_remote_a2a_agents([A2APeerConfig("peer", "http://peer:8000/a2a/dak_agent")])
+
+    text = agent.description[agent.description.index("Card: "):]
+    assert text == ("Card: " + "x" * 2000)[:MAX_CARD_TEXT_CHARS] + " …(card text truncated)"
+    assert "premium_service" not in agent.description
+
+
+def test_card_description_is_config_only_when_the_card_is_not_fetched(monkeypatch):
+    def refuse(url, timeout=10.0):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(a2a_peer_manager, "fetch_agent_card", refuse)
+    (agent,) = create_remote_a2a_agents([A2APeerConfig("peer", "http://peer:8000/a2a/dak_agent", ["search"])])
+
+    assert agent.description == (
+        "card signature: unchecked (no card_public_key_file). Remote agent 'peer' at http://peer:8000/a2a/dak_agent."
+        " Capabilities: search.")
+
+
+def test_capabilities_can_be_omitted(monkeypatch):
+    monkeypatch.setattr(a2a_peer_manager, "fetch_agent_card", lambda url, timeout=10.0: _card_with_skills())
+    (agent,) = create_remote_a2a_agents([A2APeerConfig("peer", "http://peer:8000/a2a/dak_agent")])
+
+    assert "Capabilities:" not in agent.description
+    assert "general purpose" not in agent.description
+    assert "Skills: forecast: Tomorrow's weather." in agent.description

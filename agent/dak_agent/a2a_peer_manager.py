@@ -117,6 +117,25 @@ def check_card_signature(card: Optional[AgentCard], public_key_file: Optional[st
     return f"card signature: verified (kid={tried[-1]})"
 
 
+# The card's text is the peer's to write: cut it where ADK cuts a card's description
+# (google/adk/a2a/agent/_remote_a2a_agent.py, _MAX_CARD_DESCRIPTION_CHARS)
+MAX_CARD_TEXT_CHARS = 1024
+CARD_TEXT_TRUNCATED = " …(card text truncated)"
+
+
+def card_text(card: Optional[AgentCard]) -> str:
+    """What the peer's card says it does: its description and skills, for the
+    sub-agent's description. Empty without a card."""
+    if card is None:
+        return ""
+    text = f"Card: {card.description}"
+    if card.skills:
+        text += " Skills: " + "; ".join(f"{s.name}: {s.description}" for s in card.skills)
+    if len(text) > MAX_CARD_TEXT_CHARS:
+        text = text[:MAX_CARD_TEXT_CHARS] + CARD_TEXT_TRUNCATED
+    return text
+
+
 def create_remote_a2a_agents(peers: List[A2APeerConfig]) -> List["RemoteA2aAgent"]:
     """Create RemoteA2aAgent instances from peer configurations."""
     if not A2A_AVAILABLE:
@@ -130,19 +149,24 @@ def create_remote_a2a_agents(peers: List[A2APeerConfig]) -> List["RemoteA2aAgent
         except Exception as e:
             logger.error(f"Failed to create RemoteA2aAgent for {peer.name}: {e}")
             continue
+        # Fetched for every peer: its description and skills go into the sub-agent's description
         card, fetch_error = None, None
-        if peer.card_public_key_file:  # without a key there is nothing to check the card with
-            try:
-                card = fetch_agent_card(agent_card_url)
-            except Exception as e:
-                fetch_error = type(e).__name__
+        try:
+            card = fetch_agent_card(agent_card_url)
+        except Exception as e:
+            fetch_error = type(e).__name__
+            logger.info(f"A2A peer {peer.name}: card not fetched ({fetch_error}); description from the config only")
         # Outside the try below: an unreadable public key stops startup instead of dropping the peer
         status = check_card_signature(card, peer.card_public_key_file, fetch_error)
         log = logger.warning if status.startswith("card signature: invalid") else logger.info
         log(f"A2A peer {peer.name}: {status}")
         try:
-            caps_str = ", ".join(peer.capabilities) if peer.capabilities else "general purpose"
-            description = f"{status}. Remote agent '{peer.name}' at {peer.url}. Capabilities: {caps_str}"
+            # The signature status first, so the model reads it before what the card claims
+            description = f"{status}. Remote agent '{peer.name}' at {peer.url}."
+            if peer.capabilities:
+                description += f" Capabilities: {', '.join(peer.capabilities)}."
+            if text := card_text(card):
+                description += " " + text
 
             # ADK still gets the URL: its own https / same-origin checks stay
             agent = RemoteA2aAgent(
