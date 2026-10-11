@@ -14,6 +14,7 @@ the STRICTEST result wins for the whole command (deny > ask > allow).
 - any other MCP server: its URL
 """
 import fnmatch
+import logging
 import os
 import shlex
 from dataclasses import dataclass
@@ -21,10 +22,13 @@ from typing import Any, Collection, List, Literal, Mapping, MutableMapping, Opti
 
 from google.adk.plugins.base_plugin import BasePlugin
 from google.adk.tools.mcp_tool.mcp_tool import McpTool
+from opentelemetry import trace
 
 from . import enforcer
 from .call_config import ALLOWED_MCP_URLS_ENV
 
+
+logger = logging.getLogger(__name__)
 
 Action = Literal["allow", "ask", "deny"]
 
@@ -210,6 +214,13 @@ def matching_rules(rules: List[Rule], source: str, tool_name: str, args: Mapping
     ]
 
 
+def _log_tool_call(tool_name: str) -> None:
+    """One line per allowed call, with the trace ID the mcp SDK sends in
+    `_meta.traceparent` (the mcp-server logs the same ID)."""
+    trace_id = trace.get_current_span().get_span_context().trace_id
+    logger.info("tool_call name=%s trace_id=%s", tool_name, format(trace_id, "032x") if trace_id else "-")
+
+
 class PermissionPlugin(BasePlugin):
     """App-wide allow / ask / deny for every tool call, whichever toolset
     (default, skill, mode switch, `dak:tools`) it came from
@@ -242,6 +253,7 @@ class PermissionPlugin(BasePlugin):
         plan_action = plan_mode.check(state, source, tool.name, tool_args)
         action = strictest(action, plan_action)  # Plan mode only tightens; an "always" cannot get around it
         if action == "allow":
+            _log_tool_call(tool.name)
             return None
         if action == "deny":
             return {
@@ -268,6 +280,7 @@ class PermissionPlugin(BasePlugin):
         payload = confirmation.payload
         if isinstance(payload, Mapping) and payload.get("mode") == "always":
             record_always_approval(state, source, tool.name, tool_args)
+        _log_tool_call(tool.name)
         return None
 
 
