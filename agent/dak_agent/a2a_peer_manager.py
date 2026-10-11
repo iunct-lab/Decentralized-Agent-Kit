@@ -125,7 +125,11 @@ def create_remote_a2a_agents(peers: List[A2APeerConfig]) -> List["RemoteA2aAgent
 
     agents = []
     for peer in peers:
-        agent_card_url = resolve_agent_card_url(peer)
+        try:
+            agent_card_url = resolve_agent_card_url(peer)
+        except Exception as e:
+            logger.error(f"Failed to create RemoteA2aAgent for {peer.name}: {e}")
+            continue
         card, fetch_error = None, None
         if peer.card_public_key_file:  # without a key there is nothing to check the card with
             try:

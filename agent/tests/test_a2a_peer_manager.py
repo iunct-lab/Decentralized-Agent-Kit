@@ -192,3 +192,15 @@ def test_card_public_key_file_is_read_from_the_config(tmp_path):
     peer, other = load_a2a_peers_from_config(str(config))
     assert peer.card_public_key_file == "/keys/peer.pub.pem"
     assert other.card_public_key_file is None
+
+
+def test_a_peer_without_a_url_is_skipped_and_the_others_stay(caplog):
+    """One broken peer entry is logged and left out, as before; it does not stop startup."""
+    broken = A2APeerConfig("broken", None)
+    good = A2APeerConfig("good", "http://peer:8000/a2a/dak_agent")
+
+    with caplog.at_level(logging.ERROR, logger="dak_agent.a2a_peer_manager"):
+        agents = create_remote_a2a_agents([broken, good])
+
+    assert [a.name for a in agents] == ["good"]
+    assert "broken" in caplog.text
