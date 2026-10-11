@@ -175,4 +175,7 @@ def test_delegation_to_peer_with_non_default_name(agent_consumer, fake_llm):
     assert "Delegated answer from the peer DAK." in event_texts(events), events
     # The consumer checked agent-peer's card with the key in its a2a_peers, and the
     # result reached the model as the first line of the sub-agent's description
-    assert "card signature: verified (kid=test-1)" in system_instruction(fake_llm.requests("fake-consumer")[-1])
+    instruction = system_instruction(fake_llm.requests("fake-consumer")[-1])
+    assert "card signature: verified (kid=test-1)" in instruction
+    # ...and put the skills the peer's card lists into the sub-agent's description
+    assert "premium_service" in instruction, instruction

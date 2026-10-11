@@ -165,6 +165,8 @@ services:
       - AGENT_PUBLIC_URL=http://agent-peer.localhost:8000/a2a/dak_agent
       - AGENT_CARD_SIGNING_KEY_FILE=/keys/card-signing.pem
       - AGENT_CARD_SIGNING_KID=test-1
+      # its card lists these skills, premium_service included; the consumer reads them (test_a2a.py)
+      - AGENT_SKILLS_DIRS=/app/skills:/app/provider_skills
     volumes:
       - ./tests/integration/.keys:/keys:ro
     depends_on:
