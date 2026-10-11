@@ -19,7 +19,7 @@ from conftest import AGENT_ENFORCER_URL, AGENT_URL, APP_NAME, event_texts, syste
 MODEL = "fake-default"
 AGENT_CARD_URL = f"{AGENT_URL}/a2a/{APP_NAME}/.well-known/agent-card.json"
 A2A_RPC_URL = f"{AGENT_URL}/a2a/{APP_NAME}"
-# Made by the card-keygen service each time the stack comes up (docker-compose.test.yml)
+# Made by the card-keygen service when the stack comes up and none is there (docker-compose.test.yml)
 CARD_PUBLIC_KEY = os.path.join(os.path.dirname(__file__), ".keys", "card-signing.pub.pem")
 
 
@@ -48,7 +48,7 @@ def test_agent_card_declares_a2a_1_0_jsonrpc_interface(agent_card):
     assert agent_card["url"] == interfaces[("JSONRPC", "1.0")]  # what a 0.3 peer reads
 
 
-def test_agent_card_is_signed_and_verifies_with_the_test_key(agent_card):
+def test_agent_card_signature_verifies_with_the_test_key(agent_card):
     """`agent` has AGENT_CARD_SIGNING_KEY_FILE set: the card it serves carries one
     ES256 signature that verifies with the public key (docs/architecture/a2a.md §7)."""
     from a2a.client.card_resolver import parse_agent_card
