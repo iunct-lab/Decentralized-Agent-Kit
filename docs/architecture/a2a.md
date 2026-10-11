@@ -227,7 +227,7 @@ openssl ec -in card-signing.pem -pubout -out card-signing.pub.pem
 |---|---|---|---|
 | `card signature: verified (kid=<kid>)` | 設定の公開鍵で通った。`kid` は通った署名のもの | info | 設定した相手が署名したカード |
 | `card signature: unsigned` | カードに署名が無い（`NoSignatureError`） | info | 相手が署名していない。成りすましかどうかは分からない |
-| `card signature: invalid (<例外の名前>)` | 署名はあるが通らない。改ざん・別の鍵・壊れた署名（`InvalidSignaturesError` に限らない） | warning | 設定の鍵の持ち主のカードではない |
+| `card signature: invalid (<例外の名前>)` | 署名はあるが通らない。改ざん・別の鍵・壊れた署名（`InvalidSignaturesError` に限らない） | warning | 設定の鍵では確かめられなかった。改ざん・別の鍵・途中で壊れたのどれかは区別しない（誰が書いたカードかは言えない） |
 | `card signature: unchecked (<理由>)` | 確かめていない。理由は `no card_public_key_file`（公開鍵を書いていない）か `card not fetched: <例外の名前>`（起動時にカードを取れなかった） | info | 確かめた結果が無い |
 
 検証の結果で接続を切らない。`invalid` と `unsigned` の相手も sub-agent に残り、任せるかはエージェントが決める（憲章の原則 1「System ENABLES, Agent DECIDES」、PBI #318 の決定）。
