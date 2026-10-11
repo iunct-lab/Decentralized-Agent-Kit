@@ -19,6 +19,7 @@ cd "$(dirname "$0")/.."
 source scripts/smoke_common.sh
 
 MODEL="${LOCAL_OLLAMA_MODEL:-llama3.1:8b}"
+unset CLOUD_MODEL_NAME  # the smoke tests take the model from whichever name is set
 export LOCAL_MODEL_NAME="ollama_chat/${MODEL}"
 COMPOSE=(docker compose -p "${DAK_SMOKE_COMPOSE_PROJECT:-dak-ollama-smoke}" -f docker-compose.yml -f docker-compose.test.yml -f docker-compose.local-llm.yml)
 KEEP="${1:-}"

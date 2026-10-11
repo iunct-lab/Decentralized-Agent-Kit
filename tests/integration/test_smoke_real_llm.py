@@ -10,6 +10,7 @@ docker-compose.local-llm.yml overlay (see scripts/smoke_local_llm.sh).
 """
 import json
 import os
+from pathlib import Path
 
 import httpx
 import pytest
@@ -113,7 +114,7 @@ OVERHEAD_PROMPT = "Good morning, everyone."
 OVERHEAD_SCHEMA = {"type": "object", "properties": {"greeting": {"type": "boolean"}}, "required": ["greeting"]}
 
 
-def test_minimal_overhead_matches_direct_call(agent):
+def test_minimal_overhead_matches_direct_call(agent, monkeypatch):
     """PBI #139: the minimal DAK call (no tools) against the same call made
     directly with LiteLLM, on the real model. Usage is model-reported, so this
     only records the difference (docs/architecture/serverless.md section 4);
@@ -121,6 +122,13 @@ def test_minimal_overhead_matches_direct_call(agent):
     if not SMOKE_MODEL:
         pytest.skip("set CLOUD_MODEL_NAME or LOCAL_MODEL_NAME to the stack's model (the smoke runners export it)")
     litellm = pytest.importorskip("litellm", reason="install the smoke group: uv sync --group smoke")
+    # The stack reads credentials from the shell env or .env (compose), and the
+    # smoke runners accept either; the direct call here runs on the host, so
+    # fill in from .env what the shell env does not set.
+    from dotenv import dotenv_values  # a litellm dependency
+    for key, value in dotenv_values(Path(__file__).resolve().parents[2] / ".env").items():
+        if value and not os.getenv(key):
+            monkeypatch.setenv(key, value)
 
     # What ADK sends for this output schema (google/adk/models/lite_llm.py, _to_litellm_response_format)
     strict_schema = {**OVERHEAD_SCHEMA, "additionalProperties": False}
@@ -144,7 +152,7 @@ def test_minimal_overhead_matches_direct_call(agent):
     }, timeout=AGENT_RUN_TIMEOUT)
     resp.raise_for_status()
     usages = [e["usageMetadata"] for e in resp.json() if e.get("usageMetadata")]
-    reply = json.loads(event_texts(resp.json())[-1])
+    reply_text = event_texts(resp.json())[-1]
 
     dak_in = sum(u.get("promptTokenCount", 0) for u in usages)
     dak_out = sum(u.get("candidatesTokenCount", 0) for u in usages)
@@ -155,8 +163,9 @@ def test_minimal_overhead_matches_direct_call(agent):
         "dak": {"calls": len(usages), "prompt_tokens": dak_in, "completion_tokens": dak_out},
         "diff": {"prompt_tokens": dak_in - direct.usage.prompt_tokens,
                  "completion_tokens": dak_out - direct.usage.completion_tokens},
-        "dak_reply": reply,
+        "dak_reply": reply_text,
     }))
+    reply = json.loads(reply_text)
     assert "greeting" in reply, reply  # not a failure reply: the first call was the only one
     assert len(usages) == 1, usages
     assert dak_in > 0 and direct.usage.prompt_tokens > 0
