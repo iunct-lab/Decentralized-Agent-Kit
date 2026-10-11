@@ -17,7 +17,7 @@ import uuid
 import httpx
 import pytest
 
-from conftest import AGENT_ENFORCER_URL, AGENT_URL, APP_NAME, event_texts, system_instruction
+from conftest import AGENT_AP2_URL, AGENT_ENFORCER_URL, AGENT_URL, APP_NAME, event_texts, system_instruction
 
 MODEL = "fake-default"
 AGENT_CARD_URL = f"{AGENT_URL}/a2a/{APP_NAME}/.well-known/agent-card.json"
@@ -85,6 +85,15 @@ def test_agent_card_without_a_key_has_no_signatures():
     resp.raise_for_status()
     assert not resp.json().get("signatures"), resp.json()
 
+
+
+def test_card_skills_list_the_loaded_skills():
+    """`agent-ap2` loads /app/skills and /app/provider_skills (AGENT_SKILLS_DIRS):
+    its card lists each skill, the provider's premium_service included."""
+    resp = httpx.get(f"{AGENT_AP2_URL}/a2a/{APP_NAME}/.well-known/agent-card.json", timeout=30.0)
+    resp.raise_for_status()
+    ids = {s["id"] for s in resp.json()["skills"]}
+    assert {"premium_service", "filesystem"} <= ids, resp.json()["skills"]
 
 @pytest.mark.parametrize("streaming", [False, True])
 def test_a2a_sdk_client_round_trip(fake_llm, streaming):

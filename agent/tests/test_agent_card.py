@@ -134,3 +134,50 @@ def test_signing_twice_keeps_one_signature(card_path, signing_key):
     card = _read(card_path)
     assert len(card.signatures) == 1
     _verify(card, public)
+
+
+def _skill(root, name, description):
+    (root / name).mkdir(parents=True)
+    (root / name / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {description}\ntools: []\n---\nDo it.\n")
+
+
+def test_card_lists_the_loaded_skills(card_path, tmp_path):
+    first, second = tmp_path / "skills", tmp_path / "provider_skills"
+    _skill(first, "zeta", "Last by name.")
+    _skill(second, "alpha", "First by name.")
+
+    assert agent_card.add_skills_in_place(card_path, [str(first), str(second)]) == 2
+
+    with open(card_path) as f:
+        skills = json.load(f)["skills"]
+    assert skills == [
+        {"id": "alpha", "name": "alpha", "description": "First by name.", "tags": ["skill"]},
+        {"id": "zeta", "name": "zeta", "description": "Last by name.", "tags": ["skill"]},
+    ]
+    assert len(_read(card_path).skills) == 2  # still a card a2a-sdk reads
+
+
+def test_card_keeps_the_default_skill_without_skills(card_path, tmp_path):
+    with open(card_path) as f:
+        before = f.read()
+    (tmp_path / "empty").mkdir()
+
+    assert agent_card.add_skills_in_place(card_path, [str(tmp_path / "empty")]) == 0
+
+    with open(card_path) as f:
+        assert f.read() == before
+
+
+def test_signature_covers_the_skills(card_path, tmp_path, signing_key):
+    private, public = signing_key
+    _skill(tmp_path / "skills", "alpha", "a")
+    _skill(tmp_path / "skills", "beta", "b")
+    agent_card.add_skills_in_place(card_path, [str(tmp_path / "skills")])
+    agent_card.sign_card_in_place(card_path, private, "test-1")
+
+    card = _read(card_path)
+    _verify(card, public)
+
+    del card.skills[1]
+    with pytest.raises(Exception):
+        _verify(card, public)

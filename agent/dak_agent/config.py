@@ -17,6 +17,9 @@ _AGENT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # never needs a code change: set MODEL_NAME (LiteLLM format).
 DEFAULT_MODEL_NAME = "gemini-3.8-flash"
 
+# Skills bundled with the agent; AGENT_SKILLS_DIRS replaces this list.
+DEFAULT_SKILLS_DIR = os.path.join(_AGENT_ROOT, "skills")
+
 # Candidate locations, in priority order: Docker image, repo checkout, CWD.
 CONFIG_CANDIDATES = [
     "/app/agent_config.yaml",
@@ -85,3 +88,13 @@ def get_litellm_model_name(model_name: str) -> str:
     if "gemini" in model_name and not model_name.startswith("gemini/"):
         return f"gemini/{model_name}"
     return model_name
+
+
+def skills_dirs_from_env(env: Optional[Mapping[str, str]] = None) -> List[str]:
+    """The skill directories: AGENT_SKILLS_DIRS (colon-separated), else DEFAULT_SKILLS_DIR.
+
+    The agent loads its skills from these and the Agent Card lists the same ones.
+    """
+    env = os.environ if env is None else env
+    dirs = [d.strip() for d in (env.get("AGENT_SKILLS_DIRS") or "").split(":") if d.strip()]
+    return dirs or [DEFAULT_SKILLS_DIR]

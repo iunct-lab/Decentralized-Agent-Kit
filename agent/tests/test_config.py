@@ -11,6 +11,7 @@ from dak_agent.config import (
     get_litellm_model_name,
     load_agent_config,
     resolve_model_name,
+    skills_dirs_from_env,
 )
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -168,6 +169,15 @@ class TestNoDeadLocalLlmEnvVars(unittest.TestCase):
                 text = f.read()
             for name in ("LOCAL_LLM_BASE_URL", "LOCAL_LLM_API_KEY"):
                 self.assertNotIn(name, text, f"{relpath} still mentions the unused {name}")
+
+
+class TestSkillsDirsFromEnv(unittest.TestCase):
+    def test_skills_dirs_from_env(self):
+        self.assertEqual(skills_dirs_from_env({"AGENT_SKILLS_DIRS": "/app/skills: /app/provider_skills:"}),
+                         ["/app/skills", "/app/provider_skills"])
+        default = os.path.join(_REPO_ROOT, "agent", "skills")
+        self.assertEqual(skills_dirs_from_env({}), [default])
+        self.assertEqual(skills_dirs_from_env({"AGENT_SKILLS_DIRS": " "}), [default])
 
 
 if __name__ == "__main__":
