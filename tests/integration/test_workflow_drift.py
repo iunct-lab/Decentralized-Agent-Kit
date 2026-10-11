@@ -79,11 +79,11 @@ def test_capture_golden_default_model_matches_nightly_eval():
     assert _model_default("capture-golden.yml") == _model_default("nightly-eval.yml")
 
 
-def test_capture_golden_opens_pr_with_its_own_token():
+def test_capture_golden_opens_pr_with_the_project_token():
     # A PR opened with GITHUB_TOKEN does not start CI, and the repository does not
     # let Actions create PRs (#498).
     token = _key("capture-golden.yml", "token", "Open PR with the new golden")
-    assert token == "${{ secrets.GOLDEN_PR_TOKEN }}"
+    assert token == "${{ secrets.DAK_PROJECT_TOKEN }}"
 
 
 def test_capture_golden_token_permissions_are_read_only():
@@ -95,10 +95,10 @@ def test_capture_golden_token_permissions_are_read_only():
 def test_capture_golden_checks_the_token_before_installing_ollama():
     # A missing secret should fail in seconds, not after the ~15 min Ollama pull.
     steps = [line.strip() for line in _lines("capture-golden.yml") if line.strip().startswith("- name: ")]
-    assert steps.index("- name: Check GOLDEN_PR_TOKEN") < steps.index(f"- name: {STEP}")
-    step = "Check GOLDEN_PR_TOKEN"
-    assert _key("capture-golden.yml", "GOLDEN_PR_TOKEN", step) == "${{ secrets.GOLDEN_PR_TOKEN }}"
+    assert steps.index("- name: Check DAK_PROJECT_TOKEN") < steps.index(f"- name: {STEP}")
+    step = "Check DAK_PROJECT_TOKEN"
+    assert _key("capture-golden.yml", "DAK_PROJECT_TOKEN", step) == "${{ secrets.DAK_PROJECT_TOKEN }}"
     run = _key("capture-golden.yml", "run", step).strip("'")
     for token, code in (("", 1), ("set", 0)):
-        env = {"PATH": os.environ["PATH"], "GOLDEN_PR_TOKEN": token}
+        env = {"PATH": os.environ["PATH"], "DAK_PROJECT_TOKEN": token}
         assert subprocess.run(["bash", "-c", run], env=env, capture_output=True).returncode == code
