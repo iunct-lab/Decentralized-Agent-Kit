@@ -24,11 +24,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from google.adk.cli.fast_api import get_fast_api_app
 from pydantic import BaseModel
 
-from . import approvals
+from . import agent_card, approvals
 
 # The directory holding `dak_agent/` (what `adk web` got as its working directory).
 AGENTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STREAM_INTERVAL_SECONDS = 2.0
+
+# ADK reads agent.json while building the app, so the signature goes in first
+agent_card.sign_card_from_env(os.path.join(AGENTS_DIR, "dak_agent", "agent.json"))
 
 app = get_fast_api_app(
     agents_dir=AGENTS_DIR,
