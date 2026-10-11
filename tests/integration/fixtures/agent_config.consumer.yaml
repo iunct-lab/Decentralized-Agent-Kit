@@ -10,5 +10,7 @@ a2a_peers:
     # plain http on a loopback name only (agent-peer.localhost: docker-compose.test.yml)
     url: "http://agent-peer.localhost:8000/a2a/dak_agent"
     capabilities: ["delegation test"]
+    # agent-peer signs its card with the key card-keygen makes (docker-compose.test.yml)
+    card_public_key_file: "/keys/card-signing.pub.pem"
 
 permissions: []

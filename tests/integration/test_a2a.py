@@ -8,16 +8,19 @@ an a2a-sdk 1.x client and with a 0.3 peer. The version policy is in
 docs/architecture/a2a.md.
 """
 import asyncio
+import os
 import uuid
 
 import httpx
 import pytest
 
-from conftest import AGENT_URL, APP_NAME, event_texts
+from conftest import AGENT_ENFORCER_URL, AGENT_URL, APP_NAME, event_texts, system_instruction
 
 MODEL = "fake-default"
 AGENT_CARD_URL = f"{AGENT_URL}/a2a/{APP_NAME}/.well-known/agent-card.json"
 A2A_RPC_URL = f"{AGENT_URL}/a2a/{APP_NAME}"
+# Made by the card-keygen service each time the stack comes up (docker-compose.test.yml)
+CARD_PUBLIC_KEY = os.path.join(os.path.dirname(__file__), ".keys", "card-signing.pub.pem")
 
 
 @pytest.fixture
@@ -43,6 +46,25 @@ def test_agent_card_declares_a2a_1_0_jsonrpc_interface(agent_card):
     assert interfaces.get(("JSONRPC", "0.3")) == interfaces[("JSONRPC", "1.0")]
     assert agent_card["capabilities"].get("streaming") is True
     assert agent_card["url"] == interfaces[("JSONRPC", "1.0")]  # what a 0.3 peer reads
+
+
+def test_agent_card_is_signed_and_verifies_with_the_test_key(agent_card):
+    """`agent` has AGENT_CARD_SIGNING_KEY_FILE set: the card it serves carries one
+    ES256 signature that verifies with the public key (docs/architecture/a2a.md §7)."""
+    from a2a.client.card_resolver import parse_agent_card
+    from a2a.utils.signing import create_signature_verifier
+
+    assert len(agent_card.get("signatures", [])) == 1, agent_card
+    with open(CARD_PUBLIC_KEY, "rb") as f:
+        public_pem = f.read()
+    create_signature_verifier(lambda kid, jku: public_pem, ["ES256"])(parse_agent_card(agent_card))
+
+
+def test_agent_card_without_a_key_has_no_signatures():
+    """`agent-enforcer` has no signing key: its card is served unsigned, as before."""
+    resp = httpx.get(f"{AGENT_ENFORCER_URL}/a2a/{APP_NAME}/.well-known/agent-card.json", timeout=30.0)
+    resp.raise_for_status()
+    assert not resp.json().get("signatures"), resp.json()
 
 
 @pytest.mark.parametrize("streaming", [False, True])
@@ -123,3 +145,6 @@ def test_delegation_to_peer_with_non_default_name(agent_consumer, fake_llm):
     events = agent_consumer.run(session_id, "Ask the peer.")
 
     assert "Delegated answer from the peer DAK." in event_texts(events), events
+    # The consumer checked agent-peer's card with the key in its a2a_peers, and the
+    # result reached the model as the first line of the sub-agent's description
+    assert "card signature: verified (kid=test-1)" in system_instruction(fake_llm.requests("fake-consumer")[-1])
