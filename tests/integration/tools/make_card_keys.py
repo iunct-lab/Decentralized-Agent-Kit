@@ -1,6 +1,6 @@
 """Make the Agent Card signing key pair for the fake-LLM stack (PBI #638).
 
-Run by the `card-keygen` service in docker-compose.test.yml each time the stack
+Run by the `card-keygen` service in docker-compose.test.yml when the stack
 comes up: writes `card-signing.pem` (EC P-256, PKCS8, unencrypted) and
 `card-signing.pub.pem` into the directory given, unless they are already there.
 No key is kept in the repository; the directory is gitignored.

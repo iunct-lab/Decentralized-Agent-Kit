@@ -27,7 +27,8 @@ services:
       retries: 15
 
   # tests/integration/test_a2a.py -k signature: the Agent Card signing key pair,
-  # made each time the stack comes up (no key in the repository). The host can
+  # made when the stack comes up and tests/integration/.keys/ (gitignored) has
+  # none yet, so a fresh checkout or CI gets a new pair. No key is in the repository. The host can
   # read the public key, which the tests verify the served cards with.
   card-keygen:
     build: ./agent
