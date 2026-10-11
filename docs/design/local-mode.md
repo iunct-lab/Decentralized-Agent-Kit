@@ -39,9 +39,9 @@ Lambda（S1）の Init も 8.6 秒から上限 10 秒超えだった（`docs/arc
 | | A: HTTP 経由を維持 | B: CLI プロセス内で `Runner` | C: agent サーバを代理起動 |
 |---|---|---|---|
 | 起動コスト | CLI 0.5〜2 秒 + 1 ターン。agent は常駐 | 毎回 8〜15 秒の import + MCP の接続 + 1 ターン | B と同じ import + サーバの起動待ち。常駐させれば A と同じで、常駐のさせ方が 1 つ増えるだけ |
-| 状態管理（セッション） | agent の `SESSION_SERVICE_URI`（compose では PostgreSQL）。`run`・`chat`・`approvals`・`approve`・`acp`・BFF が同じセッションを見る | `InMemorySessionService` ではプロセスの終了で消え、確認の保留（`adk_request_confirmation`）に別の呼び出しから答えられない。残すには PostgreSQL に直接つなぐ（compose は postgres をホストに出していない）か、手元の SQLite（常駐の agent・BFF とは別の履歴） | 子プロセスに `SESSION_SERVICE_URI` を渡す。手元の SQLite なら B と同じく別の履歴 |
+| 状態管理（セッション） | agent の `SESSION_SERVICE_URI`（compose では PostgreSQL）。`run`・`chat`・`approvals`・`approve`・`acp`・BFF が同じセッションを見る | `InMemorySessionService` ではプロセスの終了で消え、確認の保留（`adk_request_confirmation`）に別の呼び出しから答えられない。残すには PostgreSQL に直接つなぐ（compose は 5432 をホストに出しているので届くが、CLI が agent の DB の接続先と資格情報を持つ）か、手元の SQLite（常駐の agent・BFF とは別の履歴） | 子プロセスに `SESSION_SERVICE_URI` を渡す。手元の SQLite なら B と同じく別の履歴 |
 | 承認の口（`/approvals`） | ある（`agent/dak_agent/server.py`） | 無い。FastAPI のルートなので、CLI 側に一覧と返答を作り直す | ある |
-| 設定（モデル・MCP・skills・A2A peer） | agent コンテナの環境変数だけ | CLI の環境に同じ環境変数が要る（`agent.py` が import 時に読む）。skills の既定は `agent/skills` の相対パス | B と同じ |
+| 設定（モデル・MCP・skills・A2A peer） | agent コンテナの環境変数だけ | CLI の環境に同じ環境変数が要る（`agent.py` が import 時に読む）。skills の既定は `dak_agent` パッケージの隣の `skills`（`adaptive_agent.py` が `__file__` から解決するので、CLI の配布物に同梱が要る） | B と同じ |
 | 独立コンテナ / CLI の公開 API 境界 | 保つ。CLI は HTTP の公開 API だけに依存 | 崩す。CLI が `dak_agent` の内部（import 時の組み立て、App の名前、環境変数の一覧）と google-adk・litellm に依存し、依存が 28 MB → 425 MB | コードは HTTP で分かれるが、CLI が agent パッケージの配布物と起動の仕方に依存し、依存の大きさは B と同じ |
 | 権限（#16） | agent の `PermissionPlugin` が判断 | `app` を使う限り同じプラグインが効く | 同じ |
 | #17 の単発呼び出し契約 | 前提どおり | 結果を CLI の中の `Event` から作り直すので、HTTP と同じ結果の形を別のコードで保つ | 前提どおり |
