@@ -10,8 +10,8 @@ dependencies = [
     # （PR #97 参照）。DNS rebinding 保護の自動有効化は 1.23 から入っており、main.py の
     # transport_security で compose のサービス名を許可している。
     "mcp>=1.30.0,<2",
-    "uvicorn>=0.53.0",
-    "starlette>=1.6.0"
+    "uvicorn>=0.54.0",
+    "starlette>=1.7.0"
 ]
 
 [dependency-groups]
