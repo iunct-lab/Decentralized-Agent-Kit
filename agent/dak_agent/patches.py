@@ -23,6 +23,19 @@ def apply_patches() -> None:
         logger.warning(f"Failed to monkey-patch ClientSession: {e}")
 
 
+def ensure_tracer_provider() -> None:
+    """Give spans real IDs without LangFuse: an SDK TracerProvider with no exporter.
+
+    The mcp SDK puts the current trace context in each request's `_meta.traceparent`
+    (SEP-414); with OpenTelemetry's default proxy provider every ID is 0. A provider
+    LangFuse already set is kept."""
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+
+    if not isinstance(trace.get_tracer_provider(), TracerProvider):
+        trace.set_tracer_provider(TracerProvider())
+
+
 def setup_telemetry() -> None:
     """Instrument google-adk with OpenTelemetry and verify LangFuse credentials if configured."""
     try:
@@ -43,3 +56,4 @@ def setup_telemetry() -> None:
                 logger.warning(f"[Langfuse] Connection error: {e}")
     except Exception as e:
         logger.warning(f"[Langfuse] Skipping instrumentation: {type(e).__name__} - {e}")
+    ensure_tracer_provider()
