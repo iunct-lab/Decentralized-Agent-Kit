@@ -181,7 +181,7 @@ MUST の要件 114 件のうち、PASS 56 件・FAIL 3 件・SKIPPED 33 件・NO
 a2a_peers:
   - name: "dak_peer"                              # sub-agent の名前（transfer_to_agent で使う）
     url: "https://peer.example/a2a/dak_agent"     # 相手の A2A 窓口。カードはその下（https。下の段落）
-    capabilities: ["..."]
+    capabilities: ["..."]                         # optional; the peer's card adds its own description and skills
     card_public_key_file: "/run/secrets/peer-card.pub.pem"  # 相手のカードの署名を確かめる公開鍵（下の「カードの署名と検証」）。書かなければ unchecked
 ```
 
@@ -191,6 +191,26 @@ ADK（2.11）の `RemoteA2aAgent` は、ネットワークから取るカード�
 
 DAK の窓口のパスは、相手の `AGENT_NAME` ではなく、ADK のアプリ（エージェントのディレクトリ）の名前 `dak_agent` で決まる。`AGENT_NAME` はカードの `name` を変えるだけ。
 fake-LLM の構成の `agent-consumer` → `agent-peer`（カードの名前は `dak_peer`。http で呼ぶため、compose のネットワークの別名 `agent-peer.localhost` を使う）で、この委譲を `tests/integration/test_a2a.py::test_delegation_to_peer_with_non_default_name` が確かめる。
+
+### カードの `skills` と sub-agent の説明
+
+PBI #639。相手にできることを、設定の `capabilities` に手で写さずにカードで交換する。
+
+**自分のカードの `skills`**: 起動時に読み込んだスキル（`AGENT_SKILLS_DIRS` のディレクトリの `SKILL.md`。未設定なら `agent/skills`）を、
+`agent/dak_agent/server.py` が ADK の読む前に `agent_card.py` の `add_skills_in_place` で `agent.json` の `skills` に名前順で 1 件ずつ並べる（`id` = `name` = スキル名、`description` = `SKILL.md` の description、`tags` = `["skill"]`。一覧は `SkillRegistry`）。
+スキルが 1 つも無ければ `entrypoint.sh` が書いた既定の 1 件のまま。署名より前に足すので、署名は `skills` も覆う。
+カードは起動時に 1 回書く。後から有効にした MCP のツール（Zero-Config Tools）は載せない。
+
+**相手の sub-agent の `description`**: 任せる側は起動時に相手ごとにカードを取り（公開鍵の有無によらない）、`create_remote_a2a_agents` が次の順で 1 つの文にする。モデルは `transfer_to_agent` の前にこれを読む:
+
+1. 署名の状態（下の「カードの署名と検証」の 4 つの文）
+2. `Remote agent '<name>' at <url>.`
+3. 設定の `capabilities`（書いたときだけ `Capabilities: ….`）
+4. カードの `description` と `skills`（`Card: <description> Skills: <name>: <description>; …`）。相手が決める文なので、ADK の `_MAX_CARD_DESCRIPTION_CHARS` と同じ 1024 文字で切り、切ったら末尾に ` …(card text truncated)` を付ける（`card_text`）
+
+カードを取れなかった相手は 4 が無く、設定の文だけになる（起動の後に取り直さない）。
+`capabilities` は省略できる。カードの `skills` は説明に入れるだけで、ツールやスキルの自動有効化には使わない。
+fake-LLM の構成では `agent-peer` が `/app/provider_skills` の `premium_service` をカードに並べ、`test_a2a.py -k delegation` が任せる側のモデルの指示にその名前が入ることを、`-k card_skills` が `agent-ap2` のカードに並ぶことを確かめる。
 
 ### カードの署名と検証
 
@@ -218,7 +238,7 @@ openssl ec -in card-signing.pem -pubout -out card-signing.pub.pem
 鍵を替えるときは、秘密鍵のファイルと相手の設定の公開鍵を書き換えて、両方を再起動する（複数の `kid` を同時には受けない）。
 
 **相手のカードを確かめる**: `a2a_peers` の相手ごとに、相手の公開鍵の PEM ファイルを `card_public_key_file` に書く（上の YAML）。
-書いた相手だけ、任せる側が起動時に相手のカードを取って検証する（`agent/dak_agent/a2a_peer_manager.py` の `fetch_agent_card` と `check_card_signature`。`create_remote_a2a_agents` が呼ぶ）。
+任せる側は起動時に相手のカードを取り（上の「カードの `skills` と sub-agent の説明」）、書いた相手だけ検証する（`agent/dak_agent/a2a_peer_manager.py` の `fetch_agent_card` と `check_card_signature`。`create_remote_a2a_agents` が呼ぶ）。
 検証のためのカードは ADK が最初の委譲で取るものとは別に取り、`RemoteA2aAgent` には今どおりカードの URL を渡す（ADK の https・同じ origin の確かめは残る）。起動の後に取り直し・検証し直しはしない（再起動で直る）。
 
 結果は 4 つのどれかで、同じ文を相手の sub-agent の `description` の先頭とログに出す。モデルは `transfer_to_agent` の前にこの `description` を読む:
