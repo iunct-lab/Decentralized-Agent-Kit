@@ -10,7 +10,6 @@ docker-compose.local-llm.yml overlay (see scripts/smoke_local_llm.sh).
 """
 import json
 import os
-from pathlib import Path
 
 import httpx
 import pytest
@@ -114,7 +113,7 @@ OVERHEAD_PROMPT = "Good morning, everyone."
 OVERHEAD_SCHEMA = {"type": "object", "properties": {"greeting": {"type": "boolean"}}, "required": ["greeting"]}
 
 
-def test_minimal_overhead_matches_direct_call(agent, monkeypatch):
+def test_minimal_overhead_matches_direct_call(agent):
     """PBI #139: the minimal DAK call (no tools) against the same call made
     directly with LiteLLM, on the real model. Usage is model-reported, so this
     only records the difference (docs/architecture/serverless.md section 4);
@@ -122,22 +121,19 @@ def test_minimal_overhead_matches_direct_call(agent, monkeypatch):
     if not SMOKE_MODEL:
         pytest.skip("set CLOUD_MODEL_NAME or LOCAL_MODEL_NAME to the stack's model (the smoke runners export it)")
     litellm = pytest.importorskip("litellm", reason="install the smoke group: uv sync --group smoke")
-    # The stack reads credentials from the shell env or .env (compose), and the
-    # smoke runners accept either; the direct call here runs on the host, so
-    # fill in from .env what the shell env does not set.
-    from dotenv import dotenv_values  # a litellm dependency
-    for key, value in dotenv_values(Path(__file__).resolve().parents[2] / ".env").items():
-        if value and not os.getenv(key):
-            monkeypatch.setenv(key, value)
 
     # What ADK sends for this output schema (google/adk/models/lite_llm.py, _to_litellm_response_format)
     strict_schema = {**OVERHEAD_SCHEMA, "additionalProperties": False}
-    direct = litellm.completion(
-        model=SMOKE_MODEL,
-        messages=[{"role": "system", "content": OVERHEAD_INSTRUCTION}, {"role": "user", "content": OVERHEAD_PROMPT}],
-        response_format={"type": "json_schema",
-                         "json_schema": {"name": "response", "strict": True, "schema": strict_schema}},
-    )
+    try:
+        direct = litellm.completion(
+            model=SMOKE_MODEL,
+            messages=[{"role": "system", "content": OVERHEAD_INSTRUCTION}, {"role": "user", "content": OVERHEAD_PROMPT}],
+            response_format={"type": "json_schema",
+                             "json_schema": {"name": "response", "strict": True, "schema": strict_schema}},
+        )
+    except Exception as e:
+        # Unlike the stack (compose also reads .env), this call runs on the host.
+        pytest.fail(f"direct call failed; it reads credentials from the shell env only, not .env: {e}")
 
     resp = httpx.post(f"{AGENT_URL}/run", json={
         "app_name": APP_NAME,

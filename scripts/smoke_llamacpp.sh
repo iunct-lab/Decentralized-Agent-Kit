@@ -16,6 +16,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/smoke_common.sh
+unset CLOUD_MODEL_NAME LOCAL_MODEL_NAME  # no direct-call model here: the overhead test skips
 
 PORT="${LLAMACPP_PORT:-18080}"
 export LLAMACPP_API_BASE="${LLAMACPP_API_BASE:-http://host.docker.internal:${PORT}/v1}"
