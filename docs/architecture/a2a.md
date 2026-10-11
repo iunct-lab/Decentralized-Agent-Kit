@@ -233,7 +233,7 @@ openssl ec -in card-signing.pem -pubout -out card-signing.pub.pem
 検証の結果で接続を切らない。`invalid` と `unsigned` の相手も sub-agent に残り、任せるかはエージェントが決める（憲章の原則 1「System ENABLES, Agent DECIDES」、PBI #318 の決定）。
 運用者が止めたいときは、その相手を `a2a_peers` から外す。相手の公開鍵のファイルが読めないのは設定ミスとして起動を止める。
 
-fake-LLM の構成では、`docker-compose.test.yml` の `card-keygen` が起動のたびに鍵の組を作って `tests/integration/.keys/`（gitignore）に置き、`agent`・`agent-peer` がその鍵で署名し、`agent-consumer` が `agent-peer` を `verified` にする。
+fake-LLM の構成では、`docker-compose.test.yml` の `card-keygen` が起動のときに `tests/integration/.keys/`（gitignore）に鍵の組が無ければ作り（新しい checkout と CI ではいつも新しい組）、`agent`・`agent-peer` がその鍵で署名し、`agent-consumer` が `agent-peer` を `verified` にする。
 署名なしの代表は `agent-enforcer`。`tests/integration/test_a2a.py -k signature` と `-k delegation` が確かめる。
 
 ## 8. 適合テスト（CI の a2a-tck）
