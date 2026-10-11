@@ -68,7 +68,9 @@ class TestModeManager(unittest.TestCase):
     def test_context_window_tests_use_bundled_model_map(self):
         """The window assertions here hold for the locked litellm, not upstream's live map (conftest.py, #618)."""
         from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map_source_info
-        self.assertEqual(get_model_cost_map_source_info()["source"], "local")
+        info = get_model_cost_map_source_info()
+        # Forced by the env, not a fallback after a failed remote fetch.
+        self.assertEqual((info["source"], info["is_env_forced"]), ("local", True))
 
     def test_bedrock_claude_resolves_context_window(self):
         """Bedrock inference-profile IDs resolve via litellm's model map."""
