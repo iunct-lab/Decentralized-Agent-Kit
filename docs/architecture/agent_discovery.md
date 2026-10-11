@@ -179,13 +179,12 @@ card signed by another key with the same kid: InvalidSignaturesError: No valid s
 | agent:// | **見送り** | §4（試作しない理由と同じ） | §4 |
 | NANDA の Index と AgentFacts | **見送り** | §4（試作しない理由と同じ） | §4 |
 
-### 署名付き Agent Card を実装するときの入り口
+### 署名付き Agent Card の実装
 
-実装は別の PBI（PBI #318 のスコープ外。起票は利用者）。その PBI の出発点として:
+PBI #638 で実装した。設定と 4 つの状態の出し方は [a2a.md](a2a.md) §7「カードの署名と検証」:
 
-- **自分のカード**: 署名の鍵が設定されているときだけ、起動時に `agent/dak_agent/agent.json` のカードへ `create_agent_card_signer` で署名して配る。鍵が無ければ今と同じく署名しない（既定 off）。鍵の置き場と `kid`・`jku` の決め方はその PBI で決める
-- **相手のカード**: `agent/dak_agent/a2a_peer_manager.py` の `create_remote_a2a_agents` で、`RemoteA2aAgent` に渡す前に `a2a-sdk` の `A2ACardResolver.get_agent_card` でカードを取り、`create_signature_verifier` の関数を別に当てて確かめる（下の「検証の結果を…」の `invalid`）。
-  ADK が URL から取るときにしている https と同じ origin の確かめは DAK 側に残す（§1）。信じる公開鍵は `a2a_peers` の各相手に書く（例 `card_keys`。名前はその PBI で決める）
+- **自分のカード**: `AGENT_CARD_SIGNING_KEY_FILE`（PEM ファイルのパス）があるときだけ、`agent/dak_agent/server.py` が起動時に `agent/dak_agent/agent_card.py` の `sign_card_from_env` で `agent.json` へ ES256 の署名を足す（既定 off）。`kid` は `AGENT_CARD_SIGNING_KID`、`jku` は付けない
+- **相手のカード**: `agent/dak_agent/a2a_peer_manager.py` の `create_remote_a2a_agents` が、`RemoteA2aAgent` に URL を渡す前に `fetch_agent_card` でカードを別に取り、`check_card_signature` で `a2a_peers[].card_public_key_file` の公開鍵を当てる。ADK の https と同じ origin の確かめは残る（§1）
 
 ### 検証の結果をエージェントにどう渡すか
 
@@ -197,5 +196,6 @@ card signed by another key with the same kid: InvalidSignaturesError: No valid s
   `A2ACardResolver.get_agent_card(signature_verifier=...)` に渡すとカードの取得の失敗（`AgentCardResolutionError`）に変わる。
   そこで検証の関数はカードの取得に渡さず、取ったカードに別に当て、`NoSignatureError` 以外の例外はすべて `invalid` にする（取得の失敗と検証の失敗を分け、検証の失敗で相手を落とさない）
 - `invalid` の相手にも任せられる（任せるかはエージェントが決める）。運用者が止めたいときは、その相手を `a2a_peers` から外す
+- 実装（PBI #638）はこのとおりに出す。文の形は [a2a.md](a2a.md) §7 の表
 - DNS-AID を後で採用するなら、`dnssec_validated` も同じ形で渡す
 
