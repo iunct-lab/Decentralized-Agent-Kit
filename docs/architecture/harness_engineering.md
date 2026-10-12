@@ -252,14 +252,15 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 - サブエージェントの MCP 呼び出しは親のセッションの `X-DAK-Session-Key` を使うので、隔離環境（`SANDBOX_MODE=inproc`）でも親と同じ作業場所を読む（#527）。キーは親の呼び出しの `user_id` と `session_id` からだけ作り、セッションの state では渡さない（`AgentTool` は親の state を子に写すので、state を書ける呼び出し元が他人のキーを名乗れてしまう）。
 - A2A peer（`RemoteA2aAgent`、`agent/dak_agent/a2a_peer_manager.py`）は別のプロセスの別のエージェントで、`transfer_to_agent` で会話ごと渡し、書き込みも含めて自分のツールと設定で自律的に動く。
 - 使い分け: 同じ会話の中で一時的に調査だけを分離したいときは `dak_explorer`、別のエージェントに任せて独立して動かしたいとき（そのエージェントにしか無いツールや権限が要るときも）は A2A peer。
-- 制限: 確認の要る読み取り（既定では `*.env`）はサブエージェントの中では承認できず、実行されない（親が自分で読めばふつうの承認に乗る。#535）。
-- 検証: `agent/tests/test_explorer.py`（親のモデル要求とセッションに生出力が入らず結論だけが入る、読み取り専用のツールだけ、親の呼び出しのモデルで動く、MCP 呼び出しが親のセッションのキーを使い 2 セッションのキーが混ざらない `test_explorer_uses_the_parent_session_key_on_its_mcp_calls`）。
+- 確認の要る読み取り（既定では `*.env`）は親のセッションに `dak_explorer` の承認の保留として出る。hint に中の呼び出し（ツール名と引数）が入り、承認すると読み、拒否すると読まない。`always` の継続許可は親のセッションに残る。子のセッションは親と同じ session service の app `dak_explorer` に置き、終わったら消す（#535）。
+- 検証: `agent/tests/test_explorer.py`（親のモデル要求とセッションに生出力が入らず結論だけが入る、読み取り専用のツールだけ、親の呼び出しのモデルで動く、MCP 呼び出しが親のセッションのキーを使い 2 セッションのキーが混ざらない `test_explorer_uses_the_parent_session_key_on_its_mcp_calls`、中の確認を親のセッションで承認・拒否できる `test_explorer_confirmation_is_answered_in_the_parent_session`、`always` が親のセッションに残る `test_explorer_always_approval_reaches_the_parent_state`）。
 
 ### 承認の保留と reply（#100）
 
 承認待ち（ツールの確認）と質問待ち（`ask_question`）を、どのクライアントからでも一覧して答えられる。
 設計と根拠は `docs/design/approval-queue.md`。保留は ADK のセッションのイベントそのもので、別に保存しない。
 入口は `agent/dak_agent/server.py`（ADK の FastAPI アプリに 3 本を足す。ADK の REST を同じプロセスの中で呼ぶ）。
+`dak_explorer` の中の確認も、`tool_name: dak_explorer` の 1 件として並ぶ（答えは中の全部の呼び出しに効く。#535）。
 
 | エンドポイント | 中身 |
 |---|---|
@@ -333,7 +334,7 @@ MRTR（MCP 2026-07-28、SEP-2322）との対応: 保留の 1 件 ↔ `InputRequi
 
 | 優先 | 項目 | 狙い | 関連 |
 |---|---|---|---|
-| ~~P1~~ | ~~**調査用サブエージェント（`AgentTool`）**~~ | **済み（#85）**: `dak_explorer`。§3 の「調査サブエージェント」。隔離環境で親と同じ作業場所を読む（済み、#527）、承認は #535 | #85, #527, #535 |
+| ~~P1~~ | ~~**調査用サブエージェント（`AgentTool`）**~~ | **済み（#85）**: `dak_explorer`。§3 の「調査サブエージェント」。隔離環境で親と同じ作業場所を読む（済み、#527）、中の確認を親で承認する（済み、#535） | #85, #527, #535 |
 | P1 | **内容検索ツール（grep）と行番号付き読み込み** | 今の `search_files` はファイル名しか検索できず、中身を探すにはファイル全体を読むしかない。`grep(pattern, path, glob)` と `edit_file`（文字列置換）を足すか、ADK `EnvironmentToolset` への移行を検討 | #86, #16, #20 |
 | ~~P1~~ | ~~**TODO ツール（セッション state に保存）**~~ | **済み（#87）**: `write_todos` / `read_plan`。上の「計画と進捗」 | #87, #21 |
 | ~~P2~~ | ~~**コンテキスト超過からの回復**~~ | **済み（#88）**: 圧縮側は §5、モデル呼び出し側は §3 の 4（予算を絞って有限回呼び直し、尽きたら説明文で終える） | #88 |
