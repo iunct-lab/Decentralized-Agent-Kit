@@ -83,10 +83,8 @@ def drop_overlaps(
             print(f"skip: {p.title}（#{overlaps[n]} と重なる）", file=sys.stderr)
             continue
         key = _norm(p.title)
-        if not key or key in seen:
-            continue
+        if not key or key in seen or len(out) >= max_items:
+            continue  # keep going past the cap so every overlap above is logged
         seen.add(key)
         out.append(p)
-        if len(out) >= max_items:
-            break
     return out
