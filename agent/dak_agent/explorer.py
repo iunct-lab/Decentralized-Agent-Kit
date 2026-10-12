@@ -14,7 +14,9 @@ A call the sub-agent must have confirmed (a `*.env` read by default) becomes a
 pending approval of the `dak_explorer` call in the parent session. The
 sub-agent's session is kept in the parent's session service until the answer
 comes, then gets the same answer and runs on, so a restart in between does not
-lose it (#535).
+lose it (#535). ADK cannot ask again from a call it resumed, so a confirmation
+the sub-agent needs after that is rejected, and its result names the calls that
+did not run.
 """
 import asyncio
 
@@ -25,6 +27,7 @@ from google.adk.runners import Runner
 from google.adk.tools._forwarding_artifact_service import ForwardingArtifactService
 from google.adk.tools.agent_tool import AgentTool
 from google.adk.tools.mcp_tool import McpToolset, StreamableHTTPConnectionParams
+from google.adk.tools.tool_confirmation import ToolConfirmation
 from google.adk.utils.context_utils import Aclosing
 from google.genai import types
 
@@ -45,6 +48,8 @@ DELEGATION_INSTRUCTION = (
 )
 # What ADK's tools answer while a confirmation is pending (harness._CONFIRMATION_ANSWERS)
 _PENDING_ANSWER = {"error": "This tool call requires confirmation, please approve or reject."}
+# A resumed call rejects the sub-agent's further confirmations; a sub-agent that keeps asking is left at this
+_MAX_REJECTED_ROUNDS = 3
 
 
 def _read_only_toolset(mcp_url: str, header_provider) -> McpToolset:
@@ -97,17 +102,14 @@ class _ExplorerTool(AgentTool):
         )
         runner.plugin_manager.set_skip_closing_plugins(True)  # the parent's plugins, still in use
         session_id = _child_session_id(tool_context)
-        if tool_context.tool_confirmation is None:
+        session = await sessions.get_session(app_name=EXPLORER_APP_NAME, user_id=ctx.user_id, session_id=session_id)
+        if session is None:  # a new call, or one approved before it ran (a rule that asks for dak_explorer)
             await sessions.create_session(
                 app_name=EXPLORER_APP_NAME, user_id=ctx.user_id, session_id=session_id,
                 state={k: v for k, v in tool_context.state.to_dict().items() if not k.startswith("_adk")},
             )
             message = types.Content(role="user", parts=[types.Part.from_text(text=args["request"])])
         else:
-            session = await sessions.get_session(app_name=EXPLORER_APP_NAME, user_id=ctx.user_id, session_id=session_id)
-            if session is None:
-                await runner.close()
-                return f"{EXPLORER_NAME} could not resume: its investigation is gone. Delegate it again."
             message = _confirmation_answers(session, tool_context.tool_confirmation)
 
         # as AgentTool: the caller's run settings, unary (only the last event is read), the caller's abort
@@ -116,20 +118,30 @@ class _ExplorerTool(AgentTool):
             run_config = run_config.model_copy(update={"support_cfc": False, "streaming_mode": StreamingMode.NONE})
         abort_signal = ctx._abort_signal if isinstance(ctx._abort_signal, asyncio.Event) else None
         last_content = last_error = None
-        async with Aclosing(runner.run_async(user_id=ctx.user_id, session_id=session_id, new_message=message,
-                                            run_config=run_config, abort_signal=abort_signal)) as events:
-            async for event in events:
-                if event.actions.state_delta:
-                    tool_context.state.update(event.actions.state_delta)  # e.g. an `always` approval
-                if event.error_message:
-                    last_error = event.error_message
-                if event.content:
-                    last_content = event.content
+        not_run = []
+        for rejected in range(_MAX_REJECTED_ROUNDS + 1):
+            async with Aclosing(runner.run_async(user_id=ctx.user_id, session_id=session_id, new_message=message,
+                                                run_config=run_config, abort_signal=abort_signal)) as events:
+                async for event in events:
+                    if event.actions.state_delta:
+                        tool_context.state.update(event.actions.state_delta)  # e.g. an `always` approval
+                    if event.error_message:
+                        last_error = event.error_message
+                    if event.content:
+                        last_content = event.content
+            session = await sessions.get_session(app_name=EXPLORER_APP_NAME, user_id=ctx.user_id, session_id=session_id)
+            pending = _pending(session)
+            if not pending or tool_context.tool_confirmation is None:
+                break
+            # ADK turns a confirmation into a pending approval only for a call it has not resumed,
+            # so a resumed call cannot ask again: the sub-agent's further confirmations are rejected
+            not_run += [f"{p['tool_name']}({p['tool_args']})" for p in pending]
+            if rejected == _MAX_REJECTED_ROUNDS:
+                break
+            message = _confirmation_answers(session, ToolConfirmation(confirmed=False))
         await runner.close()
 
-        session = await sessions.get_session(app_name=EXPLORER_APP_NAME, user_id=ctx.user_id, session_id=session_id)
-        pending = _pending(session)
-        if pending:
+        if pending and tool_context.tool_confirmation is None:
             calls = [{"name": p["tool_name"], "args": p["tool_args"]} for p in pending]
             tool_context.request_confirmation(
                 hint=f"{EXPLORER_NAME} wants to call " + "、".join(f"{c['name']}({c['args']})" for c in calls)
@@ -140,6 +152,9 @@ class _ExplorerTool(AgentTool):
         await sessions.delete_session(app_name=EXPLORER_APP_NAME, user_id=ctx.user_id, session_id=session_id)
         text = "\n".join(p.text for p in (last_content.parts if last_content else None) or []
                          if p.text and not p.thought)
+        if not_run:
+            text += (f"\n(Not run: {', '.join(not_run)} needed another approval, which {EXPLORER_NAME} cannot ask for"
+                     " once resumed. Call the tool yourself to ask the user.)")
         return text or last_error or ""
 
 
