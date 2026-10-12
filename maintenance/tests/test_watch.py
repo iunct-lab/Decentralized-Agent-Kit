@@ -48,12 +48,13 @@ def test_propose_technologies_end_to_end():
 
 
 def test_propose_technologies_drops_same_title_in_one_run_and_caps():
-    def search(q, k):
-        return [SearchResult("Foo", "http://foo", "s")]
+    foo = ('{"title": "[tech-watch] Foo の採用検討", "subject": "Foo", "url": "http://foo",'
+           ' "fit": "MCP", "sketch": "add to mcp-server"}')
+    answers = iter(['["query one"]', f"[{foo}, {foo.replace('Foo の', 'foo  の')}, {NEW_ONE}]"])
     proposals = propose_technologies(
-        "charter", _fake_complete_factory(), search=search, existing=[], max_items=5,
+        "charter", lambda p: next(answers), search=_one_search, existing=[], max_items=5,
     )
-    assert [p.title for p in proposals] == ["[tech-watch] Foo の採用検討", "[tech-watch] Bar の採用検討"]
+    assert [p.title for p in proposals] == ["[tech-watch] Foo の採用検討", "[tech-watch] Baz の採用検討"]
 
 
 # #612 の提案と、それと内容が同じ #112・#322（開いた）、#611 の提案と閉じた #309 の写し。
@@ -137,6 +138,17 @@ def test_a_proposal_that_overlaps_nothing_is_kept_and_the_count_is_capped():
     proposals = propose_technologies("charter", complete, search=_one_search, existing=EXISTING, max_items=1)
 
     assert [p.title for p in proposals] == ["[tech-watch] Baz の採用検討"]
+
+
+def test_an_overlap_after_the_cap_is_still_logged(capsys):
+    complete = _overlap_complete(
+        f"[{NEW_ONE}, {MCP_612}]", '[{"index": 1, "overlaps": null}, {"index": 2, "overlaps": 112}]', [],
+    )
+
+    proposals = propose_technologies("charter", complete, search=_one_search, existing=EXISTING, max_items=1)
+
+    assert [p.title for p in proposals] == ["[tech-watch] Baz の採用検討"]
+    assert "#112" in capsys.readouterr().err
 
 
 def test_an_overlap_with_a_number_that_is_not_an_existing_issue_does_not_drop_the_proposal():
