@@ -57,12 +57,21 @@ Respond with ONLY a JSON array, one object per proposal:
 """
 
 
+def _number(value) -> int | None:
+    """An LLM may write 112, "112" or "#112" (the prompt lists issues as #N)."""
+    if type(value) is int:
+        return value
+    if isinstance(value, str) and value.strip().lstrip("#").isdigit():
+        return int(value.strip().lstrip("#"))
+    return None
+
+
 def drop_overlaps(
     proposals: list[Proposal], existing: list[dict], complete: CompleteFn, max_items: int,
 ) -> list[Proposal]:
     """Drop proposals whose content overlaps an existing issue (one LLM call), then
     same-title duplicates within the run, then cap the count."""
-    overlaps: dict[str, int] = {}
+    overlaps: dict[int, int] = {}
     if proposals and existing:
         numbers = {i.get("number") for i in existing}
         listed = "\n".join(
@@ -74,13 +83,13 @@ def drop_overlaps(
             # Filing duplicates silently would hide the failure; stop the run instead.
             raise RuntimeError("提案と既存の Issue を突き合わせられなかった（LLM の応答が JSON の配列ではない）")
         for it in data:
-            if isinstance(it, dict) and type(it.get("overlaps")) is int and it["overlaps"] in numbers:
-                overlaps[str(it.get("index"))] = it["overlaps"]  # the index may come back as "1"
+            if isinstance(it, dict) and _number(it.get("overlaps")) in numbers:
+                overlaps[_number(it.get("index"))] = _number(it["overlaps"])
     seen: set[str] = set()
     out: list[Proposal] = []
     for n, p in enumerate(proposals, 1):
-        if str(n) in overlaps:
-            print(f"skip: {p.title}（#{overlaps[str(n)]} と重なる）", file=sys.stderr)
+        if n in overlaps:
+            print(f"skip: {p.title}（#{overlaps[n]} と重なる）", file=sys.stderr)
             continue
         key = _norm(p.title)
         if not key or key in seen or len(out) >= max_items:
