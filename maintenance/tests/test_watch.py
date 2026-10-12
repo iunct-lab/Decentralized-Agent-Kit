@@ -151,6 +151,15 @@ def test_an_overlap_after_the_cap_is_still_logged(capsys):
     assert "#112" in capsys.readouterr().err
 
 
+def test_an_index_written_as_a_string_still_drops_the_proposal(capsys):
+    complete = _overlap_complete(f"[{MCP_612}]", '[{"index": "1", "overlaps": 112}]', [])
+
+    proposals = propose_technologies("charter", complete, search=_one_search, existing=EXISTING, max_items=2)
+
+    assert proposals == []
+    assert "#112" in capsys.readouterr().err
+
+
 def test_an_overlap_with_a_number_that_is_not_an_existing_issue_does_not_drop_the_proposal():
     complete = _overlap_complete(f"[{NEW_ONE}]", '[{"index": 1, "overlaps": 9999}]', [])
 
