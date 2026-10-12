@@ -84,4 +84,8 @@ Dependabot PR
   ため `pull_request_target` に切り替えても信頼できないコード実行のリスクがなく、常に通常の
   Actions secrets が使われるようになった（`dependency-triage.yml` と同じ設計）。
 - **Ollama on CPU は遅い**: nightly 限定・小型モデル・寛容アサーション・モデル cache。PR ゲートには載せない。
-- **提案ノイズ**: `tech-watch`/`feature-sync` は 1 実行あたり件数上限と重複検出を持たせる。
+- **提案ノイズ**: `tech-watch`/`feature-sync` は 1 実行あたり件数上限を持ち、既存と内容が重なる提案はログに `skip:` を出して起票しない。
+  提案（題と本文の先頭）と、既存の要望（`type:request`）・PBI（`type:pbi`）・そのワークフローの
+  ラベルの Issue（開いた・閉じた）の題を LLM で 1 回突き合わせ、重なる提案は
+  `skip: <題>（#N と重なる）` と出す。突き合わせの応答が読めないときは実行を失敗させる
+  （重複を黙って起票しない）。`charter-review` は題の一致だけのまま（題に四半期が入る）。
