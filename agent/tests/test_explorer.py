@@ -2,8 +2,11 @@
 import pytest
 from google.genai import types
 
-from dak_agent.explorer import EXPLORER_INSTRUCTION, EXPLORER_NAME, READ_ONLY_TOOL_NAMES, make_explorer_tool
+from dak_agent import approvals
+from dak_agent.explorer import (EXPLORER_APP_NAME, EXPLORER_INSTRUCTION, EXPLORER_NAME, READ_ONLY_TOOL_NAMES,
+                                make_explorer_tool)
 from dak_agent.mcp_headers import SESSION_KEY_HEADER
+from dak_agent.permission import DEFAULT_RULES, PermissionPlugin, Rule
 
 RAW_MARKER = "RAW-FILE-CONTENT-7f3a"
 CONCLUSION = "Conclusion: the repository has one service."
@@ -30,10 +33,10 @@ def _request_text(llm_request) -> str:
     return "\n".join(out)
 
 
-def _scripted_llm():
+def _scripted_llm(path="README.md"):
     """One model for both agents, as in production (the explorer runs on the parent's model).
-    As the parent it delegates once to the explorer, as the explorer it reads one file;
-    each answers once its tool result is back. Records each request's text by role."""
+    As the parent it delegates once to the explorer, as the explorer it reads `path`;
+    each answers once its tool result for the latest user text is back. Records each request's text by role."""
     from google.adk.models.base_llm import BaseLlm
     from google.adk.models.llm_response import LlmResponse
 
@@ -43,9 +46,11 @@ def _scripted_llm():
         async def generate_content_async(self, llm_request, stream=False):
             role = "explorer" if EXPLORER_INSTRUCTION in str(llm_request.config.system_instruction) else "parent"
             self.requests.setdefault(role, []).append(_request_text(llm_request))
-            answered = any(p.function_response for c in llm_request.contents for p in c.parts or [])
+            asked = max(i for i, c in enumerate(llm_request.contents) if any(p.text for p in c.parts or [])
+                        and c.role == "user")
+            answered = any(p.function_response for c in llm_request.contents[asked:] for p in c.parts or [])
             if role == "explorer":
-                call = types.FunctionCall(name="read_file", args={"path": "README.md"})
+                call = types.FunctionCall(name="read_file", args={"path": path})
                 answer = CONCLUSION
             else:
                 call = types.FunctionCall(name=EXPLORER_NAME, args={"request": "Summarise the repository."})
@@ -169,3 +174,96 @@ async def test_explorer_uses_the_parent_session_key_on_its_mcp_calls(monkeypatch
         assert all(h == expected[-1] for h in headers[before:])
 
     assert expected[0] != expected[1]
+
+
+async def _ask(runner, session, text="What is in the repository?"):
+    """Runs one turn; returns the final text. A pending approval does not end the turn: the model
+    reads the pending answer and replies, and the approval stays pending in the session."""
+    final = None
+    async for event in runner.run_async(user_id=session.user_id, session_id=session.id, new_message=types.Content(
+            role="user", parts=[types.Part(text=text)])):
+        if event.is_final_response() and event.content and event.content.parts and event.content.parts[0].text:
+            final = event.content.parts[0].text
+    return final
+
+
+async def _pending(sessions, session):
+    stored = await sessions.get_session(app_name=session.app_name, user_id=session.user_id, session_id=session.id)
+    return approvals.list_pending_approvals(
+        [e.model_dump(mode="json", by_alias=True, exclude_none=True) for e in stored.events])
+
+
+async def _answer(runner, session, fc_id, mode):
+    final = None
+    reply = types.Content.model_validate({"role": "user", **approvals.build_reply_function_response(fc_id, mode)})
+    async for event in runner.run_async(user_id=session.user_id, session_id=session.id, new_message=reply):
+        if event.is_final_response() and event.content and event.content.parts and event.content.parts[0].text:
+            final = event.content.parts[0].text
+    return final
+
+
+def _env_explorer(monkeypatch):
+    """A parent with the explorer whose sub-agent reads `.env`, under a rule that asks for it (#535)."""
+    from google.adk.agents import LlmAgent
+    from google.adk.runners import Runner
+    from google.adk.sessions import InMemorySessionService
+
+    reads = []
+
+    def read_file(path: str) -> str:
+        """Stands in for the MCP server's read_file."""
+        reads.append(path)
+        return RAW_MARKER
+
+    llm = _scripted_llm(".env")
+    _fake_mcp(monkeypatch, read_file)
+    parent = LlmAgent(name="dak_agent", model=llm, instruction="Answer.",
+                      tools=[make_explorer_tool("http://mcp.invalid/mcp")])
+    sessions = InMemorySessionService()
+    plugin = PermissionPlugin([*DEFAULT_RULES, Rule("local", "read_file", "*.env", "ask")], "http://mcp.invalid/mcp")
+    runner = Runner(app_name="dak_agent", agent=parent, session_service=sessions, plugins=[plugin])
+    return runner, sessions, llm, reads
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["once", "reject"])
+async def test_explorer_confirmation_is_answered_in_the_parent_session(monkeypatch, mode):
+    """The sub-agent's confirmation is the parent session's pending approval; the answer reaches it (#535)."""
+    runner, sessions, llm, reads = _env_explorer(monkeypatch)
+    session = await sessions.create_session(app_name="dak_agent", user_id="u")
+
+    await _ask(runner, session)
+    (pending,) = await _pending(sessions, session)
+    assert pending["tool_name"] == EXPLORER_NAME
+    assert "read_file" in pending["hint"] and ".env" in pending["hint"]
+    assert reads == []
+
+    assert await _answer(runner, session, pending["id"], mode) == "done"
+    if mode == "once":
+        assert reads == [".env"]
+        assert RAW_MARKER in llm.requests["explorer"][-1]
+    else:
+        assert reads == []
+        assert "This tool call is rejected." in llm.requests["explorer"][-1]
+    assert await _pending(sessions, session) == []
+    left = await sessions.list_sessions(app_name=EXPLORER_APP_NAME, user_id="u")
+    assert left.sessions == []
+
+
+@pytest.mark.asyncio
+async def test_explorer_always_approval_reaches_the_parent_state(monkeypatch):
+    """`always` inside the sub-agent stays in the parent session: the next delegation reads without asking (#535)."""
+    from dak_agent.permission import always_approvals
+
+    runner, sessions, _llm, reads = _env_explorer(monkeypatch)
+    session = await sessions.create_session(app_name="dak_agent", user_id="u")
+
+    await _ask(runner, session)
+    (pending,) = await _pending(sessions, session)
+    assert await _answer(runner, session, pending["id"], "always") == "done"
+    stored = await sessions.get_session(app_name="dak_agent", user_id="u", session_id=session.id)
+    assert ("local", "read_file", ".env") in always_approvals(stored.state)
+
+    assert await _ask(runner, session, "And again?") == "done"
+    assert await _pending(sessions, session) == []
+    assert reads == [".env", ".env"]
