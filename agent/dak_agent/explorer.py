@@ -7,6 +7,8 @@ only the sub-agent's final answer as the tool's result (#85).
 The sub-agent gets only the default MCP server's read-only tools; it cannot
 write files or run commands. It runs on the model the calling agent uses in
 that call (a caller's `dak:model` too), so delegated reads go to that model.
+Its MCP calls carry the parent session's key, so in an isolated sandbox it
+reads the parent's workspace, not the empty one of its own session (#527).
 """
 from google.adk.agents import LlmAgent
 from google.adk.tools.agent_tool import AgentTool
@@ -27,24 +29,36 @@ DELEGATION_INSTRUCTION = (
 )
 
 
+def _read_only_toolset(mcp_url: str, header_provider) -> McpToolset:
+    return McpToolset(
+        connection_params=StreamableHTTPConnectionParams(url=mcp_url),
+        header_provider=header_provider,
+        tool_filter=READ_ONLY_TOOL_NAMES,
+    )
+
+
 class _ExplorerTool(AgentTool):
+    def __init__(self, *, agent, mcp_url: str):
+        super().__init__(agent=agent)
+        self._mcp_url = mcp_url
+
     async def run_async(self, *, args, tool_context):
         model = tool_context._invocation_context.agent.canonical_model
-        explorer = AgentTool(agent=self.agent.clone(update={"model": model}))  # a copy per call: sessions run at once
+        # AgentTool runs the sub-agent in a new session; the key comes from the parent's
+        # context only, not from session state the caller could write (#527)
+        headers = session_key_header(tool_context)
+        toolset = _read_only_toolset(self._mcp_url, lambda _ctx: headers)
+        # a copy per call: sessions run at once, and the sub-runner closes only this call's toolset
+        explorer = AgentTool(agent=self.agent.clone(update={"model": model, "tools": [toolset]}))
         return await explorer.run_async(args=args, tool_context=tool_context)
 
 
 def make_explorer_tool(mcp_url: str) -> AgentTool:
     """The read-only investigation sub-agent wrapped as a tool for the root agent."""
-    toolset = McpToolset(
-        connection_params=StreamableHTTPConnectionParams(url=mcp_url),
-        header_provider=session_key_header,
-        tool_filter=READ_ONLY_TOOL_NAMES,
-    )
     explorer = LlmAgent(
         name=EXPLORER_NAME,
         description="Investigates files read-only and returns only its conclusions.",
         instruction=EXPLORER_INSTRUCTION,
-        tools=[toolset],
+        tools=[_read_only_toolset(mcp_url, session_key_header)],
     )
-    return _ExplorerTool(agent=explorer)
+    return _ExplorerTool(agent=explorer, mcp_url=mcp_url)
