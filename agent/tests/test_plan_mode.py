@@ -47,6 +47,21 @@ def test_run_command_denied_in_plan_mode(command):
     assert judge(active(), "run_command", {"command": command}) == "deny"
 
 
+def test_save_memory_denied_only_in_plan_mode():
+    args = {"text": "x", "scope": "project"}
+    state = active()
+    assert judge(state, "save_memory", args) == "deny"
+    assert judge({}, "save_memory", args) == "ask"
+    plan_mode.exit_(state)
+    assert judge(state, "save_memory", args) == "ask"
+
+
+def test_load_memory_not_denied_in_plan_mode():
+    args = {"scope": ""}
+    assert judge(active(), "load_memory", args) != "deny"
+    assert judge(active(), "load_memory", args) == judge({}, "load_memory", args)
+
+
 def test_reads_are_unchanged_in_plan_mode():
     for tool, args in (("read_file", {"path": "a.py"}), ("grep", {"path": "."}), ("planner", {})):
         assert judge(active(), tool, args) == judge({}, tool, args)
