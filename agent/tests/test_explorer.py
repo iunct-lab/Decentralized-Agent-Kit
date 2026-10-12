@@ -279,33 +279,37 @@ async def test_explorer_always_approval_reaches_the_parent_state(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_explorer_rejects_a_confirmation_it_cannot_ask_after_resuming(monkeypatch):
-    """ADK shows no new approval for a call that asks again after it was resumed, so the sub-agent's
-    next confirmation is rejected, not left pending, and the parent hears which call did not run (PR #680 review)."""
-    runner, sessions, llm, reads = _env_explorer(monkeypatch, paths=(".env", "b.env"))
+async def test_explorer_asks_again_after_it_was_resumed(monkeypatch):
+    """A confirmation the sub-agent needs after the first answer is pending in the parent session too;
+    ADK does not show one from a resumed call by itself (PR #680 review)."""
+    runner, sessions, _llm, reads = _env_explorer(monkeypatch, paths=(".env", "b.env"))
     session = await sessions.create_session(app_name="dak_agent", user_id="u")
 
     await _ask(runner, session)
-    (pending,) = await _pending(sessions, session)
-    assert await _answer(runner, session, pending["id"], "once") == "done"
-
+    (first,) = await _pending(sessions, session)
+    await _answer(runner, session, first["id"], "once")
     assert reads == [".env"]
+    (second,) = await _pending(sessions, session)
+    assert second["tool_name"] == EXPLORER_NAME and "b.env" in second["hint"]
+
+    assert await _answer(runner, session, second["id"], "once") == "done"
+    assert reads == [".env", "b.env"]
     assert await _pending(sessions, session) == []
-    assert "This tool call is rejected." in llm.requests["explorer"][-1]
-    assert "b.env" in llm.requests["parent"][-1] and CONCLUSION in llm.requests["parent"][-1]
     left = await sessions.list_sessions(app_name=EXPLORER_APP_NAME, user_id="u")
     assert left.sessions == []
 
 
 @pytest.mark.asyncio
 async def test_explorer_starts_when_its_own_call_was_approved(monkeypatch):
-    """A rule that asks for `dak_explorer` itself: the approved call starts the investigation (PR #680 review)."""
-    runner, sessions, _llm, reads = _env_explorer(
-        monkeypatch, paths=("README.md",), rules=[Rule("local", EXPLORER_NAME, "*", "ask")])
+    """A rule that asks for `dak_explorer` itself: the approved call starts the investigation, and a
+    confirmation inside it is still pending in the parent session (PR #680 review)."""
+    runner, sessions, _llm, reads = _env_explorer(monkeypatch, rules=[Rule("local", EXPLORER_NAME, "*", "ask")])
     session = await sessions.create_session(app_name="dak_agent", user_id="u")
 
     await _ask(runner, session)
-    (pending,) = await _pending(sessions, session)
-    assert reads == []
-    assert await _answer(runner, session, pending["id"], "once") == "done"
-    assert reads == ["README.md"]
+    (delegation,) = await _pending(sessions, session)
+    await _answer(runner, session, delegation["id"], "once")
+    (inner,) = await _pending(sessions, session)
+    assert ".env" in inner["hint"] and reads == []
+    assert await _answer(runner, session, inner["id"], "once") == "done"
+    assert reads == [".env"]
