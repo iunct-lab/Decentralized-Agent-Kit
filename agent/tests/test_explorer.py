@@ -10,6 +10,7 @@ from dak_agent.permission import DEFAULT_RULES, PermissionPlugin, Rule
 
 RAW_MARKER = "RAW-FILE-CONTENT-7f3a"
 CONCLUSION = "Conclusion: the repository has one service."
+PENDING = {"error": "This tool call requires confirmation, please approve or reject."}
 
 
 def test_make_explorer_tool_only_has_read_only_tools():
@@ -33,10 +34,12 @@ def _request_text(llm_request) -> str:
     return "\n".join(out)
 
 
-def _scripted_llm(path="README.md"):
+def _scripted_llm(*paths):
     """One model for both agents, as in production (the explorer runs on the parent's model).
-    As the parent it delegates once to the explorer, as the explorer it reads `path`;
-    each answers once its tool result for the latest user text is back. Records each request's text by role."""
+    As the parent it delegates once to the explorer, as the explorer it reads `paths` (README.md by
+    default) one by one; each answers once its tool results for the latest user text are back, and the
+    explorer also answers while a read waits for confirmation. Records each request's text by role."""
+    paths = paths or ("README.md",)
     from google.adk.models.base_llm import BaseLlm
     from google.adk.models.llm_response import LlmResponse
 
@@ -48,9 +51,14 @@ def _scripted_llm(path="README.md"):
             self.requests.setdefault(role, []).append(_request_text(llm_request))
             asked = max(i for i, c in enumerate(llm_request.contents) if any(p.text for p in c.parts or [])
                         and c.role == "user")
-            answered = any(p.function_response for c in llm_request.contents[asked:] for p in c.parts or [])
+            responses = [p.function_response for c in llm_request.contents[asked:] for p in c.parts or []
+                         if p.function_response]
+            answered = bool(responses)
             if role == "explorer":
-                call = types.FunctionCall(name="read_file", args={"path": path})
+                waiting = bool(responses) and responses[-1].response == PENDING
+                done = [r for r in responses if r.response != PENDING]
+                answered = waiting or len(done) >= len(paths)
+                call = types.FunctionCall(name="read_file", args={"path": paths[min(len(done), len(paths) - 1)]})
                 answer = CONCLUSION
             else:
                 call = types.FunctionCall(name=EXPLORER_NAME, args={"request": "Summarise the repository."})
@@ -202,8 +210,8 @@ async def _answer(runner, session, fc_id, mode):
     return final
 
 
-def _env_explorer(monkeypatch):
-    """A parent with the explorer whose sub-agent reads `.env`, under a rule that asks for it (#535)."""
+def _env_explorer(monkeypatch, paths=(".env",), rules=()):
+    """A parent with the explorer whose sub-agent reads `paths`, under a rule that asks for `*.env` (#535)."""
     from google.adk.agents import LlmAgent
     from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
@@ -215,12 +223,13 @@ def _env_explorer(monkeypatch):
         reads.append(path)
         return RAW_MARKER
 
-    llm = _scripted_llm(".env")
+    llm = _scripted_llm(*paths)
     _fake_mcp(monkeypatch, read_file)
     parent = LlmAgent(name="dak_agent", model=llm, instruction="Answer.",
                       tools=[make_explorer_tool("http://mcp.invalid/mcp")])
     sessions = InMemorySessionService()
-    plugin = PermissionPlugin([*DEFAULT_RULES, Rule("local", "read_file", "*.env", "ask")], "http://mcp.invalid/mcp")
+    plugin = PermissionPlugin([*DEFAULT_RULES, Rule("local", "read_file", "*.env", "ask"), *rules],
+                              "http://mcp.invalid/mcp")
     runner = Runner(app_name="dak_agent", agent=parent, session_service=sessions, plugins=[plugin])
     return runner, sessions, llm, reads
 
@@ -267,3 +276,36 @@ async def test_explorer_always_approval_reaches_the_parent_state(monkeypatch):
     assert await _ask(runner, session, "And again?") == "done"
     assert await _pending(sessions, session) == []
     assert reads == [".env", ".env"]
+
+
+@pytest.mark.asyncio
+async def test_explorer_rejects_a_confirmation_it_cannot_ask_after_resuming(monkeypatch):
+    """ADK shows no new approval for a call that asks again after it was resumed, so the sub-agent's
+    next confirmation is rejected, not left pending, and the parent hears which call did not run (PR #680 review)."""
+    runner, sessions, llm, reads = _env_explorer(monkeypatch, paths=(".env", "b.env"))
+    session = await sessions.create_session(app_name="dak_agent", user_id="u")
+
+    await _ask(runner, session)
+    (pending,) = await _pending(sessions, session)
+    assert await _answer(runner, session, pending["id"], "once") == "done"
+
+    assert reads == [".env"]
+    assert await _pending(sessions, session) == []
+    assert "This tool call is rejected." in llm.requests["explorer"][-1]
+    assert "b.env" in llm.requests["parent"][-1] and CONCLUSION in llm.requests["parent"][-1]
+    left = await sessions.list_sessions(app_name=EXPLORER_APP_NAME, user_id="u")
+    assert left.sessions == []
+
+
+@pytest.mark.asyncio
+async def test_explorer_starts_when_its_own_call_was_approved(monkeypatch):
+    """A rule that asks for `dak_explorer` itself: the approved call starts the investigation (PR #680 review)."""
+    runner, sessions, _llm, reads = _env_explorer(
+        monkeypatch, paths=("README.md",), rules=[Rule("local", EXPLORER_NAME, "*", "ask")])
+    session = await sessions.create_session(app_name="dak_agent", user_id="u")
+
+    await _ask(runner, session)
+    (pending,) = await _pending(sessions, session)
+    assert reads == []
+    assert await _answer(runner, session, pending["id"], "once") == "done"
+    assert reads == ["README.md"]
