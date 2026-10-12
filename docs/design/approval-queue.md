@@ -40,6 +40,8 @@ Task 本文の `python3.13` は誤りで、agent の venv は 3.12。
 
 追記（2026-09-30）: #101 / #178 が main に入った。`PermissionPlugin`（`agent/dak_agent/permission.py`。App のプラグインの `before_tool_callback`）が、規則が `ask` になるツール（既定の MCP サーバの書き込み・コマンドなど）で `request_confirmation` を呼ぶ。拒否は ADK と同じ固定文言 `{"error": "This tool call is rejected."}` を返すので、理由は 3 の `_restore_reject_reason` でモデルに届く（プラグインが結果を返してもエージェントの `after_tool_callback` は呼ばれる。`functions.py` の Step 4）。`always` は `PermissionPlugin` が `payload.mode` を読んで継続許可を保存する。この文書の一覧・reply はそのまま使える。統合テスト（#175）は MCP サーバに依らない `planner` で保留を作る。
 
+追記（2026-10-12）: 調査サブエージェント `dak_explorer` の中の確認は、親のセッションの `dak_explorer` の呼び出しの保留になる（一覧に出るのは親のセッションの 1 件で、その答えを子のセッションに渡す。#535）。この文書の一覧・reply はそのまま使える。
+
 ### 質問待ち（`ask_question`）
 
 - `ask_question`（`builtin_tools.py:40-49`）は enforcer mode のときだけ出る普通のツール（確認なし）。`end_invocation = True` にして invocation を終え、結果（質問の文面）を functionResponse として残す
