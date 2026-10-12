@@ -66,11 +66,15 @@ jobs:
           AWS_SESSION_TOKEN: ${{ steps.aws.outputs.aws-session-token }}
           AWS_REGION: ${{ vars.MAINT_AWS_REGION || 'us-east-1' }}
         run: |
-          existing=$(gh issue list --label feature-sync --state open --json title --jq '[.[].title | sub("^要望: *"; "")]')  # 起票時に付ける「要望: 」を外して比べる
+          set -o pipefail  # 取得の失敗を、空の比べる相手として黙って進めない
+          # 内容で比べる相手: 要望・PBI と、このワークフローが起票したもの（開いた・閉じた）
+          for l in type:request type:pbi feature-sync; do
+            gh issue list --label "$l" --state all --limit 1000 --json number,title,state
+          done | jq -s 'add | unique_by(.number)' > existing.json
           uv run dak-maint feature-sync \
             --deps "$(cat deps.json)" \
             --charter ../docs/CHARTER.md \
-            --existing-titles "$existing" \
+            --existing-issues existing.json \
             --max-items 2 > proposals.json
           cat proposals.json
 

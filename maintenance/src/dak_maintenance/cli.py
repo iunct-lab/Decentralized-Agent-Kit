@@ -139,13 +139,20 @@ def cmd_triage(args: argparse.Namespace) -> int:
 
 # ---- watch (Tier2, provider-neutral) ----
 
+def _existing_issues(path: str | None) -> list[dict]:
+    """`gh issue list --json number,title,state` written to a file; no file means none."""
+    if not path or not Path(path).exists():
+        return []
+    return json.loads(_read(path))
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     complete = _require_complete()
     if complete is None:
         return _emit_proposals([])
-    existing = json.loads(args.existing_titles) if args.existing_titles else []
     proposals = propose_technologies(
-        _read(args.charter), complete, existing_titles=existing, max_items=args.max_items,
+        _read(args.charter), complete, existing=_existing_issues(args.existing_issues),
+        max_items=args.max_items,
     )
     return _emit_proposals(proposals)
 
@@ -155,10 +162,9 @@ def cmd_feature_sync(args: argparse.Namespace) -> int:
     if complete is None:
         return _emit_proposals([])
     deps = json.loads(args.deps) if args.deps else []
-    existing = json.loads(args.existing_titles) if args.existing_titles else []
     proposals = propose_feature_adoptions(
         deps, complete, charter=_read(args.charter) if args.charter else "",
-        existing_titles=existing, max_items=args.max_items,
+        existing=_existing_issues(args.existing_issues), max_items=args.max_items,
     )
     return _emit_proposals(proposals)
 
@@ -308,14 +314,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     w = sub.add_parser("watch", help="新技術を探索し提案する")
     w.add_argument("--charter", default="docs/CHARTER.md")
-    w.add_argument("--existing-titles", default=None, help="JSON array of existing issue titles")
+    w.add_argument("--existing-issues", default=None,
+                   help="gh issue list --json number,title,state の JSON 配列を書いたファイル（無ければ空）")
     w.add_argument("--max-items", type=int, default=2)
     w.set_defaults(func=cmd_watch)
 
     f = sub.add_parser("feature-sync", help="依存の新機能取り込みを提案する")
     f.add_argument("--deps", default=None, help='JSON: [{"package","from","to"}]')
     f.add_argument("--charter", default="docs/CHARTER.md")
-    f.add_argument("--existing-titles", default=None)
+    f.add_argument("--existing-issues", default=None,
+                   help="gh issue list --json number,title,state の JSON 配列を書いたファイル（無ければ空）")
     f.add_argument("--max-items", type=int, default=2)
     f.set_defaults(func=cmd_feature_sync)
 

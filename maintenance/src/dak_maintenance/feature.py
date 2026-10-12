@@ -12,7 +12,7 @@ from typing import Callable
 
 from .changelog import get_changelog
 from .jsonutil import extract_json
-from .proposals import Proposal, dedupe
+from .proposals import Proposal, drop_overlaps
 
 # Dependabot writes one "Updates `<pkg>` from <a> to <b>" line per package in
 # both group and single-package PR bodies; an ungrouped PR instead says
@@ -69,7 +69,7 @@ def propose_feature_adoptions(
     complete: CompleteFn,
     charter: str = "",
     get_changelog_fn: ChangelogFn = get_changelog,
-    existing_titles: list[str] | None = None,
+    existing: list[dict] | None = None,
     max_items: int = 2,
 ) -> list[Proposal]:
     """deps: list of {"package","from","to"} for recently updated dependencies."""
@@ -112,4 +112,4 @@ def propose_feature_adoptions(
         # A wrong key, model or URL fails every call; do not report it as a
         # quiet week with no proposals.
         raise RuntimeError(f"every LLM call failed ({failed} deps); check MAINT_LLM_*")
-    return dedupe(proposals, existing_titles or [], max_items)
+    return drop_overlaps(proposals, existing or [], complete, max_items)

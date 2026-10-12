@@ -54,3 +54,47 @@ def test_triage_malformed_deps_json_exits_gracefully(bad_json, capsys):
         main(["triage", "--deps-json", bad_json, "--ci-passed", "true"])
     assert exc.value.code == 2
     assert "deps-json" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", [["watch"], ["feature-sync", "--deps", "[]"]])
+def test_existing_issues_are_read_from_the_file(command, tmp_path, monkeypatch, capsys):
+    from dak_maintenance import cli
+
+    issues = [{"number": 112, "title": "要望: MCP", "state": "OPEN"}]
+    path = tmp_path / "existing.json"
+    path.write_text(json.dumps(issues, ensure_ascii=False))
+    seen = {}
+
+    def fake(*args, existing=None, **kwargs):
+        seen["existing"] = existing
+        return []
+
+    monkeypatch.setattr(cli, "_require_complete", lambda: (lambda p: "[]"))
+    monkeypatch.setattr(cli, "propose_technologies", fake)
+    monkeypatch.setattr(cli, "propose_feature_adoptions", fake)
+    (tmp_path / "CHARTER.md").write_text("charter")
+
+    rc = main([*command, "--charter", str(tmp_path / "CHARTER.md"), "--existing-issues", str(path)])
+
+    assert rc == 0
+    assert seen["existing"] == issues
+
+
+def test_a_missing_existing_issues_file_is_no_existing_issues(tmp_path, monkeypatch):
+    from dak_maintenance import cli
+
+    seen = {}
+
+    def fake(*args, existing=None, **kwargs):
+        seen["existing"] = existing
+        return []
+
+    monkeypatch.setattr(cli, "_require_complete", lambda: (lambda p: "[]"))
+    monkeypatch.setattr(cli, "propose_technologies", fake)
+    (tmp_path / "CHARTER.md").write_text("charter")
+
+    rc = main(["watch", "--charter", str(tmp_path / "CHARTER.md"),
+               "--existing-issues", str(tmp_path / "nothing.json")])
+
+    assert rc == 0
+    assert seen["existing"] == []
