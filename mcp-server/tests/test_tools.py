@@ -406,6 +406,17 @@ class TestSessionSandboxRouting(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await main.grep("beta", ".", glob_pattern="b.txt", ctx=_ctx("s1")),
                              "./b.txt:1: alpha\x0bbeta")
 
+    async def test_write_file_bare_name_in_off_mode(self):
+        with tempfile.TemporaryDirectory() as d:
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                self.assertEqual(await main.write_file("notes.txt", "hello"), "Successfully wrote to notes.txt")
+                with open("notes.txt") as f:
+                    self.assertEqual(f.read(), "hello")
+            finally:
+                os.chdir(cwd)
+
     async def test_edit_file_bare_name_in_off_mode(self):
         with tempfile.TemporaryDirectory() as d:
             cwd = os.getcwd()
