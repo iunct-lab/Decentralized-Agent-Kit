@@ -181,7 +181,7 @@ functionCall と functionResponse は同じ `id`（fake-LLM が付けた `call_�
  {"partial": false, "content": {"role": "model", "parts": [{"text": "FAKE_LLM_DEFAULT_RESPONSE"}]}}]
 ```
 
-ツールは実行された（mcp-server の答えが返った）が、`write_file` はディレクトリを含まないパス（`acp-capture-6816e3.txt`）で失敗した。session sandbox が無効のときは、`_session_path` がパスをそのまま返し、`os.makedirs(os.path.dirname(path))` が空の文字列で落ちる（`mcp-server/main.py` の `write_file`）。ACP の窓口とは別の不具合なので別の Issue にする。#317 の統合テストは、ディレクトリを含むパス（`acp-it/<名前>.txt` など）に書かせる。
+ツールは実行された（mcp-server の答えが返った）が、`write_file` はディレクトリを含まないパス（`acp-capture-6816e3.txt`）で失敗した。session sandbox が無効のときは、`_session_path` がパスをそのまま返し、`os.makedirs(os.path.dirname(path))` が空の文字列で落ちる（当時の `mcp-server/main.py` の `write_file`）。ACP の窓口とは別の不具合なので #543 で起票した。#512 で書き込みが `_write_text` にまとまり、ディレクトリを含まないパスでは `makedirs` を呼ばなくなって直った（`mcp-server/tests/test_tools.py` の `test_write_file_bare_name_in_off_mode` で確かめている）。#317 の統合テストは、ディレクトリを含むパス（`acp-it/<名前>.txt` など）に書かせる。
 
 同じ流れで `{"mode": "reject", "reason": "cancelled in editor"}` を送ると、元の呼び出しの結果は次のとおりで、mcp-server には何も書かれなかった:
 
