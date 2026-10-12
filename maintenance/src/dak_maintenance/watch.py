@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Callable
 
 from .jsonutil import extract_json
-from .proposals import Proposal, dedupe
+from .proposals import Proposal, drop_overlaps
 from .search import SearchResult, web_search
 
 CompleteFn = Callable[[str], str]
@@ -99,11 +99,11 @@ def propose_technologies(
     charter: str,
     complete: CompleteFn,
     search: SearchFn = web_search,
-    existing_titles: list[str] | None = None,
+    existing: list[dict] | None = None,
     max_items: int = 2,
     k: int = 5,
 ) -> list[Proposal]:
     queries = generate_queries(charter, complete)
     candidates = gather_candidates(queries, search, k)
     proposals = evaluate(charter, candidates, complete)
-    return dedupe(proposals, existing_titles or [], max_items)
+    return drop_overlaps(proposals, existing or [], complete, max_items)
