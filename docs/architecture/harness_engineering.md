@@ -253,8 +253,8 @@ LiteLLM のモデルマップ、それも無ければ 128K）。
 - A2A peer（`RemoteA2aAgent`、`agent/dak_agent/a2a_peer_manager.py`）は別のプロセスの別のエージェントで、`transfer_to_agent` で会話ごと渡し、書き込みも含めて自分のツールと設定で自律的に動く。
 - 使い分け: 同じ会話の中で一時的に調査だけを分離したいときは `dak_explorer`、別のエージェントに任せて独立して動かしたいとき（そのエージェントにしか無いツールや権限が要るときも）は A2A peer。
 - 確認の要る読み取り（既定では `*.env`）は親のセッションに `dak_explorer` の承認の保留として出る。hint に中の呼び出し（ツール名と引数）が入り、承認すると読み、拒否すると読まない。`always` の継続許可は親のセッションに残る。子のセッションは親と同じ session service の app `dak_explorer` に置き、終わったら消す（#535）。
-- 制限: 承認で再開した後にサブエージェントがもう一度確認を求めると、ADK は再開した呼び出しから新しい保留を出せないので、その呼び出しは拒否して実行せず、ツール結果に実行しなかった呼び出しを書く（親が自分で読めばふつうの承認に乗る）。`dak_explorer` 自体を `ask` にした規則で承認した呼び出しも、中の確認は同じく拒否になる（PR #680 のレビュー）。
-- 検証: `agent/tests/test_explorer.py`（親のモデル要求とセッションに生出力が入らず結論だけが入る、読み取り専用のツールだけ、親の呼び出しのモデルで動く、MCP 呼び出しが親のセッションのキーを使い 2 セッションのキーが混ざらない `test_explorer_uses_the_parent_session_key_on_its_mcp_calls`、中の確認を親のセッションで承認・拒否できる `test_explorer_confirmation_is_answered_in_the_parent_session`、`always` が親のセッションに残る `test_explorer_always_approval_reaches_the_parent_state`、再開後の確認は拒否して結果に書く `test_explorer_rejects_a_confirmation_it_cannot_ask_after_resuming`、`dak_explorer` 自体の承認で調査を始める `test_explorer_starts_when_its_own_call_was_approved`）。
+- 承認で再開した後にサブエージェントがもう一度確認を求めたときも、`dak_explorer` 自体を `ask` にした規則で承認した呼び出しの中の確認も、同じく親のセッションの保留になる（PR #680 のレビュー）。
+- 検証: `agent/tests/test_explorer.py`（親のモデル要求とセッションに生出力が入らず結論だけが入る、読み取り専用のツールだけ、親の呼び出しのモデルで動く、MCP 呼び出しが親のセッションのキーを使い 2 セッションのキーが混ざらない `test_explorer_uses_the_parent_session_key_on_its_mcp_calls`、中の確認を親のセッションで承認・拒否できる `test_explorer_confirmation_is_answered_in_the_parent_session`、`always` が親のセッションに残る `test_explorer_always_approval_reaches_the_parent_state`、再開後の確認も保留になる `test_explorer_asks_again_after_it_was_resumed`、`dak_explorer` 自体の承認で調査を始める `test_explorer_starts_when_its_own_call_was_approved`）。
 
 ### 承認の保留と reply（#100）
 
