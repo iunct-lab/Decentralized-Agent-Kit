@@ -51,8 +51,8 @@ INSPECTION_RETRY_PROMPT = ("Your previous response failed validation.\nValidatio
 PLAN_MODE_REMINDER = (
     "\n\n<system-reminder>You are in Plan mode. Only read-only tools (read_file, grep, list_files, "
     "search_files, deep_think) are available; write_file/edit_file are denied except under plans/*.md, "
-    "and run_command is denied. Call plan_exit(plan_path=...) to request approval to leave Plan mode "
-    "and execute.</system-reminder>"
+    "and run_command and save_memory are denied. Call plan_exit(plan_path=...) to request approval to leave "
+    "Plan mode and execute.</system-reminder>"
 )
 
 

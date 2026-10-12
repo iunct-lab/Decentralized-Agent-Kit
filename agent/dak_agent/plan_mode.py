@@ -2,9 +2,10 @@
 
 Entered with `planner(enter_plan_mode=True)`. While the session-state flag is
 set, the permission plugin tightens its decision with `active_rules`: writes
-outside `plans/*.md` and every `run_command` are denied. The rules only ever
-tighten (they are combined with the configured rules by the strictest result),
-so Plan mode never allows a call the configured rules would ask about.
+outside `plans/*.md`, every `run_command` and every `save_memory` are denied.
+The rules only ever tighten (they are combined with the configured rules by the
+strictest result), so Plan mode never allows a call the configured rules would
+ask about.
 """
 from typing import Any, List, Mapping, MutableMapping
 
@@ -22,6 +23,7 @@ PLAN_MODE_RULES: List[Rule] = [
         *(Rule("*", tool, p, "deny") for p in ("../*", "*/../*")),
     )),
     Rule("*", "run_command", "*", "deny"),
+    Rule("*", "save_memory", "*", "deny"),
 ]
 
 

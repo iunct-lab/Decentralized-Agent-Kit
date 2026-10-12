@@ -267,7 +267,7 @@ class PermissionPlugin(BasePlugin):
                 "observation": "denied_by_policy",
                 "tool": tool.name,
                 "reason": (f"'{tool.name}' is not available in Plan mode (only {plan_mode.PLAN_FILE_GLOB} may be"
-                           " written; run_command is denied) until plan_exit is approved."
+                           " written; run_command and save_memory are denied) until plan_exit is approved."
                            if plan_action == "deny" else f"'{tool.name}' is denied by policy for this input."),
                 "rules": matching_rules(self.rules + plan_mode.active_rules(state), source, tool.name, tool_args),
                 "hint": "Do not retry the same call. Choose another way, or ask the user to run it themselves.",
