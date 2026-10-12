@@ -62,7 +62,7 @@ def drop_overlaps(
 ) -> list[Proposal]:
     """Drop proposals whose content overlaps an existing issue (one LLM call), then
     same-title duplicates within the run, then cap the count."""
-    overlaps: dict[int, int] = {}
+    overlaps: dict[str, int] = {}
     if proposals and existing:
         numbers = {i.get("number") for i in existing}
         listed = "\n".join(
@@ -75,12 +75,12 @@ def drop_overlaps(
             raise RuntimeError("提案と既存の Issue を突き合わせられなかった（LLM の応答が JSON の配列ではない）")
         for it in data:
             if isinstance(it, dict) and type(it.get("overlaps")) is int and it["overlaps"] in numbers:
-                overlaps[it.get("index")] = it["overlaps"]
+                overlaps[str(it.get("index"))] = it["overlaps"]  # the index may come back as "1"
     seen: set[str] = set()
     out: list[Proposal] = []
     for n, p in enumerate(proposals, 1):
-        if n in overlaps:
-            print(f"skip: {p.title}（#{overlaps[n]} と重なる）", file=sys.stderr)
+        if str(n) in overlaps:
+            print(f"skip: {p.title}（#{overlaps[str(n)]} と重なる）", file=sys.stderr)
             continue
         key = _norm(p.title)
         if not key or key in seen or len(out) >= max_items:
