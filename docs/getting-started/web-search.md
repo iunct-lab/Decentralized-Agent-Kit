@@ -13,8 +13,15 @@
    Switchboard のホストでは `.env` に書かない。AGENTS.md の「Switchboard-hosted credentials」に従い、SSM Parameter Store の `SecureString` から起動時に環境変数として渡す
 3. `docker compose up -d --build`（agent を作り直すと環境変数が入る）
 4. エージェントに頼む。例: 「Web 検索のスキルを有効にして、〜を調べて」。エージェントが `enable_skill("web_search")` → `tavily_search` と進む
+5. `tavily_search` の呼び出しごとに承認を求められる（UI の承認、または `/approvals`。`docs/design/approval-queue.md`）。承認すると検索が走り、結果がモデルに渡る
 
 検索のたびにクレジットを使う（下の「利用条件」）。試す回数は自分で決める。
+承認を求めるのは、`agent_config.yaml` の `permissions` に規則の無い MCP サーバの既定（`ask`。`agent/dak_agent/permission.py`）による。承認なしで検索させたいときは、自分の判断で規則を足す（`source` は使っている URL。`TAVILY_MCP_URL` で変えたらその URL）:
+
+```yaml
+permissions:
+  - {source: "https://mcp.tavily.com/mcp/", tool: "tavily_*", action: allow}
+```
 
 ### 仕組み
 
