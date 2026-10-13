@@ -47,8 +47,10 @@ class ModeManager:
         "default": 128000,
     }
 
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, small_model: Optional[str] = None):
         self.model_name = model_name
+        # The Meta-Agent's model; None means the main model.
+        self.small_model = small_model
         self.max_context_tokens = self.resolve_context_window(model_name)
 
     @classmethod
@@ -233,8 +235,10 @@ You must output a JSON object with this structure:
         logger.debug("-------------------------")
 
         try:
-            # The Meta-Agent uses the same provider as the main model (via LiteLLM)
-            config_data = meta_llm.complete_json(get_litellm_model_name(self.model_name), meta_prompt)
+            # The Meta-Agent uses small_model if set, else the main model (via LiteLLM)
+            config_data = meta_llm.complete_json(
+                get_litellm_model_name(self.small_model or self.model_name), meta_prompt
+            )
 
             if not config_data:
                 logger.warning("Meta-Agent returned no config. Keeping current configuration.")

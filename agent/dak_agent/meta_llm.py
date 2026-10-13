@@ -11,6 +11,12 @@ from typing import Any, Dict
 logger = logging.getLogger(__name__)
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def strip_think_tags(text: str) -> str:
+    """Drop the <think>…</think> reasoning blocks some models (Qwen, DeepSeek) emit before the answer."""
+    return _THINK_BLOCK_RE.sub("", text)
 
 
 def extract_json(text: str) -> Dict[str, Any]:
@@ -51,4 +57,4 @@ def complete_json(model_name: str, prompt: str) -> Dict[str, Any]:
             return {}
 
     text = response.choices[0].message.content or ""
-    return extract_json(text)
+    return extract_json(strip_think_tags(text))

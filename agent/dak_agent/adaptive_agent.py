@@ -153,7 +153,7 @@ class AdaptiveAgent(LlmAgent):
 
         model_name_str = model if isinstance(model, str) else getattr(model, "model", str(model))
         self._base_model_name = model_name_str
-        self._mode_manager = ModeManager(model_name=model_name_str)
+        self._mode_manager = ModeManager(model_name=model_name_str, small_model=os.getenv("DAK_SMALL_MODEL"))
         self._all_available_tools = all_tools
         self._builtin_tools = builtin_tools
         self._has_default_mcp_toolset = any("Toolset" in type(t).__name__ for t in all_tools)

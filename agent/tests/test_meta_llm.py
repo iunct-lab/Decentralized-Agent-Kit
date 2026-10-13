@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from dak_agent.meta_llm import complete_json, extract_json
+from dak_agent.meta_llm import complete_json, extract_json, strip_think_tags
 
 
 class TestExtractJson(unittest.TestCase):
@@ -19,6 +19,15 @@ class TestExtractJson(unittest.TestCase):
         self.assertEqual(extract_json("not json at all"), {})
 
 
+class TestStripThinkTags(unittest.TestCase):
+    def test_strip_think_tags_removes_reasoning_block(self):
+        text = '<think>the user wants {"a": 0}\nso…</think>{"a": 1}'
+        self.assertEqual(strip_think_tags(text), '{"a": 1}')
+
+    def test_text_without_think_is_unchanged(self):
+        self.assertEqual(strip_think_tags('{"a": 1}'), '{"a": 1}')
+
+
 class TestCompleteJson(unittest.TestCase):
     def _mock_response(self, content: str):
         response = MagicMock()
@@ -31,6 +40,17 @@ class TestCompleteJson(unittest.TestCase):
         result = complete_json("gemini/gemini-2.5-flash", "prompt")
         self.assertEqual(result, {"instruction": "do x"})
         self.assertEqual(mock_completion.call_args.kwargs["response_format"], {"type": "json_object"})
+
+    @patch("litellm.completion")
+    def test_complete_json_strips_think_before_parsing(self, mock_completion):
+        # The braces inside the reasoning would otherwise make the greedy
+        # fallback span from the first "{" to the last "}" and fail to parse.
+        mock_completion.return_value = self._mock_response(
+            '<think>I should return {"instruction": ...}</think>'
+            '{"instruction": "x", "selected_tools": [], "selected_skills": []}'
+        )
+        result = complete_json("ollama_chat/qwen3:8b", "prompt")
+        self.assertEqual(result, {"instruction": "x", "selected_tools": [], "selected_skills": []})
 
     @patch("litellm.completion")
     def test_retries_without_json_mode(self, mock_completion):
