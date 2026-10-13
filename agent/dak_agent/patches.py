@@ -4,6 +4,14 @@ import logging
 import os
 
 logger = logging.getLogger(__name__)
+# The `MCP connected` line has its own logger: uvicorn configures only its own
+# loggers, so like `tool_call` in permission.py it goes to stderr on its own,
+# and only once (not again through a root handler an entrypoint may configure).
+negotiation_logger = logging.getLogger(f"{__name__}.mcp_negotiation")
+if not negotiation_logger.handlers:
+    negotiation_logger.addHandler(logging.StreamHandler())
+    negotiation_logger.setLevel(logging.INFO)
+    negotiation_logger.propagate = False
 
 
 def apply_patches() -> None:
@@ -50,7 +58,7 @@ def log_mcp_negotiation(session) -> None:
     server = f"{info.name}/{info.version}" if info else "unknown"
     caps = session.server_capabilities
     names = ",".join(sorted(caps.model_dump(exclude_none=True))) if caps else ""
-    logger.info(f"MCP connected: protocol={session.protocol_version} server={server} capabilities={names or 'none'}")
+    negotiation_logger.info(f"MCP connected: protocol={session.protocol_version} server={server} capabilities={names or 'none'}")
 
 
 def ensure_tracer_provider() -> None:
