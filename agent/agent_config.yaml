@@ -2,7 +2,7 @@ mcp_servers:
   - name: "local-mcp"
     url: "http://mcp-server:8000/mcp"
     type: "http"
-    send_session_key: true
+    send_session_key: true  # DAK の mcp-server だけに書く。他のサーバには X-DAK-Session-Key（利用者 ID とセッション ID）を送らない
 
 a2a_peers:
   - name: "agent_provider"
