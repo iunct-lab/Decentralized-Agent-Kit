@@ -3,6 +3,15 @@ mcp_servers:
     url: "http://mcp-server:8000/mcp"
     type: "http"
     send_session_key: true  # DAK の mcp-server だけに書く。他のサーバには X-DAK-Session-Key（利用者 ID とセッション ID）を送らない
+  # Web search (skills/web_search). On only when TAVILY_API_KEY is set; the key
+  # goes in the Authorization header, never here or in the URL.
+  # docs/getting-started/web-search.md
+  - name: "tavily"
+    url: "https://mcp.tavily.com/mcp/"
+    type: "http"
+    url_env: "TAVILY_MCP_URL"
+    bearer_token_env: "TAVILY_API_KEY"
+    requires_env: ["TAVILY_API_KEY"]
 
 a2a_peers:
   - name: "agent_provider"

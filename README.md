@@ -76,6 +76,7 @@ both the **UI and the CLI** — including a no-API-key local-LLM path — see
 ### Getting Started
 - [Docker Deployment Guide](docs/getting-started/docker_deployment.md)
 - [Installation & Setup](docs/getting-started/installation.md)
+- [Web Search (Tavily)](docs/getting-started/web-search.md): optional `web_search` skill, on only with your own `TAVILY_API_KEY`
 
 ### Guides
 - [MCP Integration Guide](docs/guides/mcp_integration.md) - Tool development and usage
