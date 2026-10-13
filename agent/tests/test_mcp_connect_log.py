@@ -8,6 +8,8 @@ and the 2026-07-28 `server/discover` end in. ADK picks between them with its fea
 import asyncio
 import logging
 import socket
+import subprocess
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -19,7 +21,7 @@ from mcp.client.session import ClientSession
 from mcp.server.mcpserver import MCPServer
 
 from dak_agent.mcp_headers import SESSION_KEY_HEADER, session_key_header
-from dak_agent.patches import apply_patches
+from dak_agent.patches import apply_patches, negotiation_logger
 
 SEEN_HEADERS: list = []
 
@@ -66,8 +68,11 @@ def server_url():
 @pytest.fixture
 def connect_log(caplog):
     apply_patches()
-    caplog.set_level(logging.INFO, logger="dak_agent.patches")
-    return caplog
+    negotiation_logger.addHandler(caplog.handler)  # the logger does not propagate to caplog's root handler
+    try:
+        yield caplog
+    finally:
+        negotiation_logger.removeHandler(caplog.handler)
 
 
 # Only `user_id` and `session.id` are read by `session_key_header`.
@@ -118,3 +123,15 @@ def test_no_credentials_in_log_or_new_headers(server_url, connect_log, monkeypat
     monkeypatch.setattr(ClientSession, "adopt", ClientSession.adopt.__wrapped__)
     _list_tools(server_url)
     assert with_log == {name for headers in SEEN_HEADERS for name in headers}
+
+
+def test_line_reaches_stderr():
+    """No logging is configured at startup (uvicorn sets up only its own loggers); the line
+    still reaches stderr."""
+    script = (
+        "from types import SimpleNamespace as N\n"
+        "from dak_agent.patches import log_mcp_negotiation\n"
+        "log_mcp_negotiation(N(protocol_version='2025-11-25', server_info=None, server_capabilities=None))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=True)
+    assert "MCP connected: protocol=2025-11-25 server=unknown capabilities=none" in out.stderr.splitlines()
