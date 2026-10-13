@@ -99,9 +99,9 @@ Docker を使わず、mcp-server のプロセスの中でセッションごと�
 
   ```bash
   URL=https://storage.googleapis.com/gvisor/releases/release/<版>/$(uname -m)
-  curl -fsSLO $URL/gvisor.tar.bz2 -O $URL/gvisor.tar.bz2.sha512 && sha512sum -c gvisor.tar.bz2.sha512
-  sudo tar -xjf gvisor.tar.bz2 -C /usr/local/bin
-  sudo runsc install && sudo systemctl reload docker
+  # sha512 が合わなければ、root での展開と登録に進まない
+  curl -fsSLO $URL/gvisor.tar.bz2 -O $URL/gvisor.tar.bz2.sha512 && sha512sum -c gvisor.tar.bz2.sha512 \
+    && sudo tar -xjf gvisor.tar.bz2 -C /usr/local/bin && sudo runsc install && sudo systemctl reload docker
   docker info --format '{{range $k,$v := .Runtimes}}{{$k}} {{end}}'   # runsc が出ること
   ```
 
