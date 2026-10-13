@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import re
-import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Tuple
 
@@ -40,11 +39,6 @@ CALLER_MCP_PROBE_TIMEOUT_S = 30.0
 # Per-invocation (ADK drops `temp:` state after the invocation): the tool names
 # each reachable caller MCP server listed on this call, {url: [names]}.
 STATE_CALLER_MCP_TOOLS = "temp:dak_caller_mcp_tools"
-# Per-invocation, written by DAK (not the caller): the model calls made so far
-# this turn and when the turn started (time.monotonic()), for the turn limits
-# (call_config.CallLimits).
-STATE_CALL_COUNT = "temp:dak_call_count"
-STATE_CALL_STARTED_AT = "temp:dak_call_started_at"
 # The project's instruction files (mcp-server's get_project_instructions),
 # read at the start of every invocation and sent with its instruction.
 STATE_PROJECT_INSTRUCTIONS = "dak_project_instructions"
@@ -640,8 +634,7 @@ class AdaptiveAgent(LlmAgent):
 
         Returning Content ends the invocation there, before any model call:
         used to refuse a `dak:model` the operator does not allow."""
-        callback_context.state[STATE_CALL_COUNT] = 0
-        callback_context.state[STATE_CALL_STARTED_AT] = time.monotonic()
+        call_config.start_turn(callback_context.state)
         call_settings = call_config.resolve_dak_settings(callback_context)
         call_tools = call_settings.get(call_config.STATE_CALL_TOOLS)
         if call_tools is not None and not (isinstance(call_tools, Mapping) and "mcp_servers" in call_tools):
@@ -687,56 +680,16 @@ class AdaptiveAgent(LlmAgent):
         CallLimits). A call over the calls or time limit does not reach the
         model; the turn ends with the structured reason instead. ADK's own
         `RunConfig.max_llm_calls` raises instead, and `/run` cannot set it."""
-        return self._turn_limit_reached(callback_context) or self._count_call(callback_context, llm_request)
-
-    def _turn_limit_reached(self, callback_context: CallbackContext) -> Optional[LlmResponse]:
-        """The reply that ends the turn when the next model call would go over
-        the calls or time limit, else None."""
-        limits = call_config.resolve_call_limits(call_config.resolve_dak_settings(callback_context))
-        state = callback_context.state
-        count = state.get(STATE_CALL_COUNT, 0)
-        started_at = state.get(STATE_CALL_STARTED_AT)
-        elapsed = time.monotonic() - started_at if started_at is not None else 0.0
-        if limits.max_llm_calls and count >= limits.max_llm_calls:
-            return self._limit_response(callback_context, "max_llm_calls", count, elapsed)
-        if limits.max_seconds and elapsed >= limits.max_seconds:
-            return self._limit_response(callback_context, "max_seconds", count, elapsed)
+        reached = call_config.turn_limit_reached(callback_context)
+        if reached is not None:
+            return self._limit_response(reached)
+        call_config.count_llm_call(callback_context, llm_request)
         return None
 
     @staticmethod
-    def _count_call(callback_context: CallbackContext, llm_request: LlmRequest) -> None:
-        """Count a model call about to be made, capping its output tokens."""
-        state = callback_context.state
-        state[STATE_CALL_COUNT] = state.get(STATE_CALL_COUNT, 0) + 1
-        max_output_tokens = call_config.resolve_call_limits(
-            call_config.resolve_dak_settings(callback_context)).max_output_tokens
-        if max_output_tokens:
-            # LiteLlm passes it on as `max_completion_tokens`.
-            llm_request.config = llm_request.config or types.GenerateContentConfig()
-            llm_request.config.max_output_tokens = max_output_tokens
-        return None
-
-    @staticmethod
-    def _limit_response(callback_context: CallbackContext, limit: str, calls_used: int,
-                        elapsed_seconds: float) -> LlmResponse:
-        """The reply that ends a turn at a limit: which limit, and what the
-        turn used (tokens as the model reported them on this turn's events)."""
-        tokens = {"prompt": 0, "output": 0, "total": 0}
-        try:
-            events = callback_context._invocation_context.session.events
-        except AttributeError:
-            events = []
-        for event in events:
-            usage = event.usage_metadata
-            if event.invocation_id != callback_context.invocation_id or usage is None:
-                continue
-            tokens["prompt"] += usage.prompt_token_count or 0
-            tokens["output"] += usage.candidates_token_count or 0
-            tokens["total"] += usage.total_token_count or 0
-        result = {"error": "turn_limit_exceeded", "limit": limit, "calls_used": calls_used,
-                  "elapsed_seconds": round(elapsed_seconds, 3), "tokens": tokens}
-        logger.info(f"Turn stopped at a limit: {result}")
-        return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=json.dumps(result))]))
+    def _limit_response(reached: Dict[str, Any]) -> LlmResponse:
+        logger.info(f"Turn stopped at a limit: {reached}")
+        return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=json.dumps(reached))]))
 
     def _before_tool(self, tool, args: dict, tool_context) -> Optional[dict]:
         """
@@ -895,16 +848,22 @@ class AdaptiveAgent(LlmAgent):
             # A check that could not run (endpoint down, ...) is no reason to regenerate.
             if attempt >= max_attempts or any(isinstance(i, Mapping) and i.get("unavailable") for i in issues):
                 break
-            limited = self._turn_limit_reached(callback_context)
-            if limited is not None:  # a regeneration is a model call of this turn
-                return limited
+            # The failed reply is replaced from here on (regenerated, or the
+            # turn ends): its usage will be on no event.
+            call_config.note_unlogged_usage(callback_context.state, [response.usage_metadata])
+            reached = call_config.turn_limit_reached(callback_context)
+            if reached is not None:  # a regeneration is a model call of this turn
+                return self._limit_response(reached)
             try:
                 response = await self._regenerate_reply(callback_context, schema, text, issues)
             except Exception as e:  # incl. ADK's own LLM call limit: fail closed
                 logger.error(f"Regenerating a reply that failed inspection crashed: {e}", exc_info=True)
                 issues = issues + [{"path": "", "message": f"regeneration failed: {e}"}]
+                response = None  # its usage is already noted
                 break
             attempt += 1
+        if response is not None:
+            call_config.note_unlogged_usage(callback_context.state, [response.usage_metadata])
         failure = {"error": "inspection_failed" if inspection is not None else "output_schema_validation_failed",
                    "attempts": attempt, "issues": issues, "last_response": text}
         return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=json.dumps(failure))]))
@@ -928,7 +887,7 @@ class AdaptiveAgent(LlmAgent):
                              config=types.GenerateContentConfig(system_instruction=instruction))
         if schema is not None:
             request.set_output_schema(schema)
-        self._count_call(callback_context, request)
+        call_config.count_llm_call(callback_context, request)
         callback_context._invocation_context.increment_llm_call_count()  # a retry is a model call
         async for response in model.generate_content_async(request, stream=False):
             if response.content:

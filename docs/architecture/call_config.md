@@ -151,21 +151,22 @@
 - 出力トークンは LLM のリクエストの `max_output_tokens` になり、LiteLLM には `max_completion_tokens` として渡る
 - 数えるのはそのターンの分だけ。次のターンは 0 から数える
 - 検査で落ちた応答の作り直し（上の「検査と作り直し」）も 1 回の呼び出しとして数え、回数・時間・出力トークンの上限をかける。上限に当たったら作り直さず、下の JSON で終わる
-- コンテキストハーネスの再試行（モデルが大きすぎると拒んだリクエストを縮めて送り直す。回数は `model_error_retry_attempts` まで）は、この回数には数えない。送り直すのは出力トークンの上限が入った同じリクエスト
+- コンテキストハーネスの再試行（モデルが大きすぎると拒んだリクエストを縮めて送り直す）も 1 回の呼び出しとして数え、上限に当たったら送り直さずに下の JSON で終わる。送り直すのは出力トークンの上限が入った同じリクエスト
 
 ```json
 {"error": "turn_limit_exceeded", "limit": "max_llm_calls", "calls_used": 3, "elapsed_seconds": 1.204, "tokens": {"prompt": 1530, "output": 96, "total": 1626}}
 ```
 
 - `limit` は当たった上限（`max_llm_calls` か `max_seconds`）、`calls_used` はそのターンに LLM を呼んだ回数、`elapsed_seconds` はターンの始まりからの秒数
-- `tokens` は、そのターンのイベントにモデルが返した usage の合計（`prompt` / `output` / `total`）。usage を返さないモデルでは 0
+- `tokens` は、そのターンにモデルが返した usage の合計（`prompt` / `output` / `total`）。検査で落ちて作り直した応答の分も入る。usage を返さないモデルでは 0
 - ADK 自身の `RunConfig.max_llm_calls` は使わない。プロセス全体の `ADK_MAX_LLM_CALLS` でしか変えられず、超えると例外でターンが落ちるため
 
 ## 検証しているテスト
 
 - `agent/tests/test_call_scoped_instruction.py` — 指示がそのセッションのシステムプロンプトだけになる。並行する別セッションは既定のまま
 - `agent/tests/test_call_scoped_output_schema.py` — リクエストに構造化出力の指定が入る。落ちた応答が作り直され、上限で構造化された失敗になる
-- `agent/tests/test_adaptive_agent.py`（`TestCallLimits`）— 回数・時間の上限でちょうど止まり構造化した結果が返る、運用者の既定値が呼び出し元を抑える、ターンごとに数え直す、応答の作り直しも数えて出力トークンも抑える、出力トークンが LiteLLM に `max_completion_tokens` で渡る、指定しなければ今までどおり
+- `agent/tests/test_adaptive_agent.py`（`TestCallLimits`）— 回数・時間の上限でちょうど止まり構造化した結果が返る、運用者の既定値が呼び出し元を抑える、ターンごとに数え直す、応答の作り直しも数えて出力トークンも抑え、作り直した応答のトークンも結果に入る、出力トークンが LiteLLM に `max_completion_tokens` で渡る、指定しなければ今までどおり
+- `agent/tests/test_harness.py`（`test_retries_count_against_the_turn_limit`）— コンテキストハーネスの再試行も回数に数え、上限で送り直さない
 - `agent/tests/test_call_config.py` — `dak:inspection` の形・許可一覧・JSON Schema / HTTP / MCP の検査
 - `tests/integration/test_call_config_flow.py` — 実際の構成（agent コンテナ → LiteLLM → fake-LLM、呼び出し元の検査エンドポイントは `inspect-server`）で同じことを確かめる
 - `tests/integration/test_minimal_overhead.py` — 指示と出力スキーマだけで `dak:tools: []` の呼び出しが、LLM を 1 回・ツール定義なし・直接呼び出しとの差 20 トークン以内で呼ぶ（`serverless.md` §2）

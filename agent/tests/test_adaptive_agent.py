@@ -1267,9 +1267,10 @@ class TestCallLimits(unittest.IsolatedAsyncioTestCase):
     """PBI #134: the per-turn limits on model calls, time and output tokens."""
 
     @staticmethod
-    def _looping_llm(requests, delay=0.0, reply_after=None):
+    def _looping_llm(requests, delay=0.0, reply_after=None, script=None):
         """A model that calls `ping` on every call (until `reply_after` calls,
-        then answers "done"), reporting 10 prompt + 2 output tokens each time."""
+        then answers "done"; or follows `script` like `_scripted_llm`),
+        reporting 10 prompt + 2 output tokens each time."""
         import asyncio
         from google.adk.models.base_llm import BaseLlm
         from google.adk.models.llm_response import LlmResponse
@@ -1279,8 +1280,10 @@ class TestCallLimits(unittest.IsolatedAsyncioTestCase):
             async def generate_content_async(self, llm_request, stream=False):
                 requests.append(llm_request)
                 await asyncio.sleep(delay)
-                part = (types.Part(text="done") if reply_after and len(requests) > reply_after else
-                        types.Part(function_call=types.FunctionCall(id=f"fc-{len(requests)}", name="ping", args={})))
+                step = script[len(requests) - 1] if script else (
+                    "done" if reply_after and len(requests) > reply_after else ("ping", {}))
+                part = types.Part(text=step) if isinstance(step, str) else types.Part(
+                    function_call=types.FunctionCall(id=f"fc-{len(requests)}", name=step[0], args=step[1]))
                 yield LlmResponse(content=types.Content(role="model", parts=[part]),
                                   usage_metadata=types.GenerateContentResponseUsageMetadata(
                                       prompt_token_count=10, candidates_token_count=2, total_token_count=12))
@@ -1381,6 +1384,17 @@ class TestCallLimits(unittest.IsolatedAsyncioTestCase):
         result = json.loads(texts[-1])
         self.assertEqual(result["limit"], "max_llm_calls")
         self.assertEqual(result["calls_used"], 3)
+
+    async def test_call_limits_report_tokens_of_replaced_replies(self):
+        """A reply that failed inspection is replaced, so its usage is on no
+        event; the limit result still counts it."""
+        import json
+        requests = []
+        schema = {"type": "object", "required": ["date"]}
+        texts, _ = await self._run(self._looping_llm(requests, script=[("ping", {}), '{"no": 1}', '{"no": 2}']),
+                                   state_delta={"dak:max_llm_calls": 3, "dak:output_schema": schema})
+        self.assertEqual(len(requests), 3)
+        self.assertEqual(json.loads(texts[-1])["tokens"], {"prompt": 30, "output": 6, "total": 36})
 
     async def test_call_limits_cap_output_tokens_of_reply_regeneration(self):
         requests = []

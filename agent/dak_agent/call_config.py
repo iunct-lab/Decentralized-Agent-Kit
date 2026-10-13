@@ -9,10 +9,12 @@ import asyncio
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 import httpx
+from google.genai import types
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from jsonschema_specifications import REGISTRY as METASCHEMAS
@@ -49,6 +51,13 @@ STATE_CALL_MAX_OUTPUT_TOKENS = "dak:max_output_tokens"
 MAX_LLM_CALLS_ENV = "DAK_MAX_LLM_CALLS"
 MAX_SECONDS_ENV = "DAK_MAX_TURN_SECONDS"
 MAX_OUTPUT_TOKENS_ENV = "DAK_MAX_OUTPUT_TOKENS"
+# Per-invocation, written by DAK (ADK drops `temp:` state after the
+# invocation): the model calls made so far this turn, when the turn started
+# (time.monotonic()), and the token usage of model replies DAK replaced (a
+# reply that failed inspection and was regenerated is on no event).
+STATE_TURN_CALLS = "temp:dak_call_count"
+STATE_TURN_STARTED_AT = "temp:dak_call_started_at"
+STATE_TURN_UNLOGGED_TOKENS = "temp:dak_unlogged_tokens"
 # Checks a final reply must pass before DAK returns it; a failing reply is
 # regenerated with the errors attached. {"json_schema": {...}} and/or
 # {"http": {"url", "timeout_seconds"?}} (the caller's endpoint gets the parsed
@@ -133,6 +142,74 @@ def resolve_call_limits(call_settings: Dict[str, Any]) -> CallLimits:
         max_seconds=float(_clip_limit(MAX_SECONDS_ENV, STATE_CALL_MAX_SECONDS, call_settings, float)),
         max_output_tokens=int(_clip_limit(MAX_OUTPUT_TOKENS_ENV, STATE_CALL_MAX_OUTPUT_TOKENS, call_settings, int)),
     )
+
+
+def start_turn(state) -> None:
+    state[STATE_TURN_CALLS] = 0
+    state[STATE_TURN_STARTED_AT] = time.monotonic()
+
+
+def turn_limit_reached(callback_context) -> Optional[Dict[str, Any]]:
+    """The structured reason to end the turn when one more model call would go
+    over the calls or time limit, else None. Checked before every model call
+    of the turn: ADK's, a regenerated reply, the context harness's retry."""
+    limits = resolve_call_limits(resolve_dak_settings(callback_context))
+    if not (limits.max_llm_calls or limits.max_seconds):
+        return None
+    state = callback_context.state
+    calls = state.get(STATE_TURN_CALLS, 0)
+    started_at = state.get(STATE_TURN_STARTED_AT)
+    elapsed = time.monotonic() - started_at if started_at is not None else 0.0
+    if limits.max_llm_calls and calls >= limits.max_llm_calls:
+        limit = "max_llm_calls"
+    elif limits.max_seconds and elapsed >= limits.max_seconds:
+        limit = "max_seconds"
+    else:
+        return None
+    return {"error": "turn_limit_exceeded", "limit": limit, "calls_used": calls,
+            "elapsed_seconds": round(elapsed, 3), "tokens": _turn_tokens(callback_context)}
+
+
+def count_llm_call(callback_context, llm_request) -> None:
+    """Count a model call about to be made, and cap its output tokens (LiteLlm
+    passes `max_output_tokens` on as `max_completion_tokens`)."""
+    limits = resolve_call_limits(resolve_dak_settings(callback_context))
+    if limits.max_llm_calls or limits.max_seconds:
+        state = callback_context.state
+        state[STATE_TURN_CALLS] = state.get(STATE_TURN_CALLS, 0) + 1
+    if limits.max_output_tokens:
+        llm_request.config = llm_request.config or types.GenerateContentConfig()
+        llm_request.config.max_output_tokens = limits.max_output_tokens
+
+
+def note_unlogged_usage(state, usages: List[Any]) -> None:
+    """Add the usage of model replies that will be on no event."""
+    usages = [u for u in usages if u is not None]
+    if not usages:
+        return
+    tokens = dict(state.get(STATE_TURN_UNLOGGED_TOKENS) or {"prompt": 0, "output": 0, "total": 0})
+    for usage in usages:
+        tokens["prompt"] += usage.prompt_token_count or 0
+        tokens["output"] += usage.candidates_token_count or 0
+        tokens["total"] += usage.total_token_count or 0
+    state[STATE_TURN_UNLOGGED_TOKENS] = tokens
+
+
+def _turn_tokens(callback_context) -> Dict[str, int]:
+    """The token usage the model reported this turn: on this invocation's
+    events, plus the replies DAK replaced."""
+    try:
+        events = callback_context._invocation_context.session.events
+    except AttributeError:
+        events = []
+    tokens = dict(callback_context.state.get(STATE_TURN_UNLOGGED_TOKENS) or {"prompt": 0, "output": 0, "total": 0})
+    for event in events:
+        usage = event.usage_metadata
+        if event.invocation_id == callback_context.invocation_id and usage is not None:
+            tokens["prompt"] += usage.prompt_token_count or 0
+            tokens["output"] += usage.candidates_token_count or 0
+            tokens["total"] += usage.total_token_count or 0
+    return tokens
 
 
 def resolve_allowed_models() -> Optional[FrozenSet[str]]:
