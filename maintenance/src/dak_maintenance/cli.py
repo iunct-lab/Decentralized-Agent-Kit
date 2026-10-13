@@ -246,11 +246,12 @@ def _append(env: str, text: str) -> None:
 def cmd_eval_record(args: argparse.Namespace) -> int:
     summary = eval_history.summarize_junit(args.junit)
     rec = eval_history.make_record(summary, model=args.model, provider=args.provider,
-                                   runner=args.runner, today=datetime.date.today())
+                                   runner=args.runner, profile=args.profile, today=datetime.date.today())
     os.makedirs(os.path.dirname(os.path.abspath(args.history)), exist_ok=True)
     with open(args.history, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
-    text = (f"### Nightly eval ({rec['model']})\n\n- pass_rate: **{rec['pass_rate']}** "
+    label = rec["model"] + (f", profile {rec['profile']}" if rec["profile"] else "")
+    text = (f"### Nightly eval ({label})\n\n- pass_rate: **{rec['pass_rate']}** "
             f"({rec['passed']}/{rec['total']}, skipped {rec['skipped']})\n")
     _append("GITHUB_OUTPUT", f"pass_rate={rec['pass_rate']}\n")
     _append("GITHUB_STEP_SUMMARY", text)
@@ -351,6 +352,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--model", required=True)
     r.add_argument("--provider", default="ollama")
     r.add_argument("--runner", default="github-hosted")
+    r.add_argument("--profile", default="", help="DAK_HARNESS_PROFILE に渡した名前（空なら未指定）")
     r.set_defaults(func=cmd_eval_record)
 
     b = sub.add_parser("eval-budget", help="今月の実行回数を数えて上限を判定する")
