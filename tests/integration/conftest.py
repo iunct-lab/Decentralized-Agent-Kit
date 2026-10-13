@@ -16,10 +16,12 @@ AGENT_AP2_URL = os.getenv("DAK_AGENT_AP2_URL", "http://localhost:8011")
 AGENT_HARNESS_EVAL_URL = os.getenv("DAK_AGENT_HARNESS_EVAL_URL", "http://localhost:8012")
 AGENT_CONSUMER_URL = os.getenv("DAK_AGENT_CONSUMER_URL", "http://localhost:8013")
 AGENT_AP2_INTENT_URL = os.getenv("DAK_AGENT_AP2_INTENT_URL", "http://localhost:8014")
+AGENT_WEBSEARCH_URL = os.getenv("DAK_AGENT_WEBSEARCH_URL", "http://localhost:8015")
 MCP_URL = os.getenv("DAK_MCP_URL", "http://localhost:8001/mcp")
 BFF_URL = os.getenv("DAK_BFF_URL", "http://localhost:8002")
 FAKE_LLM_URL = os.getenv("DAK_FAKE_LLM_URL", "http://localhost:8089")
 INSPECT_SERVER_URL = os.getenv("DAK_INSPECT_SERVER_URL", "http://localhost:8090")
+FAKE_TAVILY_URL = os.getenv("DAK_FAKE_TAVILY_URL", "http://localhost:8091")
 # Real-LLM CI runs (nightly-eval, CPU-only Ollama) can take much longer per
 # turn than the fake-LLM suite; overridable so those runs can raise it.
 AGENT_RUN_TIMEOUT = float(os.getenv("DAK_AGENT_RUN_TIMEOUT", "120.0"))
@@ -131,6 +133,11 @@ def agent_ap2():
 @pytest.fixture
 def agent_ap2_intent():
     return AgentClient(AGENT_AP2_INTENT_URL)
+
+
+@pytest.fixture
+def agent_websearch():
+    return AgentClient(AGENT_WEBSEARCH_URL)
 
 
 @pytest.fixture

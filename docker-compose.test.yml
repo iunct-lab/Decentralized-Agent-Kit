@@ -4,6 +4,9 @@
 #   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build --wait
 #   cd tests/integration && uv run pytest
 #   docker compose -f docker-compose.yml -f docker-compose.test.yml down -v
+#
+# Web search (test_web_search_flow.py): fake-tavily (8091) stands in for
+# Tavily's remote MCP; agent-websearch (8015) is the agent with a key.
 
 services:
   fake-llm:
@@ -109,6 +112,44 @@ services:
     depends_on:
       - postgres
       - fake-llm
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/list-apps')"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+
+  # tests/integration/test_web_search_flow.py: Tavily's remote MCP, faked.
+  fake-tavily:
+    build: ./tests/integration/fake_tavily
+    ports:
+      - "8091:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  # The agent with TAVILY_API_KEY set, pointed at fake-tavily: the web_search
+  # skill is on. The key is a fixed test string, not a real Tavily key.
+  agent-websearch:
+    build: ./agent
+    ports:
+      - "8015:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://username:password@postgres:5432/postgres
+      - SESSION_SERVICE_URI=postgresql+asyncpg://username:password@postgres:5432/postgres
+      - MCP_SERVER_URL=http://mcp-server:8000/mcp
+      - MODEL_NAME=openai/fake-websearch
+      - OPENAI_API_BASE=http://fake-llm:8080/v1
+      - OPENAI_API_KEY=dummy
+      - TAVILY_API_KEY=test-dummy-key
+      - TAVILY_MCP_URL=http://fake-tavily:8000/mcp
+    depends_on:
+      - postgres
+      - fake-llm
+      - fake-tavily
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/list-apps')"]
       interval: 5s
