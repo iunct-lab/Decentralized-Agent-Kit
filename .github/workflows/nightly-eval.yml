@@ -11,6 +11,9 @@ on:
       model:
         description: "Ollama model (LiteLLM format is added automatically)"
         default: "llama3.1:8b"
+      profile:
+        description: "DAK_HARNESS_PROFILE（空なら未指定）"
+        default: ""
 
 permissions:
   contents: write # リリース eval-history の asset（history.jsonl）の差し替え用
@@ -28,6 +31,9 @@ env:
   # real-LLM smoke test table recommends llama3.1:8b as the model that
   # actually passes; use that here too so this signal means something.
   MODEL: ${{ github.event.inputs.model || 'llama3.1:8b' }}
+  # ハーネスプロファイル（agent/profiles/<名前>.yaml）。空ならモデル名の pattern で解決する。
+  # 行に profile として残り、同じ model のあり/なしの pass_rate を見比べられる（docs/eval/README.md）。
+  DAK_HARNESS_PROFILE: ${{ github.event.inputs.profile || '' }}
 
 jobs:
   eval:
@@ -109,7 +115,7 @@ jobs:
           gh release download eval-history -R "$GITHUB_REPOSITORY" -p history.jsonl -D "$(dirname "$HISTORY")"
           uv sync
           uv run dak-maint eval-record --junit ../tests/integration/eval-report.xml \
-            --history "$HISTORY" --model "$MODEL"
+            --history "$HISTORY" --model "$MODEL" --profile "$DAK_HARNESS_PROFILE"
 
       # 差し替えに失敗したときは、この写しから asset を戻す（docs/eval/README.md）。
       # 写しが上がらなかった晩は差し替えない（Publish history の条件）。

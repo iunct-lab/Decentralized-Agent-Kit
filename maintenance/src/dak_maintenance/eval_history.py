@@ -1,6 +1,7 @@
 """nightly-eval の結果の記録（リリース eval-history の asset history.jsonl）と、経路ごとの月の実行回数の上限。
 
 `provider` は経路（ollama / bedrock …）、`runner` は実行環境。`provider` の無い古い行は ollama とみなす。
+`profile` は DAK_HARNESS_PROFILE に渡した名前（空なら未指定 = モデル名の pattern で解決）。
 """
 
 from __future__ import annotations
@@ -27,8 +28,10 @@ def summarize_junit(path: str) -> dict:
     }
 
 
-def make_record(summary: dict, *, model: str, provider: str, runner: str, today: datetime.date) -> dict:
-    return {"date": today.isoformat(), "model": model, **summary, "provider": provider, "runner": runner}
+def make_record(summary: dict, *, model: str, provider: str, runner: str, profile: str,
+                today: datetime.date) -> dict:
+    return {"date": today.isoformat(), "model": model, **summary, "provider": provider, "runner": runner,
+            "profile": profile}
 
 
 def count_runs(history_path: str, *, provider: str, year_month: str) -> int:

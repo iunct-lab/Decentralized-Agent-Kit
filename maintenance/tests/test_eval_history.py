@@ -22,10 +22,10 @@ def test_record_from_junit_keeps_old_keys_and_adds_provider(tmp_path):
     junit = tmp_path / "eval-report.xml"
     junit.write_text(JUNIT, encoding="utf-8")
     rec = make_record(summarize_junit(str(junit)), model="llama3.1:8b", provider="ollama",
-                      runner="github-hosted", today=datetime.date(2026, 10, 2))
+                      runner="github-hosted", profile="", today=datetime.date(2026, 10, 2))
     assert rec == {
         "date": "2026-10-02", "model": "llama3.1:8b", "total": 4, "passed": 3, "failed": 1,
-        "skipped": 0, "pass_rate": 0.75, "provider": "ollama", "runner": "github-hosted",
+        "skipped": 0, "pass_rate": 0.75, "provider": "ollama", "runner": "github-hosted", "profile": "",
     }
     assert list(rec)[:7] == ["date", "model", "total", "passed", "failed", "skipped", "pass_rate"]
 
@@ -81,8 +81,23 @@ def test_record_cli_appends_one_line(tmp_path, monkeypatch):
     assert len(lines) == 2
     assert json.loads(lines[1])["provider"] == "bedrock"
     assert json.loads(lines[1])["runner"] == "github-hosted"
+    assert json.loads(lines[1])["profile"] == ""
     assert out.read_text() == "pass_rate=0.75\n"
     assert summary.read_text() == "### Nightly eval (bedrock/us.openai.gpt-5.6-luna)\n\n- pass_rate: **0.75** (3/4, skipped 0)\n"
+
+
+def test_record_cli_writes_the_profile(tmp_path, monkeypatch):
+    # プロファイルあり/なしの行を見比べるために、DAK_HARNESS_PROFILE に渡した名前を行に残す
+    junit = tmp_path / "eval-report.xml"
+    junit.write_text(JUNIT, encoding="utf-8")
+    path = tmp_path / "history.jsonl"
+    summary = tmp_path / "summary"
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    assert main(["eval-record", "--junit", str(junit), "--history", str(path),
+                 "--model", "llama3.1:8b", "--profile", "qwen-small"]) == 0
+    assert json.loads(path.read_text())["profile"] == "qwen-small"
+    assert summary.read_text().startswith("### Nightly eval (llama3.1:8b, profile qwen-small)\n")
 
 
 @pytest.mark.parametrize("argv", [

@@ -28,6 +28,7 @@ services:
     environment:
       - MODEL_NAME=${LOCAL_MODEL_NAME:-ollama_chat/llama3.1:8b}
       - OLLAMA_API_BASE=http://host.docker.internal:11434
+      - DAK_HARNESS_PROFILE=${DAK_HARNESS_PROFILE:-}
     # host.docker.internal は Docker Desktop (macOS/Windows) でしか自動解決されない。
     # 素の Linux Docker Engine（GitHub Actions ランナー等）では host-gateway の
     # 明示が必要。これが無いと agent が Ollama に到達できず /run が即 500 になる
@@ -39,6 +40,7 @@ services:
     environment:
       - MODEL_NAME=${LOCAL_MODEL_NAME:-ollama_chat/llama3.1:8b}
       - OLLAMA_API_BASE=http://host.docker.internal:11434
+      - DAK_HARNESS_PROFILE=${DAK_HARNESS_PROFILE:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -46,5 +48,6 @@ services:
     environment:
       - MODEL_NAME=${LOCAL_MODEL_NAME:-ollama_chat/llama3.1:8b}
       - OLLAMA_API_BASE=http://host.docker.internal:11434
+      - DAK_HARNESS_PROFILE=${DAK_HARNESS_PROFILE:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
