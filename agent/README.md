@@ -257,9 +257,16 @@ INFO:state_manager:Initializing MongoStateManager
 INFO:     Application startup complete
 API: Received run request with prompt: ...
 MCPClient: Connecting to http://mcp-server:8000/mcp...
+MCP connected: protocol=2025-11-25 server=dak-agent-mcp/1.30.0 capabilities=prompts,resources,tools
 MCPClient: Calling tool deep_think with args {...}
 GeminiModel: Generating content for prompt: ...
 ```
+
+`MCP connected` is logged once per MCP connection: the protocol version the agent
+and the server agreed on, the server's name/version, and the capabilities the server
+declared. The version is `2026-07-28` when the agent connects with
+`ADK_ENABLE_MCP_MODERN_PROTOCOL=1` and the server speaks it (#629). Headers, URLs and
+credentials are not logged.
 
 ## See Also
 
