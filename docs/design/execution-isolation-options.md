@@ -238,7 +238,7 @@ echo "== done"
 
 #298 で runsc に起きたことは、このカーネルではどれも起きなかった:
 
-- 既定の設定（`runsc install` のまま）で起動した。`--overlay2=root:memory`（`runsc-mem`）は要らない。下の表の値は 2 つでほぼ同じなので、既定の `runsc` の値だけ載せる
+- 既定の設定（`runsc install` のまま）で起動した。`--overlay2=root:memory`（`runsc-mem`）は要らない。下の表の値は 2 つでほぼ同じなので、既定の `runsc` の値だけ載せる（`runsc-mem` の中央値: (a) 428、(b) 283.0、作成 282、実行 97、破棄 127）
 - `docker exec` が動いた（#298 では `pidfd_open` が無く失敗した）
 - `docker rm -f` は約 0.13 秒で、runc と同じ桁（#298 では約 10 秒）
 
@@ -267,14 +267,12 @@ echo "== done"
 | `--pids-limit=128` | 上の 200 個を、ホストの cgroup の `pids.max` / `pids.peak` と並べる | 128 / 128（126 個で止まる）。上限なしなら 200 個とも起動 | 128 / 128（49 個で止まる）。上限なしなら 200 個とも起動し、`pids.peak` は 430 |
 | `--cpus=1` | 2 プロセスを 2 秒回し、子の CPU 時間 / 経過時間を見る（効けば約 2 秒、効かなければ約 4 秒） | 2.01 秒 / 2.05 秒 | 1.97 秒 / 2.12 秒 |
 | `--cpus=1` | 2 プロセスを 5 秒回し、ホストの cgroup の `cpu.stat` の `usage_usec` と `nr_throttled` を見る | 5.26 秒 / 5.26 秒、スロットリング 50 回。上限なしなら 10.20 秒 | 5.40 秒 / 5.44 秒、スロットリング 54 回。上限なしなら 10.33 秒 |
-| `--ulimit nproc=128`（#283 には無い。上限の別の手段の候補） | スレッドを 400 本 / `sleep` を 200 個起動 | 127 本で `RuntimeError` / 127 個で `BlockingIOError` | 127 本で `RuntimeError` / 51 個で `OSError`（`Cannot allocate memory`） |
 
 読み方:
 
 - 要件どおりのカーネルでは、`SandboxManager` の流れ（作成・`docker exec`・`docker rm -f`）が既定の runsc でそのまま動く。上乗せは 1 回あたり 0.02〜0.13 秒、Python の処理が約 1 割で、`run_command` のタイムアウト（60 秒）に比べて小さい。#298 の破棄の約 10 秒は、このカーネルでは出なかった
 - `--memory` と `--cpus` は runsc でも効く。`--cpus` は、ホストの cgroup が sandbox 全体を 1 CPU 分に絞っている（#298 で確かめきれなかったもの）
 - `--pids-limit` は sandbox のホスト側のスレッド（gVisor の Sentry と gofer）を数える。ゲストのプロセスは間接的に止まる（49〜50 個で `ENOMEM`。runc の 127 個で `EAGAIN` とは数も errno も違う）が、ゲストのスレッドはホストのスレッドに 1 対 1 で対応しないので止まらない。gVisor の公式の互換性の文書の「sandbox の中では cgroup の上限を強制しない」と合う
-- `--ulimit nproc=128` は runsc でゲストのスレッドを 127 本で止めた。runsc では sandbox の中のカーネルが数えるので、セッションごとの上限になる。runc の `RLIMIT_NPROC` はホストのユーザー（全セッションが同じ `nobody`）ごとに数えるので、runc に同じ値を付けるとセッションをまたいで数が合算される（runc では `--pids-limit` で足りている）
 
 再現コマンド: `measure.sh` は #298 の版を 2 か所だけ変えて、同じ使い捨てのマシンで root で 1 回走らせた（`bash measure.sh > measure.out 2>&1`）。差分:
 
@@ -331,8 +329,6 @@ echo "== done"
 
 </details>
 
-`--ulimit nproc=128` の行は、`extra.sh` の `ARGS` から `--read-only` と `tmpfs` を除き、`--pids-limit=128 --ulimit nproc=128` を付けて、`measure.sh` の `threads` / `processes` と同じ Python を `docker run --rm` で走らせた値。
-
 ### Kata Containers（#298）
 
 未検証。計測先に `/dev/kvm` が無い（`ls -l /dev/kvm` → `ls: cannot access '/dev/kvm': No such file or directory`）。Kata は「nested virtualization か bare metal が要る」（1 節の Kata の行の install）ので、この計測先では動かせない。KVM の使えるホストで測るかは #300 の判断に回す。
@@ -346,7 +342,7 @@ echo "== done"
 | 方式 | 隔離の強さ | 実測の上乗せ | `SandboxManager` に足す変更 | 動かせるホスト | 運用の負担 |
 |---|---|---|---|---|---|
 | runc（今） | ホストのカーネルを共有 | 基準 | なし | cgroups のある Linux の Docker（rootless で cgroups が無いと上限が効かない） | なし |
-| gVisor | システムコールを sandbox の application kernel で受ける | 要件どおりのカーネルで 1 回あたり +0.02〜0.13 秒、処理 +12%（4 節、#565） | `--runtime` を 1 つ足す | Linux 5.6 以上、x86_64 / arm64、KVM 不要 | ホストの Docker に `runsc` を入れて登録。`--pids-limit` はスレッドに効かない（`--ulimit nproc` は効く。4 節、#565） |
+| gVisor | システムコールを sandbox の application kernel で受ける | 要件どおりのカーネルで 1 回あたり +0.02〜0.13 秒、処理 +12%（4 節、#565） | `--runtime` を 1 つ足す | Linux 5.6 以上、x86_64 / arm64、KVM 不要 | ホストの Docker に `runsc` を入れて登録。`--pids-limit` はスレッドに効かない（要件どおりのカーネルでも同じ。4 節、#565） |
 | Kata Containers | コンテナごとの VM | 未検証（KVM の使える計測先が無い） | `--runtime` を 1 つ足す | KVM（入れ子の仮想化か bare metal） | `io.containerd.kata.v2` の shim を入れる。KVM のあるホストが要る |
 | Docker Sandboxes | サンドボックスごとの microVM と専用の Docker デーモン | 未検証（実測しない） | `sbx` を呼ぶ別の実装 | Apple silicon の Mac、KVM のある Ubuntu 24.04 以上、Windows 11 | `sbx login`、ネットワークの方針の初期化、ホストに常駐する `sandboxd`。mcp-server のコンテナから呼ぶ標準の口が無い（3 節） |
 | CubeSandbox | サンドボックスごとの microVM | 未検証（実測しない） | E2B 互換の API のクライアント（別の実装） | KVM のある Linux（x86_64 は PVM のホストカーネルでも可） | ホストに一式の常駐サービス、XFS の 50 GB の領域 |
@@ -356,6 +352,7 @@ echo "== done"
 
 - 理由: `SandboxManager` への変更が `--runtime` 1 つで済み、独立コンテナの原則（mcp-server は Docker の API を呼ぶだけ）を崩さない。KVM が要らないので、クラウドの VM や arm64 のホストでも使える。上乗せは `run_command` のタイムアウト（60 秒）に比べて小さい
 - #20 の既定（`SANDBOX_MODE=off`、`docker` は明示の opt-in、`session-sandbox.md`）と矛盾しない形: `SANDBOX_RUNTIME`（既定 `runc`）のような設定を足し、`docker` モードのときだけ `docker run --runtime=<値>` を付ける。指定したランタイムがホストの Docker に無いときは、素の runc に黙って戻さず、起動時にエラーで止める（隔離を強めたつもりで強まっていない状態を作らない。`SANDBOX_MODE` の不正な値と同じ扱い）
+- #565 で要件どおりのカーネルで計り直した結果は 4 節の「gVisor と runc（要件どおりのカーネル、#565）」（下の 2 項は #298 の時点の記録）
 - 実装の前に確かめること（その PBI の最初の Task）: 要件どおりのカーネル（5.6 以上）で cgroups のある root の Docker の上で、既定の設定での起動、`docker exec`、`docker rm -f` が runc と同じように動くか。今回の計測先（カーネル 4.14）では、既定の設定では起動せず（`--overlay2=root:memory` で起動した）、`docker exec` は失敗し、`docker rm -f` は約 10 秒かかった（4 節）。確かめる先のホストは、その PBI で決める
 - 上限が効くことも同じ Task で確かめる。#20 は CPU・メモリ・PID の上限を docker モードの要件にしている（`session-sandbox.md`）。今回、gVisor では `--pids-limit` がスレッドに効かず、`--cpus` は確かめきれなかった（4 節）。要件どおりのカーネルでも効かなければ、gVisor を採るには #20 の上限の要件を変えるか、別の手段で上限をかける必要がある。その判断はその PBI で利用者に聞く
 
