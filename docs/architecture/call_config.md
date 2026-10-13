@@ -40,6 +40,7 @@
 | `dak:tools` | ツール名のリスト（または `{"names": [...]}`）。その呼び出しで使うツールを、組み込みのツールと既定の MCP のツールから名前で選ぶ。`[]` ならツールなし（LLM のリクエストにツールの定義が 1 つも載らない）。`{"mcp_servers": [{"url": "...", "type": "http"\|"sse"}], "names"?: [...]}` なら、呼び出し元の MCP のツールだけを使い（確認待ちなし）、既定のツールは使わない。スキル・モードによる組み立てより優先する | スキル・モードによる今までどおりの組み立て |
 | `dak:inspection` | 最終応答にかける検査。`{"json_schema"?: {...}, "http"?: {"url", "timeout_seconds"?}, "mcp"?: {"url", "tool", "timeout_seconds"?}}`。落ちた応答はエラーを添えて作り直させる（下の「検査と作り直し」） | 検査なし |
 | `dak:model` | LiteLLM のモデル ID（例: `bedrock/openai.gpt-5.6-luna`、`openai/gpt-5.6-luna`）。その呼び出しの LLM リクエストだけがこのモデルに向かう。運用者が `DAK_ALLOWED_MODELS` で許可したものだけ使える | `MODEL_NAME` のまま |
+| `dak:max_llm_calls` / `dak:max_seconds` / `dak:max_output_tokens` | 正の数。1 ターンの LLM 呼び出し回数・経過秒数・1 回の呼び出しの出力トークンの上限。運用者の既定値より緩くはできない（下の「1 ターンの上限」） | 運用者の既定値（環境変数）。それも無ければ上限なし |
 
 - `dak:instruction` の文字列はそのまま LLM に届く。ADK の `{名前}` 差し込み（セッション state の値で置き換える機能）は通さないので、`{date}` のような文字を含めてよい
 - ADK は指示の後ろに、自分の識別行（`You are an agent. Your internal name is "dak_agent".`）を足す。これは既定の指示でも同じ
@@ -135,10 +136,35 @@
 - `$ref` はスキーマの中（`#/$defs/...`）と、JSON Schema 標準のメタスキーマだけを解決する。`http://...` などの外部の参照は取りに行かない（呼び出し元のスキーマで、agent コンテナから任意の URL へリクエストさせないため）。解決できない参照は `invalid output_schema` になる
 - `{}`（何でも受け付けるスキーマ）を渡しても、応答が JSON であることは確かめる
 
+## 1 ターンの上限（`dak:max_llm_calls` / `dak:max_seconds` / `dak:max_output_tokens`）
+
+1 ターン（1 回の `/run` や A2A のメッセージ）で使う LLM の量に上限をかける。費用の上限があるアプリから呼ぶときや、実行時間の上限がある環境（Lambda の 15 分）で、途中で切られずに理由の分かる結果を返すため。
+
+| 上限 | 呼び出しごとのキー | 運用者の既定値（環境変数） |
+|---|---|---|
+| LLM の呼び出し回数 | `dak:max_llm_calls` | `DAK_MAX_LLM_CALLS` |
+| ターンの経過秒数 | `dak:max_seconds` | `DAK_MAX_TURN_SECONDS` |
+| 1 回の呼び出しの出力トークン | `dak:max_output_tokens` | `DAK_MAX_OUTPUT_TOKENS` |
+
+- 効くのは、運用者の既定値と呼び出しごとの値の小さい方。0・未設定・正しくない値は「その側からは上限なし」で、呼び出し元は運用者の上限を外せない
+- 回数と時間は、LLM を呼ぶ直前に確かめる（`before_model_callback`）。上限に達していたらその回は LLM を呼ばず、ターンは次の応答で終わる。時間は呼び出しの途中では切らない（次の呼び出しの前に止まる）
+- 出力トークンは LLM のリクエストの `max_output_tokens` になり、LiteLLM には `max_completion_tokens` として渡る
+- 数えるのはそのターンの分だけ。次のターンは 0 から数える
+- 検査で落ちた応答の作り直し（上の「検査と作り直し」）とコンテキストハーネスの再試行は、ADK のループの外で LLM を呼ぶので、この回数には数えない。作り直しの試行は別に `max_llm_calls` までに抑える
+
+```json
+{"error": "turn_limit_exceeded", "limit": "max_llm_calls", "calls_used": 3, "elapsed_seconds": 1.204, "tokens": {"prompt": 1530, "output": 96, "total": 1626}}
+```
+
+- `limit` は当たった上限（`max_llm_calls` か `max_seconds`）、`calls_used` はそのターンに LLM を呼んだ回数、`elapsed_seconds` はターンの始まりからの秒数
+- `tokens` は、そのターンのイベントにモデルが返した usage の合計（`prompt` / `output` / `total`）。usage を返さないモデルでは 0
+- ADK 自身の `RunConfig.max_llm_calls` は使わない。プロセス全体の `ADK_MAX_LLM_CALLS` でしか変えられず、超えると例外でターンが落ちるため
+
 ## 検証しているテスト
 
 - `agent/tests/test_call_scoped_instruction.py` — 指示がそのセッションのシステムプロンプトだけになる。並行する別セッションは既定のまま
 - `agent/tests/test_call_scoped_output_schema.py` — リクエストに構造化出力の指定が入る。落ちた応答が作り直され、上限で構造化された失敗になる
+- `agent/tests/test_adaptive_agent.py`（`TestCallLimits`）— 回数・時間の上限でちょうど止まり構造化した結果が返る、運用者の既定値が呼び出し元を抑える、ターンごとに数え直す、出力トークンが LiteLLM に `max_completion_tokens` で渡る、指定しなければ今までどおり
 - `agent/tests/test_call_config.py` — `dak:inspection` の形・許可一覧・JSON Schema / HTTP / MCP の検査
 - `tests/integration/test_call_config_flow.py` — 実際の構成（agent コンテナ → LiteLLM → fake-LLM、呼び出し元の検査エンドポイントは `inspect-server`）で同じことを確かめる
 - `tests/integration/test_minimal_overhead.py` — 指示と出力スキーマだけで `dak:tools: []` の呼び出しが、LLM を 1 回・ツール定義なし・直接呼び出しとの差 20 トークン以内で呼ぶ（`serverless.md` §2）

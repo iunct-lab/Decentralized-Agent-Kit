@@ -1258,5 +1258,124 @@ class TestUnknownToolObservation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ran, ["a.txt"])  # only the corrected call ran
 
 
+def ping() -> dict:
+    """Answers pong."""
+    return {"result": "pong"}
+
+
+class TestCallLimits(unittest.IsolatedAsyncioTestCase):
+    """PBI #134: the per-turn limits on model calls, time and output tokens."""
+
+    @staticmethod
+    def _looping_llm(requests, delay=0.0, reply_after=None):
+        """A model that calls `ping` on every call (until `reply_after` calls,
+        then answers "done"), reporting 10 prompt + 2 output tokens each time."""
+        import asyncio
+        from google.adk.models.base_llm import BaseLlm
+        from google.adk.models.llm_response import LlmResponse
+        from google.genai import types
+
+        class LoopingLlm(BaseLlm):
+            async def generate_content_async(self, llm_request, stream=False):
+                requests.append(llm_request)
+                await asyncio.sleep(delay)
+                part = (types.Part(text="done") if reply_after and len(requests) > reply_after else
+                        types.Part(function_call=types.FunctionCall(id=f"fc-{len(requests)}", name="ping", args={})))
+                yield LlmResponse(content=types.Content(role="model", parts=[part]),
+                                  usage_metadata=types.GenerateContentResponseUsageMetadata(
+                                      prompt_token_count=10, candidates_token_count=2, total_token_count=12))
+
+        return LoopingLlm(model="looping")
+
+    async def _run(self, model, state_delta=None, env=None, turns=1):
+        """Run `turns` turns in one session; the texts of the last turn."""
+        from google.adk.apps import App
+        from google.adk.runners import Runner
+        from google.adk.sessions import InMemorySessionService
+        from google.genai import types
+
+        agent = AdaptiveAgent(model=model, name="dak_agent", instruction="i", tools=[FunctionTool(ping)])
+        sessions = InMemorySessionService()
+        session = await sessions.create_session(app_name="dak_agent", user_id="u")
+        runner = Runner(app=App(name="dak_agent", root_agent=agent), session_service=sessions)
+        clean = {k: "" for k in ("DAK_MAX_LLM_CALLS", "DAK_MAX_TURN_SECONDS", "DAK_MAX_OUTPUT_TOKENS")}
+        for _ in range(turns):
+            texts = []
+            with patch.dict(os.environ, {**clean, **(env or {})}), \
+                    patch("dak_agent.remote_tools.discover_remote_tools", return_value={}):
+                async for event in runner.run_async(
+                        user_id="u", session_id=session.id, state_delta=state_delta,
+                        new_message=types.Content(role="user", parts=[types.Part(text="go")])):
+                    texts += [p.text for p in (event.content.parts if event.content else []) if p.text]
+        stored = await sessions.get_session(app_name="dak_agent", user_id="u", session_id=session.id)
+        return texts, stored.state
+
+    async def test_call_limits_stops_after_max_calls(self):
+        import json
+        requests = []
+        texts, state = await self._run(self._looping_llm(requests), state_delta={"dak:max_llm_calls": 3})
+
+        self.assertEqual(len(requests), 3)  # the 4th call never reached the model
+        result = json.loads(texts[-1])
+        self.assertEqual(result["error"], "turn_limit_exceeded")
+        self.assertEqual(result["limit"], "max_llm_calls")
+        self.assertEqual(result["calls_used"], 3)
+        self.assertEqual(result["tokens"], {"prompt": 30, "output": 6, "total": 36})
+        self.assertFalse([k for k in state if k.startswith("temp:")])  # the counters are not persisted
+
+    async def test_call_limits_operator_default_caps_the_caller(self):
+        requests = []
+        await self._run(self._looping_llm(requests), state_delta={"dak:max_llm_calls": 5},
+                        env={"DAK_MAX_LLM_CALLS": "2"})
+        self.assertEqual(len(requests), 2)
+
+    async def test_call_limits_count_restarts_every_turn(self):
+        import json
+        requests = []
+        texts, _ = await self._run(self._looping_llm(requests), state_delta={"dak:max_llm_calls": 2}, turns=2)
+        self.assertEqual(len(requests), 4)  # 2 per turn
+        self.assertEqual(json.loads(texts[-1])["calls_used"], 2)
+
+    async def test_call_limits_stops_after_elapsed_seconds(self):
+        """Each call takes 0.3 s: under a 0.45 s limit the 3rd call (at ~0.6 s)
+        is not made; under 5 s the turn ends on its own."""
+        import json
+        requests = []
+        texts, _ = await self._run(self._looping_llm(requests, delay=0.3), state_delta={"dak:max_seconds": 0.45})
+        self.assertEqual(len(requests), 2)
+        result = json.loads(texts[-1])
+        self.assertEqual(result["limit"], "max_seconds")
+        self.assertEqual(result["calls_used"], 2)
+        self.assertGreaterEqual(result["elapsed_seconds"], 0.45)
+
+        requests = []
+        texts, _ = await self._run(self._looping_llm(requests, delay=0.3, reply_after=2),
+                                   state_delta={"dak:max_seconds": 5})
+        self.assertEqual(len(requests), 3)
+        self.assertEqual(texts[-1], "done")
+
+    async def test_call_limits_sets_max_output_tokens(self):
+        """Through ADK's LiteLlm, the limit reaches LiteLLM as `max_completion_tokens`."""
+        from unittest.mock import AsyncMock
+        from google.adk.models.lite_llm import LiteLlm, LiteLLMClient
+        from litellm import ModelResponse
+
+        client = LiteLLMClient()
+        client.acompletion = AsyncMock(return_value=ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]))
+        texts, _ = await self._run(LiteLlm(model="openai/test-model", llm_client=client),
+                                   state_delta={"dak:max_output_tokens": 256})
+
+        self.assertEqual(texts[-1], "ok")
+        self.assertEqual(client.acompletion.await_args.kwargs["max_completion_tokens"], 256)
+
+    async def test_call_limits_noop_without_settings(self):
+        requests = []
+        texts, _ = await self._run(self._looping_llm(requests, reply_after=4))
+        self.assertEqual(len(requests), 5)
+        self.assertEqual(texts[-1], "done")
+        self.assertIsNone(requests[0].config.max_output_tokens)
+
+
 if __name__ == '__main__':
     unittest.main()

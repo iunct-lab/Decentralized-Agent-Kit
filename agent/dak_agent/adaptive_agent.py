@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Tuple
 
@@ -39,6 +40,11 @@ CALLER_MCP_PROBE_TIMEOUT_S = 30.0
 # Per-invocation (ADK drops `temp:` state after the invocation): the tool names
 # each reachable caller MCP server listed on this call, {url: [names]}.
 STATE_CALLER_MCP_TOOLS = "temp:dak_caller_mcp_tools"
+# Per-invocation, written by DAK (not the caller): the model calls made so far
+# this turn and when the turn started (time.monotonic()), for the turn limits
+# (call_config.CallLimits).
+STATE_CALL_COUNT = "temp:dak_call_count"
+STATE_CALL_STARTED_AT = "temp:dak_call_started_at"
 # The project's instruction files (mcp-server's get_project_instructions),
 # read at the start of every invocation and sent with its instruction.
 STATE_PROJECT_INSTRUCTIONS = "dak_project_instructions"
@@ -126,6 +132,7 @@ class AdaptiveAgent(LlmAgent):
             "instruction": instruction,
             "tools": builtin_tools,
             "before_agent_callback": self._restore_session_config,
+            "before_model_callback": self._enforce_call_limits,
             "after_model_callback": self._wrapped_callback,
             "before_tool_callback": self._before_tool,
             "on_tool_error_callback": self._on_tool_error,
@@ -633,6 +640,8 @@ class AdaptiveAgent(LlmAgent):
 
         Returning Content ends the invocation there, before any model call:
         used to refuse a `dak:model` the operator does not allow."""
+        callback_context.state[STATE_CALL_COUNT] = 0
+        callback_context.state[STATE_CALL_STARTED_AT] = time.monotonic()
         call_settings = call_config.resolve_dak_settings(callback_context)
         call_tools = call_settings.get(call_config.STATE_CALL_TOOLS)
         if call_tools is not None and not (isinstance(call_tools, Mapping) and "mcp_servers" in call_tools):
@@ -670,6 +679,51 @@ class AdaptiveAgent(LlmAgent):
         return None
 
     # --- Callbacks ---
+
+    async def _enforce_call_limits(
+        self, callback_context: CallbackContext, llm_request: LlmRequest
+    ) -> Optional[LlmResponse]:
+        """`before_model_callback`: enforce this turn's limits (call_config.
+        CallLimits). A call over the calls or time limit does not reach the
+        model; the turn ends with the structured reason instead. ADK's own
+        `RunConfig.max_llm_calls` raises instead, and `/run` cannot set it."""
+        limits = call_config.resolve_call_limits(call_config.resolve_dak_settings(callback_context))
+        state = callback_context.state
+        count = state.get(STATE_CALL_COUNT, 0)
+        started_at = state.get(STATE_CALL_STARTED_AT)
+        elapsed = time.monotonic() - started_at if started_at is not None else 0.0
+        if limits.max_llm_calls and count >= limits.max_llm_calls:
+            return self._limit_response(callback_context, "max_llm_calls", count, elapsed)
+        if limits.max_seconds and elapsed >= limits.max_seconds:
+            return self._limit_response(callback_context, "max_seconds", count, elapsed)
+        state[STATE_CALL_COUNT] = count + 1
+        if limits.max_output_tokens:
+            # LiteLlm passes it on as `max_completion_tokens`.
+            llm_request.config = llm_request.config or types.GenerateContentConfig()
+            llm_request.config.max_output_tokens = limits.max_output_tokens
+        return None
+
+    @staticmethod
+    def _limit_response(callback_context: CallbackContext, limit: str, calls_used: int,
+                        elapsed_seconds: float) -> LlmResponse:
+        """The reply that ends a turn at a limit: which limit, and what the
+        turn used (tokens as the model reported them on this turn's events)."""
+        tokens = {"prompt": 0, "output": 0, "total": 0}
+        try:
+            events = callback_context._invocation_context.session.events
+        except AttributeError:
+            events = []
+        for event in events:
+            usage = event.usage_metadata
+            if event.invocation_id != callback_context.invocation_id or usage is None:
+                continue
+            tokens["prompt"] += usage.prompt_token_count or 0
+            tokens["output"] += usage.candidates_token_count or 0
+            tokens["total"] += usage.total_token_count or 0
+        result = {"error": "turn_limit_exceeded", "limit": limit, "calls_used": calls_used,
+                  "elapsed_seconds": round(elapsed_seconds, 3), "tokens": tokens}
+        logger.info(f"Turn stopped at a limit: {result}")
+        return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=json.dumps(result))]))
 
     def _before_tool(self, tool, args: dict, tool_context) -> Optional[dict]:
         """
