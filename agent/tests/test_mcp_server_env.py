@@ -159,3 +159,17 @@ def test_set_key_value_is_not_logged(workdir, caplog):
     with patch("dak_agent.skill_tools.make_mcp_toolset", return_value=MagicMock(name="toolset")):
         agent._resolve_session_tools({skill_tools.STATE_ACTIVE_SKILLS: ["web_lookup"]}, {})
     assert caplog.records and KEY not in caplog.text
+
+
+def test_set_key_toolset_is_not_shared_with_a_caller_server(workdir):
+    """A caller-chosen server at the same URL must get its own toolset: no
+    configured Bearer header, redirects refused, whatever the server is named."""
+    with open(os.path.join(workdir, "agent_config.yaml"), "a") as f:
+        f.write('  - name: "no-redirects"\n    url: "http://caller:9000/mcp"\n    type: "http"\n'
+                '    bearer_token_env: "SEARCH_API_KEY"\n')
+    agent = _agent(workdir, {"SEARCH_API_KEY": KEY})
+    with patch("dak_agent.skill_tools.make_mcp_toolset", side_effect=lambda *a, **k: MagicMock()) as make:
+        configured = agent._cached_mcp_toolset("http://caller:9000/mcp", "http", {"t"}, server="no-redirects")
+        caller = agent._cached_mcp_toolset("http://caller:9000/mcp", "http", {"t"}, follow_redirects=False)
+    assert configured is not caller
+    assert make.call_args_list[1].kwargs == {"follow_redirects": False}
