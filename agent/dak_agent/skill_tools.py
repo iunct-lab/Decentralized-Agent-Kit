@@ -115,12 +115,15 @@ def make_mcp_toolset(
     tool_filter: Optional[List[str]] = None,
     follow_redirects: bool = True,
     headers: Optional[Dict[str, str]] = None,
+    session_key: bool = False,
 ) -> McpToolset:
     """Create an McpToolset for the given server URL and connection type.
     `follow_redirects=False` for servers the caller chose: an allowed endpoint
     must not be able to send the agent on to another (internal) address.
     `headers` go on every request (an agent_config.yaml server's
-    `bearer_token_env`, see config.py)."""
+    `bearer_token_env`, see config.py). `X-DAK-Session-Key` is added only when
+    `session_key=True`: DAK's mcp-server picks the session's sandbox with it,
+    and its user id and session id are not sent to any other server."""
     extra = {} if follow_redirects else {"httpx_client_factory": _no_redirect_http_client}
     if conn_type == "sse":
         from google.adk.tools.mcp_tool import SseConnectionParams
@@ -131,7 +134,7 @@ def make_mcp_toolset(
         connection_params=conn_params,
         tool_filter=tool_filter,
         require_confirmation=False,
-        header_provider=session_key_header,
+        header_provider=session_key_header if session_key else None,
     )
 
 

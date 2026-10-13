@@ -87,9 +87,10 @@ class TestMakeMcpToolset(unittest.TestCase):
         self.assertEqual(kwargs["connection_params"].url, "http://srv:8000/sse")
         self.assertEqual(type(kwargs["connection_params"]).__name__, "SseConnectionParams")
 
-    def test_make_mcp_toolset_wires_session_key_header(self):
-        toolset = make_mcp_toolset("http://srv:8000/mcp", "http", ["tool_a"])
+    def test_make_mcp_toolset_wires_session_key_header_only_when_asked(self):
+        toolset = make_mcp_toolset("http://srv:8000/mcp", "http", ["tool_a"], session_key=True)
         self.assertIs(toolset.header_provider, mcp_headers.session_key_header)
+        self.assertIsNone(make_mcp_toolset("http://srv:8000/mcp", "http", ["tool_a"]).header_provider)
 
 
 class TestLoadSolanaWalletTools(unittest.TestCase):
@@ -222,7 +223,7 @@ class TestResolveSessionTools(unittest.TestCase):
     def _fake_make_mcp_toolset(self):
         from unittest.mock import MagicMock
 
-        def make(url, conn_type="http", tool_filter=None):
+        def make(url, conn_type="http", tool_filter=None, session_key=False):
             ts = MagicMock()
             ts.is_fake_toolset = True
             ts.url, ts.conn_type, ts.tool_filter = url, conn_type, tool_filter

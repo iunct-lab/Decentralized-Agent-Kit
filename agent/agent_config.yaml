@@ -2,6 +2,7 @@ mcp_servers:
   - name: "local-mcp"
     url: "http://mcp-server:8000/mcp"
     type: "http"
+    send_session_key: true
 
 a2a_peers:
   - name: "agent_provider"
