@@ -65,7 +65,7 @@ Docker を使わず、mcp-server のプロセスの中でセッションごと�
 ## 決定（後続の Task が守ること）
 
 1. **SandboxManager（`mcp-server/sandbox.py`、#283）**
-   - 設定: `SANDBOX_MODE`（既定 `off`）、`SANDBOX_IMAGE`（既定 `python:3.12-slim`）、`SANDBOX_TTL_SECONDS`（既定 `900`）、`SANDBOX_CPUS`（既定 `1`）、`SANDBOX_MEMORY`（既定 `512m`）、`SANDBOX_PIDS_LIMIT`（既定 `128`）
+   - 設定: `SANDBOX_MODE`（既定 `off`）、`SANDBOX_IMAGE`（既定 `python:3.12-slim`）、`SANDBOX_TTL_SECONDS`（既定 `900`）、`SANDBOX_CPUS`（既定 `1`）、`SANDBOX_MEMORY`（既定 `512m`）、`SANDBOX_PIDS_LIMIT`（既定 `128`）、`SANDBOX_RUNTIME`（既定は空 = Docker の既定のランタイム。下の「ランタイム」、#565）
    - `ensure_session(session_key)` で遅延生成し、同じキーは使い回す。`destroy_session(session_key)` で破棄（`docker rm -f` / `shutil.rmtree`）。`reap_expired(now)` で最後の利用から TTL を過ぎたものを破棄する。サーバの停止時に残りを全部破棄する `destroy_all()` も持つ（止めたサーバのコンテナを残さない）
    - 強制終了（OOM・SIGKILL）で `destroy_all()` が走らなかったコンテナは、メモリの表に無いので TTL でも消えず、同じキーの次の `docker run --name` が「名前が使われている」で失敗する。`docker` モードのコンテナには `--label dak.sandbox=1` を付け、起動時に `sweep()`（`docker ps -aq --filter label=dak.sandbox=1` の全部を `docker rm -f`）で消す。同じ Docker デーモンを `docker` モードの mcp-server 2 つで共有すると、後から起動した方が先の方のコンテナを消す。共有しないこととする
    - `subprocess.run` は差し替えられるようにし、単体テストは組み立てたコマンドと状態の遷移だけを見る（実際のコンテナは #446）
@@ -87,6 +87,28 @@ Docker を使わず、mcp-server のプロセスの中でセッションごと�
    - `docker` モードの実機検証（#446。#285 の手順 3〜5 を分けたもの）（2 セッションの不可視、ネットワーク遮断、`docker inspect` の `NanoCpus` / `Memory` / `PidsLimit`、TTL 後の `docker ps`）を行う
 4. **検証（#285 / #446）**: `inproc` の不可視と破棄は（#285） `cd mcp-server && uv run pytest -q` で確かめる（Docker 不要）。`docker` モードは Docker のデーモンに届く実機でだけ確かめられ、明示の環境変数（`DAK_SANDBOX_DOCKER_TESTS=1`）が無ければ `pytest.mark.skipif` で飛ばす（承認のあとにコードを直さずに回せるように。理由の文に「未承認なら回さない」と書く）。`tests/integration/` が通っても `docker` モードを確かめたことにはならない（`permission-boundary.md` の「#20 への制約」）
 
+## ランタイム（`SANDBOX_RUNTIME`、#565）
+
+`docker` モードのコンテナを、ホストとカーネルを共有する runc ではなく gVisor（`runsc`）で動かす opt-in の設定。隔離の方式の比較と採否は `execution-isolation-options.md`（#296）。
+
+- 使い方: ホストの Docker に `runsc` を登録してから、`SANDBOX_RUNTIME=runsc docker compose -f docker-compose.yml -f docker-compose.sandbox.yml up -d`。値は `docker run --runtime=<値>` にそのまま渡す（許可リストは持たない。Kata など、ホストの Docker に登録したほかのランタイムも同じ設定で選べる）
+- 既定は空で、`docker run` の引数は今と同じ（runc）。値は `docker` モードでだけ使う。ほかのモードで値があるとサーバは起動しない
+- 登録されていないとき: mcp-server は起動時に `docker info --format '{{json .Runtimes}}'` で確かめ、無ければ `SANDBOX_RUNTIME='…' is not registered in the host's Docker (registered: …)` で起動を止める。runc に黙って戻さない（隔離を強めたつもりで強まっていない状態を作らない。`SANDBOX_MODE` の不正な値と同じ扱い）
+- 要るホストの条件: Linux 5.6 以上（gVisor の要件。カーネル 4.14 では `docker exec` が `pidfd_open` で失敗した、#298）、root で動き cgroups の使える Docker（rootless で cgroups が無いと上限が効かない）、x86_64 か arm64。KVM は要らない
+- runsc を入れる手順（手で行う。インストーラは持たない）: 公式のリリースの `gvisor.tar.bz2` と `gvisor.tar.bz2.sha512` を取り、sha512 を確かめて展開し、`runsc install` で Docker に登録し、dockerd を読み直させる
+
+  ```bash
+  URL=https://storage.googleapis.com/gvisor/releases/release/<版>/$(uname -m)
+  curl -fsSLO $URL/gvisor.tar.bz2 -O $URL/gvisor.tar.bz2.sha512 && sha512sum -c gvisor.tar.bz2.sha512
+  sudo tar -xjf gvisor.tar.bz2 -C /usr/local/bin
+  sudo runsc install && sudo systemctl reload docker
+  docker info --format '{{range $k,$v := .Runtimes}}{{$k}} {{end}}'   # runsc が出ること
+  ```
+
+  同じ場所の `runsc` 単体は、`20261005.0` では 404 だった（2026-10-13）
+- runsc で効かない引数と上乗せ（`execution-isolation-options.md` の 4 節「gVisor と runc（要件どおりのカーネル、#565）」）: `--memory` と `--cpus` は効く。`--pids-limit` は sandbox のホスト側のスレッドを数えるので、ゲストのスレッドには効かない（ゲストのプロセスは約 50 個で `ENOMEM` で止まる）。sandbox の中の cgroupfs は `pids.max` を `max` と見せる。上乗せは 1 回あたり 0.02〜0.13 秒、Python の処理が約 1 割
+- 上限の要件（PBI #565 の条件 3 の利用者の判断）: 「A（SANDBOX_RUNTIME を指定したときだけ --ulimit nproc=128 も足す）」。`SANDBOX_RUNTIME` を指定したときは `--ulimit=nproc=<SANDBOX_PIDS_LIMIT>` も付け、ゲストのスレッドにもセッションごとの上限をかける（runsc では sandbox の中のカーネルが数える）。既定の runc には付けない（runc の `RLIMIT_NPROC` はホストのユーザーごとに数え、全セッションが同じ `nobody` なので、セッションをまたいで合算される）
+
 ## 利用者の判断（#20 の `## 判断待ち`）
 
 問い: mcp-server に Docker ソケットを見せて `docker` モードを使えるようにするか。
@@ -103,7 +125,9 @@ Docker を使わず、mcp-server のプロセスの中でセッションごと�
 
 - 2026-10-07: `docker` モードを rootful の Docker（cgroup v1、cgroupfs ドライバ）で `docker-compose.yml` + `docker-compose.test.yml` + `docker-compose.sandbox.yml`（`SANDBOX_TTL_SECONDS=5`）で起動し、`DAK_SANDBOX_DOCKER_TESTS=1` で `tests/integration/test_sandbox_isolation.py` を回した（4 passed、#446）。2 セッションは `run_command` でもファイル系ツールでも互いのファイルが見えず、外への接続は失敗し、`docker inspect` の `NanoCpus` / `Memory` / `PidsLimit` / `NetworkMode` / `ReadonlyRootfs` / `CapDrop` は設定どおりで、コンテナの中の cgroup にも同じ値（CPU の quota 100000 / 100 ms、メモリ 536870912、PID 128）が入り、TTL のあとコンテナは消えた。フラグ無しでは 4 件とも skip する
 
+- 2026-10-13: `SANDBOX_RUNTIME=runsc`（gVisor release-20261005.0）の `docker` モードを、要件どおりのホスト（arm64、Amazon Linux 2023、カーネル 6.18、root の Docker 25.0.16、cgroup v2・systemd ドライバ）で `docker-compose.yml` + `docker-compose.test.yml` + `docker-compose.sandbox.yml`（`SANDBOX_TTL_SECONDS=5`）で起動し、`DAK_SANDBOX_DOCKER_TESTS=1 SANDBOX_RUNTIME=runsc` で `tests/integration/test_sandbox_isolation.py` を回した（5 passed、skip なし、#666）。セッションの作成 → `run_command` → TTL での破棄が通り、コンテナの `HostConfig.Runtime` は `runsc`、`Ulimits` に `nproc` 128。sandbox の中の cgroup は CPU の quota 100000 / メモリ 536870912 で、`pids.max` は `max` だった（上の「ランタイム」。テストは `SANDBOX_RUNTIME` があるときこの 1 項だけ比べない）。同じホストで `SANDBOX_RUNTIME` を空にすると 4 passed・1 skipped（ランタイムのテスト）で、cgroup v2 でも中の `pids.max` は 128
+- 2026-10-13: 同じホストで、`runsc` を登録する前と `SANDBOX_RUNTIME=nonexistent` で mcp-server を起動すると、どちらも `docker compose up --wait` が exit 1 で、コンテナは `Exited (1)`、ログに `SANDBOX_RUNTIME='…' is not registered in the host's Docker (registered: …)` が出た
+
 ## 未検証事項
 
 - rootless の Docker では、ソケットに触れて得られるのはそのデーモンを動かすユーザの権限で、上の「リスク」（ホストの root 相当）より小さい。一方で `--cpus` / `--memory` / `--pids-limit` は cgroup v2 の委譲が無いと効かない。rootless では確かめていない（`test_resource_limits_are_applied` はコンテナの中の cgroup の値まで見るので、委譲が無ければ失敗して分かる）
-- cgroup v2 のホストでは確かめていない（テストは v1 と v2 の両方のファイルを読む）
