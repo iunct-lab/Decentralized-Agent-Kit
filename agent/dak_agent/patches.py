@@ -55,10 +55,16 @@ def log_mcp_negotiation(session) -> None:
     Reads only the session's public `protocol_version`, `server_info` and
     `server_capabilities`, so no header, URL or credential reaches the log."""
     info = session.server_info
-    server = f"{info.name}/{info.version}" if info else "unknown"
+    server = f"{_one_line(info.name)}/{_one_line(info.version)}" if info else "unknown"
     caps = session.server_capabilities
-    names = ",".join(sorted(caps.model_dump(exclude_none=True))) if caps else ""
-    negotiation_logger.info(f"MCP connected: protocol={session.protocol_version} server={server} capabilities={names or 'none'}")
+    names = ",".join(sorted(_one_line(k) for k in caps.model_dump(exclude_none=True))) if caps else ""
+    negotiation_logger.info(f"MCP connected: protocol={_one_line(session.protocol_version)} server={server} capabilities={names or 'none'}")
+
+
+
+def _one_line(value) -> str:
+    """Escape control characters in a server-supplied value, so it cannot start a forged log line."""
+    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode() for c in str(value))
 
 
 def ensure_tracer_provider() -> None:
