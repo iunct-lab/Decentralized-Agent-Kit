@@ -207,3 +207,32 @@ def test_inspection_fails_after_retry_limit(agent, fake_llm):
     assert failure["attempts"] == _llm_requests(MODEL) == 2
     assert failure["issues"] == DATE_MISSING["errors"]
     assert failure["last_response"] == '{"note": "b"}'
+
+
+def test_max_llm_calls_stops_exactly_at_limit(agent, fake_llm):
+    """PBI #134: a model that never stops calling tools is called exactly
+    `dak:max_llm_calls` times; the turn ends with the structured reason."""
+    fake_llm.clear(MODEL)
+    fake_llm.script(MODEL, [fake_llm.tool_call("list_skills")] * 10)
+
+    events = _run(agent, agent.create_session(), "loop", {"dak:max_llm_calls": 3})
+
+    assert _llm_requests(MODEL) == 3
+    result = json.loads(event_texts(events)[-1])
+    assert result["error"] == "turn_limit_exceeded", f"events: {events}"
+    assert result["limit"] == "max_llm_calls"
+    assert result["calls_used"] == 3
+    assert result["elapsed_seconds"] >= 0
+    # The fake LLM reports 1 prompt + 1 completion token per call.
+    assert result["tokens"] == {"prompt": 3, "output": 3, "total": 6}
+
+
+def test_no_limits_specified_behaves_as_before(agent, fake_llm):
+    fake_llm.clear(MODEL)
+    fake_llm.script(MODEL, [fake_llm.text("ok")])
+
+    events = _run(agent, agent.create_session(), "hi", {})
+
+    assert event_texts(events)[-1] == "ok", f"events: {events}"
+    assert _llm_requests(MODEL) == 1
+    assert not any("turn_limit_exceeded" in t for t in event_texts(events))
