@@ -8,6 +8,8 @@ opt-in socket override (and a short TTL for the reaper test):
         -f docker-compose.sandbox.yml up -d --build --wait
     cd tests/integration && DAK_SANDBOX_DOCKER_TESTS=1 uv run pytest test_sandbox_isolation.py -q
 
+With SANDBOX_RUNTIME set (e.g. runsc), export it for both the stack and these tests.
+
 The test process needs the same daemon (it runs `docker inspect` / `docker ps`).
 """
 import hashlib
@@ -127,3 +129,18 @@ def test_session_destroyed_after_ttl():
     while time.time() < deadline and _container(key) in _sandbox_containers():
         time.sleep(2)
     assert _container(key) not in _sandbox_containers()
+
+
+def test_container_uses_the_configured_runtime():
+    runtime = os.getenv("SANDBOX_RUNTIME", "")
+    if not runtime:
+        pytest.skip("SANDBOX_RUNTIME is empty: the containers use Docker's default runtime")
+    key = _key()
+    _call(key, "run_command", {"command": "true"})
+    inspected = subprocess.run(["docker", "inspect", _container(key)], check=True, capture_output=True, text=True)
+    host_config = json.loads(inspected.stdout)[0]["HostConfig"]
+    pids = int(os.getenv("SANDBOX_PIDS_LIMIT", "128"))
+
+    assert host_config["Runtime"] == runtime
+    # runsc does not count guest threads against --pids-limit, so a set runtime also gets RLIMIT_NPROC (#565).
+    assert {"Name": "nproc", "Soft": pids, "Hard": pids} in (host_config["Ulimits"] or [])
