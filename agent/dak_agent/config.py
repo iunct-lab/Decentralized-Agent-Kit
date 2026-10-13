@@ -45,7 +45,30 @@ def find_config_path(path: Optional[str] = None) -> Optional[str]:
     return None
 
 
-def load_agent_config(path: Optional[str] = None) -> AgentConfig:
+def _resolve_mcp_server(srv: Dict[str, Any], env: Mapping[str, str]) -> Optional[Dict[str, Any]]:
+    """Fill an `mcp_servers` entry from the environment, or None to drop it.
+
+    `requires_env`: variables that must be set and non-blank, else the server
+    (and every skill that names it) is off. `url_env`: a variable that, when
+    set, replaces `url`. `bearer_token_env`: a variable sent as
+    `Authorization: Bearer <value>`. Only variable names are logged.
+    """
+    missing = [name for name in srv.get("requires_env") or [] if not (env.get(name) or "").strip()]
+    if missing:
+        logger.info(f"MCP server '{srv['name']}' is disabled: {', '.join(missing)} not set")
+        return None
+    resolved = dict(srv)
+    url = (env.get(srv["url_env"]) or "").strip() if srv.get("url_env") else ""
+    if url:
+        resolved["url"] = url
+    token = (env.get(srv["bearer_token_env"]) or "").strip() if srv.get("bearer_token_env") else ""
+    if token:
+        resolved["headers"] = {"Authorization": f"Bearer {token}"}
+    return resolved
+
+
+def load_agent_config(path: Optional[str] = None, env: Optional[Mapping[str, str]] = None) -> AgentConfig:
+    env = os.environ if env is None else env
     config_path = find_config_path(path)
     if not config_path:
         logger.warning("agent_config.yaml not found; using empty config.")
@@ -58,9 +81,12 @@ def load_agent_config(path: Optional[str] = None) -> AgentConfig:
         logger.warning(f"Failed to load agent config from {config_path}: {e}")
         return AgentConfig()
 
-    mcp_servers = {
-        srv["name"]: srv for srv in raw.get("mcp_servers") or [] if isinstance(srv, dict) and "name" in srv
-    }
+    mcp_servers = {}
+    for srv in raw.get("mcp_servers") or []:
+        if isinstance(srv, dict) and "name" in srv:
+            resolved = _resolve_mcp_server(srv, env)
+            if resolved is not None:
+                mcp_servers[srv["name"]] = resolved
     a2a_peers = [peer for peer in raw.get("a2a_peers") or [] if isinstance(peer, dict)]
     permission_rules = list(raw.get("permissions") or [])
 

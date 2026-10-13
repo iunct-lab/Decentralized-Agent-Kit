@@ -459,16 +459,18 @@ class AdaptiveAgent(LlmAgent):
         active_skills = list(state.get(skill_tools.STATE_ACTIVE_SKILLS, []))
         tools = list(self._builtin_tools)
         current_names = {getattr(t, "name", None) for t in tools} - {None}
-        mcp_groups: Dict[Tuple[str, str], set] = {}
+        # (url, type, agent_config.yaml server name or None for the default server)
+        mcp_groups: Dict[Tuple[str, str, Optional[str]], set] = {}
 
-        def add_mcp_names(names, server_cfg: Optional[Dict] = None):
+        def add_mcp_names(names, server: Optional[str] = None):
             missing = [n for n in names if n not in current_names]
             if not missing:
                 return
+            server_cfg = self.mcp_servers[server] if server else None
             target_url = server_cfg.get("url") if server_cfg else self._mcp_url
             target_type = server_cfg.get("type", "http") if server_cfg else "http"
             if target_url:
-                mcp_groups.setdefault((target_url, target_type), set()).update(missing)
+                mcp_groups.setdefault((target_url, target_type, server), set()).update(missing)
 
         for skill_name in active_skills:
             skill = self.skill_registry.get_skill(skill_name) if self.skill_registry else None
@@ -485,8 +487,12 @@ class AdaptiveAgent(LlmAgent):
                     if name and name not in current_names:
                         tools.append(tool)
                         current_names.add(name)
-                server_cfg = self.mcp_servers.get(skill["mcp_server"]) if skill.get("mcp_server") else None
-                add_mcp_names(mcp_fallback, server_cfg)
+                server = skill.get("mcp_server")
+                if server and server not in self.mcp_servers:
+                    # Not the default server: it does not have this skill's tools.
+                    logger.warning(f"Skill '{skill_name}' needs MCP server '{server}', which is not configured.")
+                    continue
+                add_mcp_names(mcp_fallback, server)
             elif skill_name in self.available_remote_tools:
                 add_mcp_names([skill_name])
 
@@ -496,10 +502,10 @@ class AdaptiveAgent(LlmAgent):
             if not mode_tool_names and not mcp_groups and self._has_default_mcp_toolset:
                 # A mode switch selected no tools; fall back to the full,
                 # unfiltered default MCP server rather than stranding the agent.
-                mcp_groups[(self._mcp_url, "http")] = set()
+                mcp_groups[(self._mcp_url, "http", None)] = set()
 
-        for (url, conn_type), names in mcp_groups.items():
-            tools.append(self._cached_mcp_toolset(url, conn_type, names))
+        for (url, conn_type, server), names in mcp_groups.items():
+            tools.append(self._cached_mcp_toolset(url, conn_type, names, server=server))
 
         if self.ap2_enabled and "solana_wallet" not in active_skills and any(
             s != "solana_wallet" for s in active_skills
@@ -523,20 +529,25 @@ class AdaptiveAgent(LlmAgent):
             tools.append(self._cached_mcp_toolset(self._mcp_url, "http", rest))
         return tools
 
-    def _cached_mcp_toolset(self, url: str, conn_type: str, names, follow_redirects: bool = True) -> Any:
+    def _cached_mcp_toolset(self, url: str, conn_type: str, names, follow_redirects: bool = True,
+                            server: Optional[str] = None) -> Any:
         """One McpToolset per (server, tool filter), shared by every session.
         Each McpToolset owns an MCP session manager whose connection is only
         released by that same manager, so building a fresh one per turn would
         leak a connection per turn. The filter is never mutated after
         creation, so sharing across sessions is safe. Caller-chosen servers
-        get `follow_redirects=False` (a separate cache entry)."""
-        key = (url, conn_type, frozenset(names)) + (() if follow_redirects else ("no-redirects",))
+        get `follow_redirects=False` (a separate cache entry). An
+        agent_config.yaml `server` adds its `headers`; the key holds the
+        server's name, never a header value."""
+        key = (url, conn_type, frozenset(names)) + (() if follow_redirects else ("no-redirects",)) + (
+            (server,) if server else ())
         toolset = self._mcp_toolset_cache.get(key)
         if toolset is None:
-            if follow_redirects:
-                toolset = skill_tools.make_mcp_toolset(url, conn_type, sorted(names) or None)
-            else:
-                toolset = skill_tools.make_mcp_toolset(url, conn_type, sorted(names) or None, follow_redirects=False)
+            extra = {} if follow_redirects else {"follow_redirects": False}
+            headers = self.mcp_servers[server].get("headers") if server else None
+            if headers:
+                extra["headers"] = headers
+            toolset = skill_tools.make_mcp_toolset(url, conn_type, sorted(names) or None, **extra)
             self._mcp_toolset_cache[key] = toolset
         return toolset
 
