@@ -1369,6 +1369,27 @@ class TestCallLimits(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(texts[-1], "ok")
         self.assertEqual(client.acompletion.await_args.kwargs["max_completion_tokens"], 256)
 
+    async def test_call_limits_count_reply_regeneration(self):
+        """Regenerating a reply that failed `dak:output_schema` is a model call
+        of the turn: over the limit it is not made."""
+        import json
+        requests = []
+        schema = {"type": "object", "required": ["date"]}
+        texts, _ = await self._run(_scripted_llm(requests, [("ping", {}), ("ping", {}), '{"no": 1}', '{"date": "x"}']),
+                                   state_delta={"dak:max_llm_calls": 3, "dak:output_schema": schema})
+        self.assertEqual(len(requests), 3)
+        result = json.loads(texts[-1])
+        self.assertEqual(result["limit"], "max_llm_calls")
+        self.assertEqual(result["calls_used"], 3)
+
+    async def test_call_limits_cap_output_tokens_of_reply_regeneration(self):
+        requests = []
+        schema = {"type": "object", "required": ["date"]}
+        texts, _ = await self._run(_scripted_llm(requests, ['{"no": 1}', '{"date": "x"}']),
+                                   state_delta={"dak:max_output_tokens": 64, "dak:output_schema": schema})
+        self.assertEqual(texts[-1], '{"date": "x"}')
+        self.assertEqual([r.config.max_output_tokens for r in requests], [64, 64])
+
     async def test_call_limits_noop_without_settings(self):
         requests = []
         texts, _ = await self._run(self._looping_llm(requests, reply_after=4))
