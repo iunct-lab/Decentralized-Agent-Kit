@@ -9,9 +9,13 @@ SANDBOX_MODE:
           the file tools only; run_command can still reach anything.
   docker  one disposable container per session (no network, read-only root,
           tmpfs workspace, CPU/memory/PID limits, no capabilities, non-root),
-          driven through the docker CLI.
+          driven through the docker CLI. SANDBOX_RUNTIME picks the container
+          runtime (e.g. runsc for gVisor); it must be registered in the host's
+          Docker, and it also sets --ulimit nproc (runsc does not count guest
+          threads against --pids-limit, #565).
 """
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -27,6 +31,8 @@ SANDBOX_TTL_SECONDS = int(os.getenv("SANDBOX_TTL_SECONDS", "900"))
 SANDBOX_CPUS = os.getenv("SANDBOX_CPUS", "1")
 SANDBOX_MEMORY = os.getenv("SANDBOX_MEMORY", "512m")
 SANDBOX_PIDS_LIMIT = os.getenv("SANDBOX_PIDS_LIMIT", "128")
+# Empty: Docker's default runtime (runc), with the docker run arguments unchanged.
+SANDBOX_RUNTIME = os.getenv("SANDBOX_RUNTIME", "")
 
 DOCKER_WORKDIR = "/workspace"
 # Marks our containers so a restarted server can remove the ones a killed server left behind.
@@ -49,16 +55,32 @@ def check_socket_exposure(mode: str, in_container: bool, socket_visible: bool) -
 
 
 class SandboxManager:
-    def __init__(self, mode=SANDBOX_MODE, ttl_seconds=SANDBOX_TTL_SECONDS, run=subprocess.run):
+    def __init__(self, mode=SANDBOX_MODE, ttl_seconds=SANDBOX_TTL_SECONDS, run=subprocess.run,
+                 runtime=SANDBOX_RUNTIME):
         # An unknown mode must stop the server: silently falling back to "off"
         # would look isolated while it is not.
         if mode not in MODES:
             raise ValueError(f"SANDBOX_MODE must be one of {', '.join(MODES)}; got {mode!r}")
+        # Same reason: a runtime the server would ignore is not the isolation it promises.
+        if runtime and mode != "docker":
+            raise ValueError(f"SANDBOX_RUNTIME is only used with SANDBOX_MODE=docker; got SANDBOX_MODE={mode}")
         self.mode = mode
         self._ttl = ttl_seconds
         self._run = run
+        self._runtime = runtime
         self._sessions: dict[str, dict] = {}
         self._lock = threading.Lock()
+        if runtime:
+            self._check_runtime()
+
+    def _check_runtime(self) -> None:
+        # Never fall back to runc: that would look isolated by gVisor while it is not.
+        listed = self._run(["docker", "info", "--format", "{{json .Runtimes}}"],
+                           check=True, capture_output=True, text=True, timeout=60)
+        registered = sorted(json.loads(listed.stdout or "{}"))
+        if self._runtime not in registered:
+            raise ValueError(f"SANDBOX_RUNTIME={self._runtime!r} is not registered in the host's Docker "
+                             f"(registered: {', '.join(registered)})")
 
     def _container_name(self, session_key: str) -> str:
         # Hash the key: it is a caller-supplied header and must not reach a name or a path as is.
@@ -77,8 +99,12 @@ class SandboxManager:
                 "--env", f"HOME={DOCKER_WORKDIR}",
                 f"--cpus={SANDBOX_CPUS}", f"--memory={SANDBOX_MEMORY}", f"--pids-limit={SANDBOX_PIDS_LIMIT}",
                 "--cap-drop", "ALL", "--user", "nobody",
-                SANDBOX_IMAGE, "sleep", "infinity",
             ]
+            if self._runtime:
+                # runsc does not count guest threads against --pids-limit; its guest kernel enforces
+                # RLIMIT_NPROC per sandbox. Not for the default runc, where it counts per host user (#565).
+                cmd += [f"--ulimit=nproc={SANDBOX_PIDS_LIMIT}", f"--runtime={self._runtime}"]
+            cmd += [SANDBOX_IMAGE, "sleep", "infinity"]
             # A create that finished after an earlier `docker run` timed out leaves this name behind.
             self._remove_container(name)
             # Bounded: a hung daemon must not hold the lock forever (300 s leaves room for an image pull).

@@ -65,6 +65,38 @@ class TestSandboxManager(unittest.TestCase):
         self.assertEqual(entry["workdir"], "/workspace")
         self.assertIn(entry["container_name"], cmd)
 
+    def test_default_runtime_keeps_docker_run_arguments(self):
+        run = MagicMock()
+        SandboxManager(mode="docker", runtime="", run=run).ensure_session("s1")
+        cmd = run.call_args.args[0]
+        self.assertFalse([a for a in cmd if a.startswith(("--runtime", "--ulimit"))])
+        self.assertNotIn(["docker", "info"], [c.args[0][:2] for c in run.call_args_list])
+
+    def _run_with_runtimes(self, runtimes: str) -> MagicMock:
+        def fake_run(cmd, **kwargs):
+            out = runtimes if cmd[:2] == ["docker", "info"] else ""
+            return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+        return MagicMock(side_effect=fake_run)
+
+    def test_runtime_is_passed_to_docker_run(self):
+        run = self._run_with_runtimes('{"runc":{},"runsc":{}}')
+        SandboxManager(mode="docker", runtime="runsc", run=run).ensure_session("s1")
+        cmd = run.call_args.args[0]
+        image = cmd.index(sandbox.SANDBOX_IMAGE)
+        self.assertEqual(cmd[image - 1], "--runtime=runsc")
+        # runsc does not count guest threads against --pids-limit; the guest kernel enforces RLIMIT_NPROC (#565).
+        self.assertIn(f"--ulimit=nproc={sandbox.SANDBOX_PIDS_LIMIT}", cmd[:image])
+
+    def test_unregistered_runtime_is_rejected(self):
+        run = self._run_with_runtimes('{"runc":{}}')
+        with self.assertRaisesRegex(ValueError, "SANDBOX_RUNTIME='runsc' is not registered"):
+            SandboxManager(mode="docker", runtime="runsc", run=run)
+        self.assertNotIn(["docker", "run"], [c.args[0][:2] for c in run.call_args_list])
+
+    def test_runtime_outside_docker_mode_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "SANDBOX_MODE=docker"):
+            SandboxManager(mode="inproc", runtime="runsc", run=MagicMock())
+
     def test_container_name_does_not_embed_the_session_key(self):
         name = SandboxManager(mode="docker", run=MagicMock())._container_name("alice:../../etc")
         self.assertRegex(name, r"^dak-sandbox-[0-9a-f]{16}$")
