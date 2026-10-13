@@ -20,5 +20,6 @@ services:
       - SANDBOX_CPUS=${SANDBOX_CPUS:-1}
       - SANDBOX_MEMORY=${SANDBOX_MEMORY:-512m}
       - SANDBOX_PIDS_LIMIT=${SANDBOX_PIDS_LIMIT:-128}
+      - SANDBOX_RUNTIME=${SANDBOX_RUNTIME:-}
     volumes:
       - ${DAK_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock

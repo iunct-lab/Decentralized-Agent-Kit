@@ -106,6 +106,7 @@ share the session `default`). Design: `docs/design/session-sandbox.md`.
 | `SANDBOX_CPUS` | `1` | `docker run --cpus` |
 | `SANDBOX_MEMORY` | `512m` | `docker run --memory` |
 | `SANDBOX_PIDS_LIMIT` | `128` | `docker run --pids-limit` |
+| `SANDBOX_RUNTIME` | empty (Docker's default, runc) | `docker` mode only: `docker run --runtime`, e.g. `runsc` for gVisor. When set, `--ulimit nproc` is added with the `SANDBOX_PIDS_LIMIT` value (runsc does not count guest threads against `--pids-limit`). A runtime not registered in the host's Docker, or a value outside `docker` mode, stops the server; it never falls back to runc. Host requirements for runsc: `docs/design/session-sandbox.md` |
 
 `docker` mode needs a Docker daemon the server can reach. `docker-compose.yml`
 does not mount the host's Docker socket into this container: whoever controls
