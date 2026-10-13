@@ -1434,6 +1434,7 @@ class ContextHarnessPlugin(BasePlugin):
         it in a RuntimeError, with this error as the cause)."""
         if not is_context_overflow_error(error):
             return None
+        from . import call_config  # one-way: call_config never imports harness
         settings = self._settings_for(callback_context)
         invocation = callback_context._invocation_context
         model = invocation.agent.canonical_model
@@ -1444,6 +1445,12 @@ class ContextHarnessPlugin(BasePlugin):
             logger.warning(
                 "Context harness: model rejected the request for size; retry %d/%d on %d tokens "
                 "(%d part(s) elided): %s", attempt, settings.model_error_retry_attempts, budget, elided, error)
+            reached = call_config.turn_limit_reached(callback_context)  # a retry is a call of the turn
+            if reached is not None:
+                logger.info("Context harness: not retrying, the turn is at a limit: %s", reached)
+                return LlmResponse(content=types.Content(role="model", parts=[types.Part(text=json.dumps(reached))]),
+                                   turn_complete=True)
+            call_config.count_llm_call(callback_context, llm_request)
             invocation.increment_llm_call_count()  # a retry is a model call: honour max_llm_calls
             try:
                 async for llm_response in model.generate_content_async(llm_request, stream=False):

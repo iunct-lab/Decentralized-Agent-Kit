@@ -1749,6 +1749,28 @@ class TestOnModelErrorCallback:
                    for c in request.contents[1:3] for p in c.parts)
 
     @pytest.mark.asyncio
+    async def test_retries_count_against_the_turn_limit(self):
+        """PBI #134: a retry is a model call of the turn. With 1 of 2 calls
+        made, one retry is made; the next is not, and the turn ends with the
+        structured reason."""
+        import time
+        llm = self._llm([_context_error()] * 10)
+        context = self._context(llm)
+        context.state = {"temp:dak_call_count": 1, "temp:dak_call_started_at": time.monotonic()}
+        context._invocation_context.session.events = []
+
+        plugin = ContextHarnessPlugin(self.settings, "test-model")
+        with patch("dak_agent.call_config.resolve_dak_settings", return_value={"dak:max_llm_calls": 2}):
+            response = await plugin.on_model_error_callback(
+                callback_context=context, llm_request=self._request(), error=_context_error())
+
+        assert len(llm.request_tokens) == 1
+        assert context.state["temp:dak_call_count"] == 2
+        result = json.loads(response.content.parts[0].text)
+        assert (result["error"], result["limit"], result["calls_used"]) == ("turn_limit_exceeded", "max_llm_calls", 2)
+        assert response.turn_complete
+
+    @pytest.mark.asyncio
     async def test_gives_up_after_exhausting_attempts_with_an_explicit_failure(self):
         llm = self._llm([_context_error()] * 10)
 
