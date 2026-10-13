@@ -248,7 +248,7 @@ echo "== done"
 |---|---:|---:|---:|
 | (a) `docker run --rm … python -c pass` | 315（265〜361） | 444（388〜473） | +129（+41%） |
 | (b) ハッシュの処理（`docker run` で、コンテナの中で測る） | 251.7（246.1〜258.7） | 281.9（271.8〜303.6） | +30.2（+12%） |
-| 作成 `docker run -d … sleep infinity` | 198（182〜248） | 278（252〜306） | +80（+41%） |
+| 作成 `docker run -d … sleep infinity` | 198（182〜248） | 278（252〜306） | +80（+40%） |
 | 実行 `docker exec … python -c pass` | 63（59〜65） | 95（85〜106） | +32（+51%） |
 | 破棄 `docker rm -f` | 110（74〜132） | 129（90〜137） | +19 |
 
@@ -271,7 +271,7 @@ echo "== done"
 
 読み方:
 
-- 要件どおりのカーネルでは、`SandboxManager` の流れ（作成・`docker exec`・`docker rm -f`）が既定の runsc でそのまま動く。上乗せは 1 回あたり 0.03〜0.13 秒、Python の処理が約 1 割で、`run_command` のタイムアウト（60 秒）に比べて小さい。#298 の破棄の約 10 秒は、このカーネルでは出なかった
+- 要件どおりのカーネルでは、`SandboxManager` の流れ（作成・`docker exec`・`docker rm -f`）が既定の runsc でそのまま動く。上乗せは 1 回あたり 0.02〜0.13 秒、Python の処理が約 1 割で、`run_command` のタイムアウト（60 秒）に比べて小さい。#298 の破棄の約 10 秒は、このカーネルでは出なかった
 - `--memory` と `--cpus` は runsc でも効く。`--cpus` は、ホストの cgroup が sandbox 全体を 1 CPU 分に絞っている（#298 で確かめきれなかったもの）
 - `--pids-limit` は sandbox のホスト側のスレッド（gVisor の Sentry と gofer）を数える。ゲストのプロセスは間接的に止まる（49〜50 個で `ENOMEM`。runc の 127 個で `EAGAIN` とは数も errno も違う）が、ゲストのスレッドはホストのスレッドに 1 対 1 で対応しないので止まらない。gVisor の公式の互換性の文書の「sandbox の中では cgroup の上限を強制しない」と合う
 - `--ulimit nproc=128` は runsc でゲストのスレッドを 127 本で止めた。runsc では sandbox の中のカーネルが数えるので、セッションごとの上限になる。runc の `RLIMIT_NPROC` はホストのユーザー（全セッションが同じ `nobody`）ごとに数えるので、runc に同じ値を付けるとセッションをまたいで数が合算される（runc では `--pids-limit` で足りている）
@@ -346,7 +346,7 @@ echo "== done"
 | 方式 | 隔離の強さ | 実測の上乗せ | `SandboxManager` に足す変更 | 動かせるホスト | 運用の負担 |
 |---|---|---|---|---|---|
 | runc（今） | ホストのカーネルを共有 | 基準 | なし | cgroups のある Linux の Docker（rootless で cgroups が無いと上限が効かない） | なし |
-| gVisor | システムコールを sandbox の application kernel で受ける | 要件どおりのカーネルで 1 回あたり +0.03〜0.13 秒、処理 +12%（4 節、#565） | `--runtime` を 1 つ足す | Linux 5.6 以上、x86_64 / arm64、KVM 不要 | ホストの Docker に `runsc` を入れて登録。`--pids-limit` はスレッドに効かない（`--ulimit nproc` は効く。4 節、#565） |
+| gVisor | システムコールを sandbox の application kernel で受ける | 要件どおりのカーネルで 1 回あたり +0.02〜0.13 秒、処理 +12%（4 節、#565） | `--runtime` を 1 つ足す | Linux 5.6 以上、x86_64 / arm64、KVM 不要 | ホストの Docker に `runsc` を入れて登録。`--pids-limit` はスレッドに効かない（`--ulimit nproc` は効く。4 節、#565） |
 | Kata Containers | コンテナごとの VM | 未検証（KVM の使える計測先が無い） | `--runtime` を 1 つ足す | KVM（入れ子の仮想化か bare metal） | `io.containerd.kata.v2` の shim を入れる。KVM のあるホストが要る |
 | Docker Sandboxes | サンドボックスごとの microVM と専用の Docker デーモン | 未検証（実測しない） | `sbx` を呼ぶ別の実装 | Apple silicon の Mac、KVM のある Ubuntu 24.04 以上、Windows 11 | `sbx login`、ネットワークの方針の初期化、ホストに常駐する `sandboxd`。mcp-server のコンテナから呼ぶ標準の口が無い（3 節） |
 | CubeSandbox | サンドボックスごとの microVM | 未検証（実測しない） | E2B 互換の API のクライアント（別の実装） | KVM のある Linux（x86_64 は PVM のホストカーネルでも可） | ホストに一式の常駐サービス、XFS の 50 GB の領域 |
