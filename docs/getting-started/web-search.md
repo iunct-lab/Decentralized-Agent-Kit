@@ -10,6 +10,7 @@
    ```bash
    TAVILY_API_KEY=<自分のキー>
    ```
+   Switchboard のホストでは `.env` に書かない。AGENTS.md の「Switchboard-hosted credentials」に従い、SSM Parameter Store の `SecureString` から起動時に環境変数として渡す
 3. `docker compose up -d --build`（agent を作り直すと環境変数が入る）
 4. エージェントに頼む。例: 「Web 検索のスキルを有効にして、〜を調べて」。エージェントが `enable_skill("web_search")` → `tavily_search` と進む
 
