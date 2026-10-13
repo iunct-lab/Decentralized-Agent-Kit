@@ -126,6 +126,29 @@ class TestModeManager(unittest.TestCase):
         manager = ModeManager(model_name="gemini/gemini-3.5-flash-lite")
         self.assertGreater(manager.max_context_tokens, ModeManager.MODEL_MAX_TOKENS["default"])
 
+    @patch("dak_agent.mode_manager.meta_llm.complete_json", return_value={})
+    def test_generate_mode_config_uses_small_model_when_set(self, mock_complete_json):
+        manager = ModeManager(model_name="big", small_model="gemini-2.5-flash-lite")
+        manager.generate_mode_config(history_summary="h", available_tools=self.available_tools, available_skills=[])
+        self.assertEqual(mock_complete_json.call_args.args[0], "gemini/gemini-2.5-flash-lite")
+
+    @patch("dak_agent.mode_manager.meta_llm.complete_json", return_value={})
+    def test_generate_mode_config_uses_main_model_without_small_model(self, mock_complete_json):
+        manager = ModeManager(model_name="gemini-2.5-pro")
+        manager.generate_mode_config(history_summary="h", available_tools=self.available_tools, available_skills=[])
+        self.assertEqual(mock_complete_json.call_args.args[0], "gemini/gemini-2.5-pro")
+
+    def test_adaptive_agent_reads_small_model_from_env(self):
+        from dak_agent.adaptive_agent import AdaptiveAgent
+
+        with patch.dict(os.environ, {"DAK_SMALL_MODEL": "ollama_chat/qwen3:1.7b"}):
+            agent = AdaptiveAgent(model="test-model", name="a", instruction="i", tools=[])
+        self.assertEqual(agent._mode_manager.small_model, "ollama_chat/qwen3:1.7b")
+
+        os.environ.pop("DAK_SMALL_MODEL", None)
+        agent = AdaptiveAgent(model="test-model", name="a", instruction="i", tools=[])
+        self.assertIsNone(agent._mode_manager.small_model)
+
     def test_requested_focus_is_consumed_once(self):
         """A stale LLM-requested focus must not leak into later automatic switches."""
         state = {}
