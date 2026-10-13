@@ -31,6 +31,10 @@ services:
       - AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY
       - AWS_SESSION_TOKEN
+      # Web search (optional) — see docs/getting-started/web-search.md. Bare
+      # pass-through: an unset key stays unset and the skill stays off.
+      - TAVILY_API_KEY
+      - TAVILY_MCP_URL
     depends_on:
       - postgres
     volumes:
