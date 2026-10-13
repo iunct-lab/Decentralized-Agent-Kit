@@ -56,6 +56,8 @@ services:
       - DAK_ALLOWED_INSPECTION_URLS=http://inspect-server:8080/validate
       - AGENT_CARD_SIGNING_KEY_FILE=/keys/card-signing.pem
       - AGENT_CARD_SIGNING_KID=test-1
+      # test_web_search_flow.py: this agent has no Tavily key, whatever the host or .env has
+      - TAVILY_API_KEY=
     volumes:
       - ./tests/integration/.keys:/keys:ro
     # map form: docker-compose.yml's list form is merged into it

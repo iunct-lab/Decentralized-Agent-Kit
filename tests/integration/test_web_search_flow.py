@@ -5,7 +5,8 @@ the user's approval like any MCP server without a permission rule. Without the
 key the skill is not there."""
 import httpx
 
-from conftest import AGENT_RUN_TIMEOUT, AGENT_WEBSEARCH_URL, FAKE_TAVILY_URL, function_calls, function_responses
+from conftest import (AGENT_RUN_TIMEOUT, AGENT_WEBSEARCH_URL, FAKE_TAVILY_URL, event_texts, function_calls,
+                      function_responses)
 
 MODEL = "fake-websearch"
 KEY = "test-dummy-key"  # agent-websearch's TAVILY_API_KEY in docker-compose.test.yml
@@ -27,6 +28,7 @@ def test_web_search_round_trip(agent_websearch, fake_llm):
     fake_llm.script(MODEL, [
         fake_llm.tool_call("enable_skill", skill_name="web_search"),
         fake_llm.tool_call("tavily_search", query="DAK"),
+        fake_llm.text("Waiting for approval."),
         fake_llm.text("Found it."),
     ])
     user_id = agent_websearch.user_id
@@ -41,10 +43,10 @@ def test_web_search_round_trip(agent_websearch, fake_llm):
     resp = httpx.post(f"{AGENT_WEBSEARCH_URL}/approvals/{item['id']}/reply",
                       json={"user_id": user_id, "session_id": session_id, "mode": "once"}, timeout=AGENT_RUN_TIMEOUT)
     assert resp.status_code == 200, resp.text
-    assert "Found it." in resp.text
 
     session = httpx.get(f"{AGENT_WEBSEARCH_URL}/apps/dak_agent/users/{user_id}/sessions/{session_id}",
                         timeout=30.0).json()
+    assert "Found it." in event_texts(session["events"])
     search = [r for r in function_responses(session["events"]) if r.get("name") == "tavily_search"]
     assert "https://fake-tavily.example/dak" in str(search[-1].get("response", {}))
     # The model's last request carries the search result.
