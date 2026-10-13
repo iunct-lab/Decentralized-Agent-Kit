@@ -61,7 +61,6 @@ def log_mcp_negotiation(session) -> None:
     negotiation_logger.info(f"MCP connected: protocol={_one_line(session.protocol_version)} server={server} capabilities={names or 'none'}")
 
 
-
 def _one_line(value) -> str:
     """Escape control characters in a server-supplied value, so it cannot start a forged log line."""
     return "".join(c if c.isprintable() else c.encode("unicode_escape").decode() for c in str(value))
