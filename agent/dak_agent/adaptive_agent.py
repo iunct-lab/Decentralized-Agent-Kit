@@ -539,8 +539,7 @@ class AdaptiveAgent(LlmAgent):
         get `follow_redirects=False` (a separate cache entry). An
         agent_config.yaml `server` adds its `headers`; the key holds the
         server's name, never a header value."""
-        key = (url, conn_type, frozenset(names)) + (() if follow_redirects else ("no-redirects",)) + (
-            (server,) if server else ())
+        key = (url, conn_type, frozenset(names), follow_redirects, server)
         toolset = self._mcp_toolset_cache.get(key)
         if toolset is None:
             extra = {} if follow_redirects else {"follow_redirects": False}

@@ -222,7 +222,7 @@ def _probe_agent(monkeypatch, get_tools):
     agent = AdaptiveAgent(model="m", name="dak_agent", instruction="Base.", tools=[])
     toolset = MagicMock()
     toolset.get_tools = get_tools
-    agent._mcp_toolset_cache[(CALLER_MCP, "http", frozenset(), "no-redirects")] = toolset
+    agent._mcp_toolset_cache[(CALLER_MCP, "http", frozenset(), False, None)] = toolset
     return agent
 
 
@@ -313,7 +313,7 @@ async def test_servers_are_probed_concurrently(monkeypatch):
     for url in (CALLER_MCP, other):
         ts = MagicMock()
         ts.get_tools = slow
-        agent._mcp_toolset_cache[(url, "http", frozenset(), "no-redirects")] = ts
+        agent._mcp_toolset_cache[(url, "http", frozenset(), False, None)] = ts
     monkeypatch.setenv("DAK_ALLOWED_MCP_URLS", f"{CALLER_MCP},{other}")
     state = State(value={}, delta={})
 
