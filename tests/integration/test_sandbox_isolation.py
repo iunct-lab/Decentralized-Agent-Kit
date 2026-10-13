@@ -117,7 +117,11 @@ def test_resource_limits_are_applied():
     assert host_config["CapDrop"] == ["ALL"]
     # Enforced, not only configured: the values reach the container's cgroup.
     quota, limit, pids_max = cgroup.split("Stdout:\n", 1)[1].split()[:3]
-    assert (quota, limit, pids_max) == (str(int(cpus * 100000)), str(host_config["Memory"]), str(pids)), cgroup
+    assert (quota, limit) == (str(int(cpus * 100000)), str(host_config["Memory"])), cgroup
+    # gVisor's cgroupfs inside the sandbox shows pids.max as "max": the limit is on the host side of the
+    # sandbox (docs/design/execution-isolation-options.md, section 4, #565). PidsLimit above still holds.
+    if not os.getenv("SANDBOX_RUNTIME"):
+        assert pids_max == str(pids), cgroup
 
 
 @pytest.mark.skipif(TTL_SECONDS > 10, reason="needs the stack started with SANDBOX_TTL_SECONDS<=10")
