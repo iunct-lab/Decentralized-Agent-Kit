@@ -8,7 +8,7 @@ import importlib.util
 import logging
 import os
 import sys
-from typing import Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from google.adk.tools import FunctionTool
 from google.adk.tools.mcp_tool import McpToolset, StreamableHTTPConnectionParams
@@ -114,16 +114,19 @@ def make_mcp_toolset(
     conn_type: str = "http",
     tool_filter: Optional[List[str]] = None,
     follow_redirects: bool = True,
+    headers: Optional[Dict[str, str]] = None,
 ) -> McpToolset:
     """Create an McpToolset for the given server URL and connection type.
     `follow_redirects=False` for servers the caller chose: an allowed endpoint
-    must not be able to send the agent on to another (internal) address."""
+    must not be able to send the agent on to another (internal) address.
+    `headers` go on every request (an agent_config.yaml server's
+    `bearer_token_env`, see config.py)."""
     extra = {} if follow_redirects else {"httpx_client_factory": _no_redirect_http_client}
     if conn_type == "sse":
         from google.adk.tools.mcp_tool import SseConnectionParams
-        conn_params = SseConnectionParams(url=url, **extra)
+        conn_params = SseConnectionParams(url=url, headers=headers, **extra)
     else:
-        conn_params = StreamableHTTPConnectionParams(url=url, **extra)
+        conn_params = StreamableHTTPConnectionParams(url=url, headers=headers, **extra)
     return McpToolset(
         connection_params=conn_params,
         tool_filter=tool_filter,
@@ -159,6 +162,14 @@ def load_solana_wallet_tools(
     return tools
 
 
+def _unconfigured_mcp_server(agent, skill_name: str) -> Optional[str]:
+    """The `mcp_server` a skill names when agent_config.yaml has no such server
+    (or dropped it for a missing `requires_env`), else None."""
+    skill = agent.skill_registry.get_skill(skill_name) if agent.skill_registry else None
+    server = skill.get("mcp_server") if skill else None
+    return server if server and server not in agent.mcp_servers else None
+
+
 def make_skill_tools(agent) -> List[FunctionTool]:
     """Create the list_skills / enable_skill tools bound to an AdaptiveAgent.
 
@@ -180,7 +191,8 @@ def make_skill_tools(agent) -> List[FunctionTool]:
             skills = agent.skill_registry.list_skills()
             if skills:
                 output.append("## Curated Skills (Recommended)")
-                output.extend([f"- {s['name']}: {s['description']}" for s in skills])
+                output.extend([f"- {s['name']}: {s['description']}" for s in skills
+                               if not _unconfigured_mcp_server(agent, s['name'])])
 
         # 2. Remote tools (zero-config)
         if agent.available_remote_tools:
@@ -214,6 +226,10 @@ def make_skill_tools(agent) -> List[FunctionTool]:
         active_skills = list(tool_context.state.get(STATE_ACTIVE_SKILLS, []))
 
         if skill:
+            server = _unconfigured_mcp_server(agent, skill_name)
+            if server:
+                return (f"Error: Skill '{skill_name}' needs MCP server '{server}', which is not configured "
+                        "(set its required environment variables).")
             if skill_name in active_skills:
                 return f"Skill '{skill_name}' is already active."
             if not agent.skill_registry.find_skill_dir(skill_name):

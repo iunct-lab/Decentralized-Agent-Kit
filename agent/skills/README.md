@@ -13,6 +13,8 @@
    - 本文にはエージェント向けの使い方と制約を書く。暗黙の副作用を持たせない。
 2. `agent/skills/<name>/tools.py` に、文字列を返すツール関数を実装する。docstring は LLM が読む前提で、引数と戻り値を明記する。
    `tools.py` に無い名前は MCP サーバのツールとして読み込まれる。
+   既定の mcp-server ではなく `agent_config.yaml` の `mcp_servers` の 1 つから取るなら、フロントマターに `mcp_server: <name>` を書く。
+   その名前が `mcp_servers` に無い（`requires_env` の環境変数が未設定で外れたときも）と、スキルは `list_skills` に出ず、`enable_skill` は理由付きのエラーを返す。既定の mcp-server には取りに行かない。
 3. `agent/tests/skills/` に読み込みと動作の単体テストを足す（既存の `test_*` を参考に）。
 4. `cd agent && uv run pytest -q`。必要なら統合テストでも確認する。
 
