@@ -1008,7 +1008,7 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
         with patch("dak_agent.skill_tools.make_mcp_toolset", return_value=MagicMock(name="toolset")) as make:
             tools = agent._resolve_session_tools({}, {"dak:tools": ["switch_mode", "read_file", "grep"]})
         self.assertEqual(len(tools), 2)
-        make.assert_called_once_with(agent.mcp_url, "http", ["grep", "read_file"])
+        make.assert_called_once_with(agent.mcp_url, "http", ["grep", "read_file"], session_key=True)
 
     def test_call_tools_unknown_names_never_build_mcp_toolsets(self):
         """The toolset cache is keyed by names; names the default MCP server
@@ -1019,7 +1019,7 @@ class TestAdaptiveAgent(unittest.IsolatedAsyncioTestCase):
             for i in range(5):
                 agent._resolve_session_tools({}, {"dak:tools": [f"x{i}"]})
             agent._resolve_session_tools({}, {"dak:tools": ["read_file", "nope"]})
-        make.assert_called_once_with(agent.mcp_url, "http", ["read_file"])
+        make.assert_called_once_with(agent.mcp_url, "http", ["read_file"], session_key=True)
         self.assertEqual(len(agent._mcp_toolset_cache), 1)
 
     def test_call_tools_without_transfer_to_agent_drops_sub_agents_for_the_call(self):

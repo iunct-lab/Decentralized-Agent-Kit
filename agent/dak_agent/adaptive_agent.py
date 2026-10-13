@@ -538,7 +538,9 @@ class AdaptiveAgent(LlmAgent):
         creation, so sharing across sessions is safe. Caller-chosen servers
         get `follow_redirects=False` (a separate cache entry). An
         agent_config.yaml `server` adds its `headers`; the key holds the
-        server's name, never a header value."""
+        server's name, never a header value. `X-DAK-Session-Key` goes only to
+        the default server and to a `server` with `send_session_key: true`,
+        never to a caller-chosen one."""
         key = (url, conn_type, frozenset(names), follow_redirects, server)
         toolset = self._mcp_toolset_cache.get(key)
         if toolset is None:
@@ -546,6 +548,10 @@ class AdaptiveAgent(LlmAgent):
             headers = self.mcp_servers[server].get("headers") if server else None
             if headers:
                 extra["headers"] = headers
+            # No `server` and following redirects = the default server.
+            session_key = bool(self.mcp_servers[server].get("send_session_key")) if server else follow_redirects
+            if session_key:
+                extra["session_key"] = True
             toolset = skill_tools.make_mcp_toolset(url, conn_type, sorted(names) or None, **extra)
             self._mcp_toolset_cache[key] = toolset
         return toolset
