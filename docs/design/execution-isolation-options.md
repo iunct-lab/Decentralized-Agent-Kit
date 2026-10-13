@@ -222,6 +222,117 @@ echo "== done"
 
 </details>
 
+### gVisor と runc（要件どおりのカーネル、#565）
+
+2026-10-13 に計測した。#298 の計測先（カーネル 4.14）は gVisor の要件の外だったので、要件どおりのカーネルで計り直した。計測先は使い捨ての EC2 で、PBI #565 の条件 2 で利用者が承認した構成。計測のあとに終了した。
+
+計測先の構成:
+
+| 項目 | 値 |
+|---|---|
+| CPU / メモリ | arm64（aarch64）2 vCPU / 8 GB（`t4g.large`） |
+| カーネル | 6.18（Amazon Linux 2023） |
+| Docker | 25.0.16、root で動く。cgroup v2（systemd） |
+| gVisor | release-20261005.0（`gvisor.tar.bz2` を公式の URL から取り、sha512 を確かめた） |
+| `/dev/kvm` | 無い（KVM は要らない） |
+
+#298 で runsc に起きたことは、このカーネルではどれも起きなかった:
+
+- 既定の設定（`runsc install` のまま）で起動した。`--overlay2=root:memory`（`runsc-mem`）は要らない。下の表の値は 2 つでほぼ同じなので、既定の `runsc` の値だけ載せる
+- `docker exec` が動いた（#298 では `pidfd_open` が無く失敗した）
+- `docker rm -f` は約 0.13 秒で、runc と同じ桁（#298 では約 10 秒）
+
+所要時間（ミリ秒、10 回の中央値。括弧は最小〜最大）:
+
+| 計測 | runc | runsc（既定） | 差 |
+|---|---:|---:|---:|
+| (a) `docker run --rm … python -c pass` | 315（265〜361） | 444（388〜473） | +129（+41%） |
+| (b) ハッシュの処理（`docker run` で、コンテナの中で測る） | 251.7（246.1〜258.7） | 281.9（271.8〜303.6） | +30.2（+12%） |
+| 作成 `docker run -d … sleep infinity` | 198（182〜248） | 278（252〜306） | +80（+41%） |
+| 実行 `docker exec … python -c pass` | 63（59〜65） | 95（85〜106） | +32（+51%） |
+| 破棄 `docker rm -f` | 110（74〜132） | 129（90〜137） | +19 |
+
+#283 の引数が効くか（`measure.sh` は #298 と同じ確かめ方。`--cpus` と `--pids-limit` は、ホストの cgroup の側からも見た（下の `extra.sh`））:
+
+| 引数 | 確かめ方 | runc | runsc（既定） |
+|---|---|---|---|
+| `--user nobody` | `id -u` | 65534 | 65534 |
+| `--read-only` | 誰でも書ける `/var/tmp`（モード 1777）に `touch` | `Read-only file system` | `Read-only file system` |
+| `--tmpfs /workspace:…,exec` | 置いたスクリプトを実行 | 実行できた | 実行できた |
+| `--cap-drop ALL` | `/proc/self/status` の `CapEff` | 0 | 0 |
+| `--network none` | `1.1.1.1:443` へ TCP 接続 | `Network is unreachable` | `Network is unreachable` |
+| `--memory=512m` | 700 MB を確保 | exit 137（OOM） | exit 137（OOM） |
+| `--pids-limit=128` | スレッドを 400 本起動 | 127 本起動し、次で `RuntimeError` | 400 本とも起動した（効かない） |
+| `--pids-limit=128` | `sleep` を 200 個起動 | 127 個起動し、次で `BlockingIOError`（`Resource temporarily unavailable`） | 50 個起動し、次で `OSError`（`Cannot allocate memory`） |
+| `--pids-limit=128` | 上の 200 個を、ホストの cgroup の `pids.max` / `pids.peak` と並べる | 128 / 128（126 個で止まる）。上限なしなら 200 個とも起動 | 128 / 128（49 個で止まる）。上限なしなら 200 個とも起動し、`pids.peak` は 430 |
+| `--cpus=1` | 2 プロセスを 2 秒回し、子の CPU 時間 / 経過時間を見る（効けば約 2 秒、効かなければ約 4 秒） | 2.01 秒 / 2.05 秒 | 1.97 秒 / 2.12 秒 |
+| `--cpus=1` | 2 プロセスを 5 秒回し、ホストの cgroup の `cpu.stat` の `usage_usec` と `nr_throttled` を見る | 5.26 秒 / 5.26 秒、スロットリング 50 回。上限なしなら 10.20 秒 | 5.40 秒 / 5.44 秒、スロットリング 54 回。上限なしなら 10.33 秒 |
+| `--ulimit nproc=128`（#283 には無い。上限の別の手段の候補） | スレッドを 400 本 / `sleep` を 200 個起動 | 127 本で `RuntimeError` / 127 個で `BlockingIOError` | 127 本で `RuntimeError` / 51 個で `OSError`（`Cannot allocate memory`） |
+
+読み方:
+
+- 要件どおりのカーネルでは、`SandboxManager` の流れ（作成・`docker exec`・`docker rm -f`）が既定の runsc でそのまま動く。上乗せは 1 回あたり 0.03〜0.13 秒、Python の処理が約 1 割で、`run_command` のタイムアウト（60 秒）に比べて小さい。#298 の破棄の約 10 秒は、このカーネルでは出なかった
+- `--memory` と `--cpus` は runsc でも効く。`--cpus` は、ホストの cgroup が sandbox 全体を 1 CPU 分に絞っている（#298 で確かめきれなかったもの）
+- `--pids-limit` は sandbox のホスト側のスレッド（gVisor の Sentry と gofer）を数える。ゲストのプロセスは間接的に止まる（49〜50 個で `ENOMEM`。runc の 127 個で `EAGAIN` とは数も errno も違う）が、ゲストのスレッドはホストのスレッドに 1 対 1 で対応しないので止まらない。gVisor の公式の互換性の文書の「sandbox の中では cgroup の上限を強制しない」と合う
+- `--ulimit nproc=128` は runsc でゲストのスレッドを 127 本で止めた。runsc では sandbox の中のカーネルが数えるので、セッションごとの上限になる。runc の `RLIMIT_NPROC` はホストのユーザー（全セッションが同じ `nobody`）ごとに数えるので、runc に同じ値を付けるとセッションをまたいで数が合算される（runc では `--pids-limit` で足りている）
+
+再現コマンド: `measure.sh` は #298 の版を 2 か所だけ変えて、同じ使い捨てのマシンで root で 1 回走らせた（`bash measure.sh > measure.out 2>&1`）。差分:
+
+```diff
+-GVISOR=20260928.0
++GVISOR=20261005.0
+@@
+-for R in runc runsc-mem; do
++for R in runc runsc runsc-mem; do
+```
+
+`--cpus` と `--pids-limit` をホストの cgroup の側から見る補い（`measure.sh` のあとに、同じマシンで root で走らせた）:
+
+<details>
+<summary>extra.sh</summary>
+
+```bash
+#!/bin/bash
+# measure.sh の補い（#565）: --cpus と --pids-limit をホストの cgroup の側から見る。root で走らせる。
+IMG=python:3.12-slim
+ARGS=(--network none --read-only --tmpfs /workspace:rw,exec,size=256m --tmpfs /tmp:rw,size=64m --env HOME=/workspace
+      --memory=512m --cap-drop ALL --user nobody)
+BURN='import time,multiprocessing as m
+def burn():
+  t=time.time()
+  while time.time()-t<5: pass
+ps=[m.Process(target=burn) for _ in range(2)]; [p.start() for p in ps]; [p.join() for p in ps]'
+PROCS='import subprocess
+ps=[]
+try:
+  for i in range(200): ps.append(subprocess.Popen(["sleep","5"]))
+  print("started", len(ps))
+except Exception as ex: print("started", len(ps), "then", type(ex).__name__, ex)'
+for R in runc runsc; do
+  for C in "--cpus=1" ""; do
+    id=$(docker run -d --runtime=$R "${ARGS[@]}" --pids-limit=128 $C $IMG sleep infinity)
+    cg=$(find /sys/fs/cgroup -type d -name "*$id*" | head -1)
+    u0=$(awk '/usage_usec/{print $2}' $cg/cpu.stat); w0=$(date +%s%N)
+    docker exec $id python -c "$BURN"
+    u1=$(awk '/usage_usec/{print $2}' $cg/cpu.stat); w1=$(date +%s%N)
+    echo "RESULT $R cpus[${C:-none}] cpu.max=$(cat $cg/cpu.max) host_cpu_s=$(( (u1-u0)/1000 ))ms wall=$(( (w1-w0)/1000000 ))ms throttled=$(awk '/nr_throttled/{print $2}' $cg/cpu.stat)"
+    docker rm -f $id >/dev/null
+  done
+  for L in "--pids-limit=128" ""; do
+    id=$(docker run -d --runtime=$R "${ARGS[@]}" $L $IMG sleep infinity)
+    cg=$(find /sys/fs/cgroup -type d -name "*$id*" | head -1)
+    out=$(docker exec $id python -c "$PROCS" 2>&1 | tail -1)
+    echo "RESULT $R pids[${L:-none}] pids.max=$(cat $cg/pids.max) pids.peak=$(cat $cg/pids.peak 2>/dev/null) procs: $out"
+    docker rm -f $id >/dev/null
+  done
+done
+echo "== done"
+```
+
+</details>
+
+`--ulimit nproc=128` の行は、`extra.sh` の `ARGS` から `--read-only` と `tmpfs` を除き、`--pids-limit=128 --ulimit nproc=128` を付けて、`measure.sh` の `threads` / `processes` と同じ Python を `docker run --rm` で走らせた値。
+
 ### Kata Containers（#298）
 
 未検証。計測先に `/dev/kvm` が無い（`ls -l /dev/kvm` → `ls: cannot access '/dev/kvm': No such file or directory`）。Kata は「nested virtualization か bare metal が要る」（1 節の Kata の行の install）ので、この計測先では動かせない。KVM の使えるホストで測るかは #300 の判断に回す。
@@ -235,7 +346,7 @@ echo "== done"
 | 方式 | 隔離の強さ | 実測の上乗せ | `SandboxManager` に足す変更 | 動かせるホスト | 運用の負担 |
 |---|---|---|---|---|---|
 | runc（今） | ホストのカーネルを共有 | 基準 | なし | cgroups のある Linux の Docker（rootless で cgroups が無いと上限が効かない） | なし |
-| gVisor | システムコールを sandbox の application kernel で受ける | 起動 +0.1 秒、処理 +9%（要件の外の計測先での参考値） | `--runtime` を 1 つ足す | Linux 5.6 以上、x86_64 / arm64、KVM 不要 | ホストの Docker に `runsc` を入れて登録。`--pids-limit` はスレッドに効かない |
+| gVisor | システムコールを sandbox の application kernel で受ける | 要件どおりのカーネルで 1 回あたり +0.03〜0.13 秒、処理 +12%（4 節、#565） | `--runtime` を 1 つ足す | Linux 5.6 以上、x86_64 / arm64、KVM 不要 | ホストの Docker に `runsc` を入れて登録。`--pids-limit` はスレッドに効かない（`--ulimit nproc` は効く。4 節、#565） |
 | Kata Containers | コンテナごとの VM | 未検証（KVM の使える計測先が無い） | `--runtime` を 1 つ足す | KVM（入れ子の仮想化か bare metal） | `io.containerd.kata.v2` の shim を入れる。KVM のあるホストが要る |
 | Docker Sandboxes | サンドボックスごとの microVM と専用の Docker デーモン | 未検証（実測しない） | `sbx` を呼ぶ別の実装 | Apple silicon の Mac、KVM のある Ubuntu 24.04 以上、Windows 11 | `sbx login`、ネットワークの方針の初期化、ホストに常駐する `sandboxd`。mcp-server のコンテナから呼ぶ標準の口が無い（3 節） |
 | CubeSandbox | サンドボックスごとの microVM | 未検証（実測しない） | E2B 互換の API のクライアント（別の実装） | KVM のある Linux（x86_64 は PVM のホストカーネルでも可） | ホストに一式の常駐サービス、XFS の 50 GB の領域 |
@@ -256,8 +367,6 @@ echo "== done"
 
 ### 未検証のまま残るもの
 
-- gVisor の要件どおりのカーネルでの動作と上乗せ（推す案の最初の Task）
 - Kata Containers の動作と上乗せ（KVM のあるホストが要る）
 - Docker Sandboxes の作成・実行・破棄の時間（3 節）
 - CubeSandbox のすべて
-- `--cpus` が gVisor で効くか（4 節）
