@@ -37,6 +37,7 @@ gh release download eval-history -p history.jsonl          # 今の記録を落�
 - `provider`: どの経路で回したか（`ollama` / `bedrock`）。この項目の無い古い行は `ollama` とみなす
 - `runner`: 実行環境（GitHub のランナーなら `github-hosted`）
 - `profile`: エージェントに `DAK_HARNESS_PROFILE` で指定したハーネスプロファイル（`agent/profiles/<名前>.yaml`）。空は未指定で、モデル名に合う `pattern` のプロファイルが使われる（`qwen` を含むモデルなら `qwen-small`、ほかは `default`）。この項目の無い古い行は空とみなす。プロファイルあり/なしの比較は、同じ `model` で `workflow_dispatch` を `-f profile=` と `-f profile=<名前>` の 2 回流し、2 行の `pass_rate` を見比べる（プロファイルの効かない側を確実にしたいなら `-f profile=default`）
+- `vulnerabilities`: 5 つの `uv.lock`（`agent`・`mcp-server`・`bff`・`cli`・`integration`）を `uv audit`（preview）にかけた結果。lock ごとに `{"ids": [GHSA/CVE の ID], "error": null}`、audit できなかった lock は `ids` が空で `error` に理由。見るだけで、nightly の成否には使わない。ID を渡さない経路（Bedrock のジョブ）と古い行は `{}` か欄なし
 
 行は `dak-maint eval-record`（`maintenance/`）が JUnit XML から書く。経路ごとの今月の実行回数は
 `dak-maint eval-budget --history <落とした history.jsonl> --provider <経路> --limit <回数>`（`maintenance/` で実行）が数え、上限に達していれば `allowed=false` と理由を出す。

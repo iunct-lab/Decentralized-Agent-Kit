@@ -114,6 +114,17 @@ jobs:
           uv sync
           uv run pytest -q test_smoke_real_llm.py --junitxml=eval-report.xml
 
+      # 5 つの uv.lock の脆弱性の ID を記録の材料にする（uv audit は preview。落ちても nightly は落とさない）。
+      - name: Audit lock files
+        if: always()
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/audit"
+          for dir in agent mcp-server bff cli tests/integration; do
+            (cd "$dir" && uv audit --frozen --preview-features audit-command,json-output \
+              --output-format json > "$RUNNER_TEMP/audit/$(basename "$dir").json") || true
+          done
+
       - name: Summarize and append history
         id: record
         if: always()
@@ -125,7 +136,8 @@ jobs:
           gh release download eval-history -R "$GITHUB_REPOSITORY" -p history.jsonl -D "$(dirname "$HISTORY")"
           uv sync
           uv run dak-maint eval-record --junit ../tests/integration/eval-report.xml \
-            --history "$HISTORY" --model "$MODEL" --profile "$DAK_HARNESS_PROFILE"
+            --history "$HISTORY" --model "$MODEL" --profile "$DAK_HARNESS_PROFILE" \
+            --audit-dir "$RUNNER_TEMP/audit"
 
       # 差し替えに失敗したときは、この写しから asset を戻す（docs/eval/README.md）。
       # 写しが上がらなかった晩は差し替えない（Publish history の条件）。

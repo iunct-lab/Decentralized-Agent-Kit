@@ -278,16 +278,32 @@ def _append(env: str, text: str) -> None:
             f.write(text)
 
 
+def _read_vulnerabilities(audit_dir: str | None) -> dict:
+    """`<component>.json`（`uv audit --output-format json` の出力）が並ぶディレクトリから lock ごとの ID を作る。"""
+    out: dict = {}
+    if not audit_dir or not Path(audit_dir).is_dir():
+        return out
+    for path in sorted(Path(audit_dir).glob("*.json")):
+        r = audit.parse_audit_json(path.read_text(encoding="utf-8", errors="replace"))
+        out[path.stem] = {"ids": r.ids, "error": r.error}
+    return out
+
+
 def cmd_eval_record(args: argparse.Namespace) -> int:
     summary = eval_history.summarize_junit(args.junit)
+    vulns = _read_vulnerabilities(args.audit_dir)
     rec = eval_history.make_record(summary, model=args.model, provider=args.provider,
-                                   runner=args.runner, profile=args.profile, today=datetime.date.today())
+                                   runner=args.runner, profile=args.profile, today=datetime.date.today(),
+                                   vulnerabilities=vulns)
     os.makedirs(os.path.dirname(os.path.abspath(args.history)), exist_ok=True)
     with open(args.history, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
     label = rec["model"] + (f", profile {rec['profile']}" if rec["profile"] else "")
     text = (f"### Nightly eval ({label})\n\n- pass_rate: **{rec['pass_rate']}** "
             f"({rec['passed']}/{rec['total']}, skipped {rec['skipped']})\n")
+    if vulns:
+        parts = [f"{c} " + ("error" if v["error"] else str(len(v["ids"]))) for c, v in vulns.items()]
+        text += f"- vulnerabilities: {', '.join(parts)}\n"
     _append("GITHUB_OUTPUT", f"pass_rate={rec['pass_rate']}\n")
     _append("GITHUB_STEP_SUMMARY", text)
     print(text)
@@ -390,6 +406,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--provider", default="ollama")
     r.add_argument("--runner", default="github-hosted")
     r.add_argument("--profile", default="", help="DAK_HARNESS_PROFILE に渡した名前（空なら未指定）")
+    r.add_argument("--audit-dir", default=None,
+                   help="<component>.json（uv audit の JSON）が並ぶディレクトリ。無ければ vulnerabilities は空")
     r.set_defaults(func=cmd_eval_record)
 
     b = sub.add_parser("eval-budget", help="今月の実行回数を数えて上限を判定する")
