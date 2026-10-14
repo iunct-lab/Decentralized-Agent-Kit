@@ -98,3 +98,44 @@ def test_a_missing_existing_issues_file_is_no_existing_issues(tmp_path, monkeypa
 
     assert rc == 0
     assert seen["existing"] == []
+
+
+def _audit_json(tmp_path, name, ids):
+    vulns = [{"id": i, "dependency": {"name": "pkg", "version": "1.0.0"}} for i in ids]
+    p = tmp_path / name
+    p.write_text(json.dumps({"schema": {"version": "preview"}, "vulnerabilities": vulns}))
+    return str(p)
+
+
+_TRIAGE = ["triage", "--package", "pkg", "--from", "1.0.0", "--to", "1.0.1", "--ci-passed", "true"]
+
+
+def test_triage_reports_fixed_vulnerabilities(tmp_path, capsys):
+    assert main(_TRIAGE) == 0
+    plain = json.loads(capsys.readouterr().out)
+    before = _audit_json(tmp_path, "b.json", ["GHSA-aaaa", "GHSA-bbbb"])
+    after = _audit_json(tmp_path, "a.json", ["GHSA-bbbb"])
+    assert main(_TRIAGE + ["--audit-before", before, "--audit-after", after]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["fixes_vulnerabilities"] == ["GHSA-aaaa"]
+    assert "security" in out["decision"]["labels"]
+    assert "GHSA-aaaa" in out["decision"]["reason"]
+    assert out["decision"]["action"] == plain["decision"]["action"]
+
+
+def test_triage_without_audit_has_empty_fixes(capsys):
+    assert main(_TRIAGE) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["fixes_vulnerabilities"] == [] and out["audit_error"] is None
+    assert "security" not in out["decision"]["labels"]
+    assert "直る脆弱性" not in out["decision"]["reason"]
+
+
+def test_triage_unreadable_audit_is_reported(tmp_path, capsys):
+    bad = tmp_path / "bad.json"
+    bad.write_text("not json")
+    after = _audit_json(tmp_path, "a.json", [])
+    assert main(_TRIAGE + ["--audit-before", str(bad), "--audit-after", after]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["fixes_vulnerabilities"] == [] and out["audit_error"]
+    assert "audit できなかった" in out["decision"]["reason"]

@@ -92,6 +92,8 @@ Dependabot PR
   **脆弱性があると終了コードは 1** なので、終了コードでなく JSON が読めるかで成否を決める
   （読めなければ `AuditResult.error`。「脆弱性 0 件」とは区別する）。preview の出力なので欄は変わりうる。
   Actions の `astral-sh/setup-uv@v7` の版では未確認（`dependency-triage` の工程を足すときに確かめる）。
+  `dak-maint triage` は `--audit-before FILE --audit-after FILE`（上の JSON の出力）を受け取ると、更新で直る ID を
+  結果の `fixes_vulnerabilities`・理由・`security` ラベルに出す。自動マージの可否（`decide`）は変えない。
 - **Ollama on CPU は遅い**: nightly 限定・小型モデル・寛容アサーション・モデル cache。PR ゲートには載せない。
 - **提案ノイズ**: `tech-watch`/`feature-sync` は 1 実行あたり件数上限を持ち、既存と内容が重なる提案はログに `skip:` を出して起票しない。
   提案（題と本文の先頭）と、既存の要望（`type:request`）・PBI（`type:pbi`）・そのワークフローの
