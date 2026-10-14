@@ -506,3 +506,17 @@ def test_answering_one_of_two_confirmations_answers_the_other():
     sent = [p.function_response.response for c in h.llm.requests[-1].contents for p in c.parts
             if p.function_response and p.function_response.name == "run_command"]
     assert {"observation": "denied_by_user", "reason": approvals.UNANSWERED_REASON} in sent
+
+
+def test_owned_state_keys():
+    from dak_agent.permission import owned_state_keys
+
+    state = {
+        "dak_permission_always_rules": [], "dak_active_skills": [], "dak_mode_instruction": "",
+        "temp:dak_call_count": 1, "enforcer_allowed_tools": [],
+        "dak:tools": [], "dak:instruction": "", "foo": 1,
+    }
+    assert owned_state_keys(state) == [
+        "dak_active_skills", "dak_mode_instruction", "dak_permission_always_rules",
+        "enforcer_allowed_tools", "temp:dak_call_count",
+    ]
