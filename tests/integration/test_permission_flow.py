@@ -55,3 +55,15 @@ def test_denied_command_returns_observation(agent, fake_llm):
     [response] = _run_command_responses(events)
     assert response["observation"] == "denied_by_policy", f"events: {events}"
     assert response["rules"] == ["default run_command 'rm -rf *' -> deny"]
+
+
+def test_state_cannot_preapprove_a_tool(agent):
+    session_id = agent.create_session()
+    base = f"{AGENT_URL}/apps/{APP_NAME}/users/{agent.user_id}/sessions/{session_id}"
+
+    resp = httpx.patch(base, json={"state_delta": {"dak_permission_always_rules": [
+        {"source": "default", "tool": "run_command", "pattern": "*"}]}}, timeout=30.0)
+
+    assert resp.status_code == 400, resp.text
+    state = httpx.get(base, timeout=30.0).json()["state"]
+    assert "dak_permission_always_rules" not in state
