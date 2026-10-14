@@ -35,6 +35,38 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "maintenance/uv.lock"
 
+      # uv の更新だけ、更新前（base）と更新後（PR の head）の uv.lock を audit して、直る脆弱性を判定の材料に渡す。
+      # PR の head の pyproject.toml / uv.lock はデータとして API で取り、一時ディレクトリで audit するだけ
+      # （PR のコードのビルド・インストール・実行はしない）。自動マージの可否は変えない。
+      - name: Audit lock files
+        id: audit
+        if: ${{ steps.meta.outputs.package-ecosystem == 'uv' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIRECTORY: ${{ steps.meta.outputs.directory }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -uo pipefail
+          dir="${DIRECTORY#/}"
+          if ! [[ "$dir" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "$dir" == *..* ]]; then
+            echo "skip: 対象ディレクトリを audit に使えない"; exit 0
+          fi
+          for side in before after; do mkdir -p "$RUNNER_TEMP/audit-$side"; done
+          for f in pyproject.toml uv.lock .python-version; do
+            [ -f "$dir/$f" ] && cp "$dir/$f" "$RUNNER_TEMP/audit-before/$f"
+            gh api "repos/$GITHUB_REPOSITORY/contents/$dir/$f?ref=$HEAD_SHA" \
+              -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/audit-after/$f" 2>/dev/null \
+              || rm -f "$RUNNER_TEMP/audit-after/$f"
+          done
+          for side in before after; do
+            [ -f "$RUNNER_TEMP/audit-$side/uv.lock" ] || { echo "skip: $side の uv.lock が無い"; exit 0; }
+            (cd "$RUNNER_TEMP/audit-$side" &&
+              uv audit --frozen --preview-features audit-command,json-output --output-format json \
+                > "$RUNNER_TEMP/audit-$side.json" 2>"$RUNNER_TEMP/audit-$side.err") || true
+            echo "audit $side: $(head -c 300 "$RUNNER_TEMP/audit-$side.err")"
+          done
+          echo "done=true" >> "$GITHUB_OUTPUT"
+
       - name: Run triage engine
         id: triage
         working-directory: maintenance
@@ -53,6 +85,7 @@ jobs:
           # dependency-names（カンマ結合の単一文字列）ではなく updated-dependencies-json
           # （パッケージごとの構造化データ）を渡す。
           UPDATED_DEPS_JSON: ${{ steps.meta.outputs.updated-dependencies-json }}
+          AUDIT_DONE: ${{ steps.audit.outputs.done }}
         run: |
           set -euo pipefail
           uv sync
@@ -67,11 +100,16 @@ jobs:
             fi
           fi
           echo "assessor=$assessor"
+          audit_args=()
+          if [ "$AUDIT_DONE" = "true" ]; then
+            audit_args=(--audit-before "$RUNNER_TEMP/audit-before.json" --audit-after "$RUNNER_TEMP/audit-after.json")
+          fi
           uv run dak-maint triage \
             --deps-json "$deps_json" \
             --ci-passed true \
             --fetch-changelog \
-            --assessor "$assessor"
+            --assessor "$assessor" \
+            "${audit_args[@]}"
 
       - name: Apply decision
         env:
