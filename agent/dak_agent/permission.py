@@ -14,6 +14,7 @@ the STRICTEST result wins for the whole command (deny > ask > allow).
 - any other MCP server: its URL
 """
 import fnmatch
+import json
 import logging
 import os
 import shlex
@@ -228,6 +229,19 @@ def _log_tool_call(tool_name: str) -> None:
     logger.info("tool_call name=%s trace_id=%s", tool_name, format(trace_id, "032x") if trace_id else "-")
 
 
+def _record_tool_arguments(tool_args: Mapping[str, Any]) -> None:
+    """Put the call's arguments on the `execute_tool` span as `gen_ai.tool.call.arguments`,
+    only when OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT opts in to span content."""
+    try:
+        from google.adk.telemetry.context import TelemetryConfig
+
+        if TelemetryConfig().should_add_content_to_experimental_spans:
+            trace.get_current_span().set_attribute(
+                "gen_ai.tool.call.arguments", json.dumps(tool_args, ensure_ascii=False, default=str))
+    except Exception:  # telemetry must not fail a tool call
+        logger.debug("could not record tool arguments on the span", exc_info=True)
+
+
 class PermissionPlugin(BasePlugin):
     """App-wide allow / ask / deny for every tool call, whichever toolset
     (default, skill, mode switch, `dak:tools`) it came from
@@ -261,6 +275,7 @@ class PermissionPlugin(BasePlugin):
         action = strictest(action, plan_action)  # Plan mode only tightens; an "always" cannot get around it
         if action == "allow":
             _log_tool_call(tool.name)
+            _record_tool_arguments(tool_args)
             return None
         if action == "deny":
             return {

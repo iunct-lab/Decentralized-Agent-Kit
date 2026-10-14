@@ -113,3 +113,64 @@ def test_unreachable():
     out = _run(OTEL_EXPORTER_OTLP_ENDPOINT=f"http://127.0.0.1:{port}", OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf",
                OTEL_EXPORTER_OTLP_TIMEOUT="1")
     assert out.stdout.split()[0] == "TracerProvider"
+
+
+TOOL_CODE = """
+import asyncio
+from google.adk.agents import LlmAgent
+from google.adk.models.base_llm import BaseLlm
+from google.adk.models.llm_response import LlmResponse
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.adk.tools import FunctionTool
+from google.genai import types
+from dak_agent.patches import setup_telemetry
+from dak_agent.permission import PermissionPlugin, Rule
+from opentelemetry import trace
+
+setup_telemetry()
+
+def echo(text: str) -> dict:
+    return {"result": "ok"}
+
+class Scripted(BaseLlm):
+    calls: int = 0
+    async def generate_content_async(self, llm_request, stream=False):
+        self.calls += 1
+        part = (types.Part(function_call=types.FunctionCall(id="fc-1", name="echo", args={"text": "MARKER-ARG"}))
+                if self.calls == 1 else types.Part(text="MARKER-REPLY"))
+        yield LlmResponse(content=types.Content(role="model", parts=[part]))
+
+async def main():
+    agent = LlmAgent(model=Scripted(model="scripted"), name="a", instruction="x", tools=[FunctionTool(echo)])
+    sessions = InMemorySessionService()
+    plugin = PermissionPlugin([Rule("*", "echo", "*", "allow")], default_mcp_url="http://x/mcp")
+    runner = Runner(app_name="t", agent=agent, session_service=sessions, plugins=[plugin])
+    session = await sessions.create_session(app_name="t", user_id="u")
+    msg = types.Content(role="user", parts=[types.Part(text="MARKER-PROMPT")])
+    async for _ in runner.run_async(user_id="u", session_id=session.id, new_message=msg):
+        pass
+
+asyncio.run(main())
+trace.get_tracer_provider().force_flush()
+"""
+
+
+def _run_tool(sink, **env):
+    base = {k: v for k, v in os.environ.items() if not k.startswith(("LANGFUSE_", "OTEL_", "ADK_"))}
+    base.update(OTEL_EXPORTER_OTLP_ENDPOINT=sink.url, OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf",
+                OTEL_BSP_SCHEDULE_DELAY="100", **env)
+    subprocess.run([sys.executable, "-c", TOOL_CODE], capture_output=True, text=True, check=True, env=base, timeout=90)
+
+
+def test_content_off_by_default(otlp_sink):
+    _run_tool(otlp_sink)
+    assert any(s["attributes"].get("gen_ai.operation.name") == "execute_tool" for s in otlp_sink.spans)
+    values = [v for s in otlp_sink.spans for v in s["attributes"].values()]
+    assert not [v for v in values if "MARKER" in v]
+
+
+def test_content_opt_in_tool_arguments(otlp_sink):
+    _run_tool(otlp_sink, OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT="SPAN_ONLY")
+    [tool] = [s for s in _tools(otlp_sink) if s["attributes"].get("gen_ai.tool.name") == "echo"]
+    assert "MARKER-ARG" in tool["attributes"]["gen_ai.tool.call.arguments"]
