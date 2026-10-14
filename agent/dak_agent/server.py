@@ -53,9 +53,8 @@ app = get_fast_api_app(
 
 
 def _delta(body: dict) -> dict:
-    """`state_delta`, under both names ADK's request models accept (`stateDelta` too)."""
-    return {**(body.get("state_delta") or {}), **(body.get("stateDelta") or {})} if all(
-        isinstance(body.get(k) or {}, dict) for k in ("state_delta", "stateDelta")) else {}
+    """`state_delta` under both names ADK's request models accept (`stateDelta` too); only dicts count."""
+    return {k: v for name in ("state_delta", "stateDelta") if isinstance(body.get(name), dict) for k, v in body[name].items()}
 
 
 def _caller_state(request: Request, body: object) -> object:
