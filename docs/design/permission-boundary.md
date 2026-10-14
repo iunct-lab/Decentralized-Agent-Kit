@@ -105,6 +105,25 @@ PBI #16。この文書は、ツール実行の権限（許可 / 確認 / 拒否�
   - Plan モード（#191）: `planner(enter_plan_mode=True)` がセッションの state に `dak_plan_mode_active` を立てる。立っている間は、上の 2・3 の結果を `agent/dak_agent/plan_mode.py` の規則（`write_file` / `edit_file` は `plans/*.md` 以外と `..` を含むパスを deny、`run_command` は全部 deny、`save_memory` は deny（`load_memory` は普段どおり））と比べて厳しい方にする。Plan モードは締めるだけで、計画ファイルへの書き込みも普段どおり ask のまま。継続許可でも覆らない
   - 効果がツールの外にあるもの（#410）: `switch_mode` のモード切替は、モデルの応答の直後ではなく、ツールが実際に実行されたとき（`switch_mode` の中から `AdaptiveAgent.apply_switch_request`）に行う。deny・保留中・拒否された `switch_mode` ではモードは変わらず、確認で承認されたときに切り替わる
 
+## state のキーの所有（#727）
+
+セッションの state には、DAK が自分で書くキーがある（承認の規則・有効なスキル・モード・計画など）。呼び出し元がこれを書けると、確認が要るはずのツールを事前に許可済みにできる。そこで、ADK のスコープの接頭辞（`app:` / `user:` / `temp:`）を外した名前が `dak_` で始まるキーと `enforcer_allowed_tools` は DAK だけが書き、呼び出し元がセッション作成・`PATCH`・`/run`・`/run_sse` の `state` / `state_delta` で書くと 400 で拒む（`agent/dak_agent/server.py` のミドルウェア、判定は `permission.owned_state_keys`）。`dak:`（コロン）は呼び出し元の設定なので書ける。
+
+| キー | 書くところ（path） | 呼び出し元 |
+|------|------|------|
+| `dak_permission_always_rules` | `agent/dak_agent/permission.py` | 書けない（400） |
+| `dak_active_skills` / `dak_mode_instruction` / `dak_mode_tool_names` | `agent/dak_agent/adaptive_agent.py` | 書けない（400） |
+| `dak_mode_first_turn_done` / `dak_mode_switch_requested` / `dak_mode_requested_focus` | `agent/dak_agent/mode_manager.py` | 書けない（400） |
+| `dak_plan_mode_active` | `agent/dak_agent/plan_mode.py` | 書けない（400） |
+| `enforcer_allowed_tools` | `agent/dak_agent/enforcer.py` | 書けない（400） |
+| `dak_todos` / `dak_original_request` / `dak_handoff` | `agent/dak_agent/builtin_tools.py` | 書けない（400） |
+| `dak_project_instructions` / `dak_loaded_memory` | `agent/dak_agent/adaptive_agent.py` | 書けない（400） |
+| `dak_compaction_count` / `dak_recommend_new_session` | `agent/dak_agent/harness.py` | 書けない（400） |
+| `temp:dak_*` | `agent/dak_agent/call_config.py` / `harness.py` / `adaptive_agent.py` | 書けない（400） |
+| `dak:*` | `agent/dak_agent/call_config.py` | 書ける |
+
+範囲外: `user_id` / `session_id` の自己申告（他人のセッションの読み書き）は呼び出し元の認証の問題（#135・#397）。
+
 ## #20 への制約
 
 #20（セッションごとの隔離）は、上の決定 3 を担う PBI。守ること:
