@@ -14,6 +14,14 @@ on:
       profile:
         description: "DAK_HARNESS_PROFILE（空なら未指定）"
         default: ""
+      provider:
+        description: "経路。bedrock は有料（OIDC の一時クレデンシャル、月の回数上限あり。docs/eval/cloud-eval.md）"
+        type: choice
+        options: [ollama, bedrock]
+        default: ollama
+      cloud_model:
+        description: "provider=bedrock のときの LiteLLM のモデル名"
+        default: "bedrock/us.openai.gpt-5.6-luna"
 
 permissions:
   contents: write # リリース eval-history の asset（history.jsonl）の差し替え用
@@ -37,6 +45,8 @@ env:
 
 jobs:
   eval:
+    # schedule には inputs が無いので、Ollama の経路が既定
+    if: github.event_name == 'schedule' || inputs.provider == 'ollama'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -139,3 +149,112 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose -f docker-compose.yml -f docker-compose.test.yml -f docker-compose.local-llm.yml down -v
+
+  # 手動起動で provider=bedrock を選んだときだけ。長期の鍵は置かず、GitHub OIDC で
+  # 得た一時クレデンシャルで回す。変数が未設定・月の上限に達していれば何も起動せず成功で終わる。
+  eval-bedrock:
+    if: github.event_name == 'workflow_dispatch' && inputs.provider == 'bedrock'
+    runs-on: ubuntu-latest
+    environment: cloud-eval
+    permissions:
+      contents: write # asset の差し替え用
+      id-token: write # OIDC
+    concurrency:
+      group: cloud-eval
+      cancel-in-progress: false
+    timeout-minutes: 50
+    env:
+      CLOUD_MODEL_NAME: ${{ inputs.cloud_model }}
+      DAK_HARNESS_PROFILE: ${{ inputs.profile }}
+      HISTORY: ${{ github.workspace }}/eval-history/history.jsonl
+    steps:
+      - name: Check Bedrock role variables
+        id: gate
+        env:
+          ROLE_ARN: ${{ vars.DAK_BEDROCK_ROLE_ARN }}
+          REGION: ${{ vars.DAK_BEDROCK_REGION }}
+        run: |
+          if [ -z "$ROLE_ARN" ] || [ -z "$REGION" ]; then
+            echo "- Bedrock のロールが未設定のため省略（変数 DAK_BEDROCK_ROLE_ARN / DAK_BEDROCK_REGION。docs/eval/cloud-eval.md）" >> "$GITHUB_STEP_SUMMARY"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.configured == 'true'
+
+      - uses: astral-sh/setup-uv@v7
+        if: steps.gate.outputs.configured == 'true'
+
+      # LLM を呼ぶ前に、今月の bedrock の行数で上限を判定する（allowed=false なら以降は飛ばす）
+      - name: Check monthly budget
+        id: budget
+        if: steps.gate.outputs.configured == 'true'
+        working-directory: maintenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LIMIT: ${{ vars.DAK_CLOUD_EVAL_MONTHLY_LIMIT || 4 }}
+        run: |
+          gh release download eval-history -R "$GITHUB_REPOSITORY" -p history.jsonl -D "$(dirname "$HISTORY")"
+          uv sync
+          uv run dak-maint eval-budget --history "$HISTORY" --provider bedrock --limit "$LIMIT"
+
+      - name: Configure AWS credentials (OIDC)
+        if: steps.budget.outputs.allowed == 'true'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.DAK_BEDROCK_ROLE_ARN }}
+          aws-region: ${{ vars.DAK_BEDROCK_REGION }}
+          role-duration-seconds: 3600
+
+      - name: Start stack against Bedrock
+        if: steps.budget.outputs.allowed == 'true'
+        env:
+          AWS_REGION_NAME: ${{ vars.DAK_BEDROCK_REGION }}
+        run: |
+          touch .env
+          docker compose -f docker-compose.yml -f docker-compose.test.yml -f docker-compose.cloud-llm.yml \
+            up -d --build --wait
+
+      - name: Run gated real-LLM smoke (tolerant)
+        id: smoke
+        if: steps.budget.outputs.allowed == 'true'
+        continue-on-error: true
+        timeout-minutes: 45
+        working-directory: tests/integration
+        env:
+          DAK_SMOKE_REAL_LLM: "1"
+          DAK_AGENT_RUN_TIMEOUT: "120"
+        run: |
+          uv sync
+          uv run pytest -q test_smoke_real_llm.py --junitxml=eval-report.xml
+
+      - name: Summarize and append history
+        id: record
+        if: always() && steps.budget.outputs.allowed == 'true'
+        working-directory: maintenance
+        run: |
+          uv run dak-maint eval-record --junit ../tests/integration/eval-report.xml \
+            --history "$HISTORY" --model "$CLOUD_MODEL_NAME" --provider bedrock \
+            --runner github-hosted --profile "$DAK_HARNESS_PROFILE"
+
+      - name: Upload eval artifacts
+        id: artifact
+        if: always() && steps.budget.outputs.allowed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-eval-bedrock
+          path: |
+            tests/integration/eval-report.xml
+            eval-history/history.jsonl
+
+      - name: Publish history
+        if: always() && steps.record.outcome == 'success' && steps.artifact.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload eval-history -R "$GITHUB_REPOSITORY" eval-history/history.jsonl --clobber
+
+      - name: Tear down
+        if: always() && steps.budget.outputs.allowed == 'true'
+        run: docker compose -f docker-compose.yml -f docker-compose.test.yml -f docker-compose.cloud-llm.yml down -v
