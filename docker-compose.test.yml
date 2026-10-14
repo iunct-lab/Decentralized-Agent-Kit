@@ -29,6 +29,18 @@ services:
       timeout: 5s
       retries: 15
 
+  # tests/integration/test_otel_export.py: the OTLP endpoint the agent exports its
+  # GenAI spans to. (8091 is fake-tavily's.)
+  otlp-sink:
+    build: ./tests/integration/otlp_sink
+    ports:
+      - "8092:4318"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4318/health')"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
   # tests/integration/test_a2a.py -k signature: the Agent Card signing key pair,
   # made when the stack comes up and tests/integration/.keys/ (gitignored) has
   # none yet, so a fresh checkout or CI gets a new pair. No key is in the repository.
@@ -58,6 +70,10 @@ services:
       - AGENT_CARD_SIGNING_KID=test-1
       # test_web_search_flow.py: this agent has no Tavily key, whatever the host or .env has
       - TAVILY_API_KEY=
+      # tests/integration/test_otel_export.py: spans go to otlp-sink (no LangFuse key here)
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otlp-sink:4318
+      - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+      - OTEL_BSP_SCHEDULE_DELAY=500
     volumes:
       - ./tests/integration/.keys:/keys:ro
     # map form: docker-compose.yml's list form is merged into it
@@ -65,6 +81,7 @@ services:
       postgres: {condition: service_started}
       fake-llm: {condition: service_started}
       inspect-server: {condition: service_started}
+      otlp-sink: {condition: service_started}
       card-keygen: {condition: service_completed_successfully}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/list-apps')"]

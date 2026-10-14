@@ -22,6 +22,7 @@ BFF_URL = os.getenv("DAK_BFF_URL", "http://localhost:8002")
 FAKE_LLM_URL = os.getenv("DAK_FAKE_LLM_URL", "http://localhost:8089")
 INSPECT_SERVER_URL = os.getenv("DAK_INSPECT_SERVER_URL", "http://localhost:8090")
 FAKE_TAVILY_URL = os.getenv("DAK_FAKE_TAVILY_URL", "http://localhost:8091")
+OTLP_SINK_URL = os.getenv("DAK_OTLP_SINK_URL", "http://localhost:8092")
 # Real-LLM CI runs (nightly-eval, CPU-only Ollama) can take much longer per
 # turn than the fake-LLM suite; overridable so those runs can raise it.
 AGENT_RUN_TIMEOUT = float(os.getenv("DAK_AGENT_RUN_TIMEOUT", "120.0"))
@@ -47,6 +48,7 @@ def wait_for(url: str, timeout: float = 60.0):
 def stack_ready():
     wait_for(f"{FAKE_LLM_URL}/health")
     wait_for(f"{INSPECT_SERVER_URL}/health")
+    wait_for(f"{OTLP_SINK_URL}/health")
     wait_for(f"{AGENT_URL}/list-apps")
 
 

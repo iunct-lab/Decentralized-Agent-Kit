@@ -153,16 +153,29 @@ Get agent capabilities.
 | `LANGFUSE_PUBLIC_KEY` | No | - | Langfuse public key for monitoring |
 | `LANGFUSE_SECRET_KEY` | No | - | Langfuse secret key for monitoring |
 | `LANGFUSE_BASE_URL` | No | `https://cloud.langfuse.com` | Langfuse API endpoint |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | - | OTLP/HTTP endpoint the GenAI spans are sent to (any OTel backend). Unset = nothing is sent |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | No | - | `SPAN_ONLY` puts the tool call's arguments on its span (`gen_ai.tool.call.arguments`). Unset = no content |
 | `AGENT_CARD_SIGNING_KEY_FILE` | No | - | Path of the PEM private key (EC P-256) the Agent Card is signed with. Unset = not signed |
 | `AGENT_CARD_SIGNING_KID` | No | `AGENT_NAME` | `kid` of the card's signature |
 
 *At least one LLM provider API key is required
 
-### Monitoring with Langfuse
+### Tracing (OpenTelemetry)
 
-The agent integrates with [Langfuse](https://langfuse.com) for observability via OpenTelemetry. All tool calls and model completions are automatically traced when configured.
+LLM calls and tool executions are traced as spans of the OpenTelemetry GenAI conventions (`gen_ai.operation.name` = `invoke_agent` / `chat` or `generate_content` / `execute_tool`, `gen_ai.request.model`, `gen_ai.tool.name`). A tool call's span shares its trace ID with the MCP server's log line.
 
-**Setup**:
+**Any OTLP backend** (Phoenix, an OTel Collector, Jaeger, ...): set the standard OTel variables; nothing DAK-specific.
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+```
+
+Without `OTEL_EXPORTER_OTLP_ENDPOINT` nothing is sent. An endpoint that cannot be reached does not fail a run.
+
+**Message content is off by default.** Prompts, replies and tool arguments are not put on the spans. `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY` adds the tool call's arguments to the `execute_tool` span as `gen_ai.tool.call.arguments`; they are sent as they are (no redaction), so opt in only for a backend you trust.
+
+**With Langfuse** ([langfuse.com](https://langfuse.com)): set the keys below and the same spans also reach `<LANGFUSE_BASE_URL>/api/public/otel`, in addition to the OTLP endpoint if you set one. Both share one tracer provider, so the content setting applies to both: with Langfuse keys set, Langfuse's own view (OpenInference attributes, with prompts and replies) is kept as it was.
 
 1. Create a free account at [cloud.langfuse.com](https://cloud.langfuse.com)
 2. Get your public and secret keys from project settings
@@ -175,7 +188,7 @@ The agent integrates with [Langfuse](https://langfuse.com) for observability via
    ```
 4. Restart the agent - traces will appear in your Langfuse dashboard
 
-**Note**: Langfuse is completely optional. The agent works normally without it.
+**Note**: Both are completely optional. The agent works normally without them.
 
 ### Dependencies
 
