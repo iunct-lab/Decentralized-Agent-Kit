@@ -104,7 +104,11 @@ def setup_telemetry() -> None:
         _install_otlp_provider()
     except Exception as e:
         logger.warning(f"[OTel] Skipping OTLP export: {type(e).__name__} - {e}")
-    if _langfuse_configured():
+    if not _langfuse_configured():
+        # ADK's own spans carry prompts, replies and tool arguments unless told not to;
+        # without LangFuse nothing needs them, and the OTel GenAI conventions make them opt-in.
+        os.environ.setdefault("ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS", "false")
+    else:
         try:
             from openinference.instrumentation.google_adk import GoogleADKInstrumentor
             from langfuse import get_client
