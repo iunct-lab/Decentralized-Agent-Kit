@@ -119,7 +119,9 @@ def _record_argv(tmp_path, *extra):
     return ["eval-record", "--junit", str(junit), "--history", str(history), "--model", "m", *extra], history
 
 
-def test_record_has_vulnerabilities_per_lock(tmp_path):
+def test_record_has_vulnerabilities_per_lock(tmp_path, monkeypatch):
+    summary_file = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_file))
     audit_dir = tmp_path / "audit"
     audit_dir.mkdir()
     vuln = {"id": "GHSA-aaaa", "dependency": {"name": "p", "version": "1.0"}}
@@ -133,6 +135,7 @@ def test_record_has_vulnerabilities_per_lock(tmp_path):
     assert v["agent"] == {"ids": ["GHSA-aaaa"], "error": None}
     assert v["cli"] == {"ids": [], "error": None}
     assert v["bff"]["ids"] == [] and v["bff"]["error"]
+    assert "vulnerabilities: agent 1, bff error, cli 0" in summary_file.read_text()
 
 
 def test_record_without_audit_dir_has_empty_vulnerabilities(tmp_path):

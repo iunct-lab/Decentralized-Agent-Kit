@@ -119,6 +119,7 @@ jobs:
         if: always()
         run: |
           set -uo pipefail
+          uv --version
           mkdir -p "$RUNNER_TEMP/audit"
           for dir in agent mcp-server bff cli tests/integration; do
             (cd "$dir" && uv audit --frozen --preview-features audit-command,json-output \
