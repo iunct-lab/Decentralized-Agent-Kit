@@ -101,7 +101,7 @@ jobs:
           fi
           echo "assessor=$assessor"
           audit_args=()
-          if [ "$AUDIT_DONE" = "true" ]; then
+          if [ "${AUDIT_DONE:-}" = "true" ]; then
             audit_args=(--audit-before "$RUNNER_TEMP/audit-before.json" --audit-after "$RUNNER_TEMP/audit-after.json")
           fi
           uv run dak-maint triage \
