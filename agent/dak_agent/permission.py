@@ -138,6 +138,27 @@ def evaluate(
 # confirmation with `always` (docs/design/permission-boundary.md).
 PERSISTED_ALLOW_KEY = "dak_permission_always_rules"
 
+# State keys DAK writes itself; a caller must not set them (docs/design/permission-boundary.md).
+OWNED_STATE_PREFIX = "dak_"
+_ADK_SCOPES = ("app:", "user:", "temp:")
+
+
+def owned_state_keys(state: Mapping[str, Any]) -> List[str]:
+    """The keys of `state` that DAK owns, sorted, as the caller wrote them.
+
+    ADK's scope prefix (`app:` / `user:` / `temp:`) is stripped before the
+    `dak_` check; `dak:` (colon) is the caller's own config and is not owned.
+    """
+    def owned(key: str) -> bool:
+        name = key
+        for scope in _ADK_SCOPES:
+            if key.startswith(scope):
+                name = key[len(scope):]
+                break
+        return name.startswith(OWNED_STATE_PREFIX) or key == enforcer.PLAN_KEY
+
+    return sorted(k for k in state if isinstance(k, str) and owned(k))
+
 
 def always_approvals(state: Mapping[str, Any]) -> set:
     return {(e["source"], e["tool"], e["pattern"]) for e in state.get(PERSISTED_ALLOW_KEY) or []}

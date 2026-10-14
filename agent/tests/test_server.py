@@ -126,3 +126,40 @@ def test_stream_announces_an_approval_that_times_out():
 
     replied, _ = _stream_events(seen, {})
     assert replied == ['event: approval.replied\ndata: {"id": "adk-1"}\n\n']
+
+
+_OWNED = "dak_permission_always_rules"
+_SESSION = "/apps/dak_agent/users/u/sessions"
+
+
+@pytest.mark.parametrize("method,path,body", [
+    ("POST", _SESSION, {"state": {_OWNED: []}}),
+    ("POST", _SESSION + "/s-legacy", {_OWNED: []}),
+    ("PATCH", _SESSION + "/s-patch", {"state_delta": {_OWNED: []}}),
+    ("POST", "/run", {"app_name": "dak_agent", "user_id": "u", "session_id": "s", "state_delta": {_OWNED: []}}),
+    ("POST", "/run_sse", {"app_name": "dak_agent", "user_id": "u", "session_id": "s", "state_delta": {_OWNED: []}}),
+])
+def test_caller_cannot_set_always_rules(client, method, path, body):
+    r = client.request(method, path, json=body)
+    assert r.status_code == 400
+    assert _OWNED in r.json()["detail"]
+
+
+def test_caller_cannot_overwrite_active_skills(client):
+    assert client.post(_SESSION + "/s-skills", json={}).status_code == 200
+    r = client.patch(_SESSION + "/s-skills", json={"state_delta": {"dak_active_skills": ["x"]}})
+    assert r.status_code == 400
+    r = client.post("/run", json={
+        "app_name": "dak_agent", "user_id": "u", "session_id": "s-skills",
+        "new_message": {"role": "user", "parts": [{"text": "hi"}]},
+        "state_delta": {"dak_active_skills": ["x"]},
+    })
+    assert r.status_code == 400
+    state = client.get(_SESSION + "/s-skills").json()["state"]
+    assert "dak_active_skills" not in state
+
+
+def test_caller_config_keys_still_accepted(client):
+    r = client.post(_SESSION, json={"session_id": "s-config", "state": {"dak:instruction": "be brief"}})
+    assert r.status_code == 200
+    assert r.json()["state"]["dak:instruction"] == "be brief"

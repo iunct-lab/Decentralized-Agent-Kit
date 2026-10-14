@@ -10,6 +10,9 @@
 Nothing is stored here. The routes read the session and resume it through
 ADK's own REST routes (`GET /apps/.../sessions/...`, `POST /run`), called
 in-process, so any client that answers gets the same result.
+
+A middleware refuses (400) a session `state` / `state_delta` that sets a key DAK
+owns (`permission.owned_state_keys`), so a caller cannot pre-approve a tool.
 """
 import asyncio
 import json
@@ -25,6 +28,7 @@ from google.adk.cli.fast_api import get_fast_api_app
 from pydantic import BaseModel
 
 from . import agent_card, approvals, config
+from .permission import owned_state_keys
 
 # The directory holding `dak_agent/` (what `adk web` got as its working directory).
 AGENTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -45,6 +49,43 @@ app = get_fast_api_app(
     host="0.0.0.0",
     port=8000,
 )
+
+
+
+def _caller_state(request: Request, body: object) -> object:
+    """Where a request carries session state the caller wrote (None: not one)."""
+    if not isinstance(body, dict):
+        return None
+    path, method = request.url.path.rstrip("/"), request.method
+    parts = path.split("/")
+    in_session = len(parts) >= 6 and parts[1] == "apps" and parts[3] == "users" and parts[5] == "sessions"
+    if method == "POST" and path in ("/run", "/run_sse"):
+        return body.get("state_delta")
+    if in_session and len(parts) == 6 and method == "POST":
+        return body.get("state")
+    if in_session and len(parts) == 7 and method == "POST":
+        return body
+    if in_session and len(parts) == 7 and method == "PATCH":
+        return body.get("state_delta")
+    return None
+
+
+@app.middleware("http")
+async def reject_owned_state(request: Request, call_next):
+    if request.method in ("POST", "PATCH"):
+        try:
+            state = _caller_state(request, json.loads(await request.body()))
+        except ValueError:
+            state = None  # not JSON: ADK answers 422
+        if isinstance(state, dict):
+            keys = owned_state_keys(state)
+            if keys:
+                return JSONResponse(
+                    status_code=400,
+                    content={"detail": f"state keys owned by DAK cannot be set by the caller: {keys}"},
+                )
+    return await call_next(request)
+
 
 router = APIRouter(prefix="/approvals")
 
