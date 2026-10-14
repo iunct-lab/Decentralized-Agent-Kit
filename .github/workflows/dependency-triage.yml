@@ -47,6 +47,9 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -uo pipefail
+          uv --version
+          # ファイルが取れないなど audit できないときも triage に渡し、「audit できなかった」とコメントに出す。
+          echo "done=true" >> "$GITHUB_OUTPUT"
           dir="${DIRECTORY#/}"
           if ! [[ "$dir" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "$dir" == *..* ]]; then
             echo "skip: 対象ディレクトリを audit に使えない"; exit 0
@@ -59,13 +62,12 @@ jobs:
               || rm -f "$RUNNER_TEMP/audit-after/$f"
           done
           for side in before after; do
-            [ -f "$RUNNER_TEMP/audit-$side/uv.lock" ] || { echo "skip: $side の uv.lock が無い"; exit 0; }
+            [ -f "$RUNNER_TEMP/audit-$side/uv.lock" ] || { echo "skip: $side の uv.lock が無い"; rm -f "$RUNNER_TEMP/audit-$side.json"; continue; }
             (cd "$RUNNER_TEMP/audit-$side" &&
               uv audit --frozen --preview-features audit-command,json-output --output-format json \
                 > "$RUNNER_TEMP/audit-$side.json" 2>"$RUNNER_TEMP/audit-$side.err") || true
             echo "audit $side: $(head -c 300 "$RUNNER_TEMP/audit-$side.err")"
           done
-          echo "done=true" >> "$GITHUB_OUTPUT"
 
       - name: Run triage engine
         id: triage
