@@ -284,7 +284,10 @@ def _read_vulnerabilities(audit_dir: str | None) -> dict:
     if not audit_dir or not Path(audit_dir).is_dir():
         return out
     for path in sorted(Path(audit_dir).glob("*.json")):
-        r = audit.parse_audit_json(path.read_text(encoding="utf-8", errors="replace"))
+        try:
+            r = audit.parse_audit_json(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError as e:
+            r = audit.AuditResult(error=f"audit の出力を読めない: {e}")
         out[path.stem] = {"ids": r.ids, "error": r.error}
     return out
 
