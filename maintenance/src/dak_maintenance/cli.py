@@ -32,7 +32,7 @@ from .llm_client import make_complete
 from .watch import propose_technologies
 from .feature import deps_from_prs, propose_feature_adoptions
 from .charter import review_charter
-from . import eval_history, license, model_compare
+from . import audit, eval_history, license, model_compare
 
 
 def _bool(s: str) -> bool:
@@ -89,6 +89,20 @@ def _load_deps(args: argparse.Namespace) -> list[tuple[str, str, str]]:
     return [(args.package, args.from_version, args.to_version)]
 
 
+def _fixed_vulnerabilities(before_path: str | None, after_path: str | None) -> tuple[list[str], str | None]:
+    """更新前にあり更新後に無い ID。どちらかが読めなければ ([], 理由)。"""
+    results = []
+    for label, path in (("更新前", before_path), ("更新後", after_path)):
+        if not path or not Path(path).exists():
+            return [], f"{label}の audit の出力が無い"
+        r = audit.parse_audit_json(_read(path))
+        if r.error:
+            return [], f"{label}: {r.error}"
+        results.append(r)
+    before, after = results
+    return sorted(set(before.ids) - set(after.ids)), None
+
+
 def cmd_triage(args: argparse.Namespace) -> int:
     deps = _load_deps(args)
     if args.assessor == "llm":
@@ -117,11 +131,27 @@ def cmd_triage(args: argparse.Namespace) -> int:
         detail = "; ".join(f"{p}: bump={b.value},risk={r.level.value}" for p, b, r in per_dep)
         reason = f"{reason} [内訳: {detail}]"
 
+    # 直る脆弱性は材料として出すだけ。自動マージの可否（decide）には使わない。
+    fixes: list[str] = []
+    audit_error: str | None = None
+    labels = list(decision.labels)
+    if args.audit_before or args.audit_after:
+        fixes, audit_error = _fixed_vulnerabilities(args.audit_before, args.audit_after)
+        if fixes:
+            labels.append("security")
+            reason = f"{reason} 直る脆弱性: {', '.join(fixes)}"
+        elif audit_error:
+            reason = f"{reason} 直る脆弱性: audit できなかった"
+        else:
+            reason = f"{reason} 直る脆弱性: なし"
+
     result = {
         "packages": [p for p, _, _ in per_dep],
         "bump": bump.value,
         "risk": {"level": risk.level.value, "summary": risk.summary, "tier": risk.tier},
-        "decision": {"action": decision.action, "reason": reason, "labels": decision.labels},
+        "decision": {"action": decision.action, "reason": reason, "labels": labels},
+        "fixes_vulnerabilities": fixes,
+        "audit_error": audit_error,
         "per_dependency": [
             {"package": p, "bump": b.value, "risk": r.level.value, "summary": r.summary}
             for p, b, r in per_dep
@@ -132,7 +162,8 @@ def cmd_triage(args: argparse.Namespace) -> int:
     if gh_out:
         with open(gh_out, "a", encoding="utf-8") as f:
             f.write(f"action={decision.action}\nbump={bump.value}\nrisk={risk.level.value}\n")
-            f.write("labels=" + ",".join(decision.labels) + "\n")
+            f.write("labels=" + ",".join(labels) + "\n")
+            f.write("fixes=" + ",".join(fixes) + "\n")
             f.write("reason=" + reason.replace("\n", " ") + "\n")
     return 0
 
@@ -311,6 +342,8 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--changelog-file", default=None)
     t.add_argument("--fetch-changelog", action="store_true")
     t.add_argument("--assessor", choices=["heuristic", "llm"], default="heuristic")
+    t.add_argument("--audit-before", default=None, help="更新前の `uv audit --output-format json` の出力のファイル")
+    t.add_argument("--audit-after", default=None, help="更新後の同じ出力のファイル")
     t.set_defaults(func=cmd_triage)
 
     w = sub.add_parser("watch", help="新技術を探索し提案する")
