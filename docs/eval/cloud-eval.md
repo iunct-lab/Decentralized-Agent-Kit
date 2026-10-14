@@ -139,6 +139,27 @@ GitHub Actions のランナーは、このリポジトリが公開なので無�
 どの案でも月 1 ドルを下回る見積もり。費用より、結果の読み方（傾向として何を見るか）と、
 有料の経路を自動で回すこと自体を許すかで決めることになる。定期実行に入れるかは、1 回実行した結果を見て決める（PBI #334 の条件 6）。
 
+## 手動で回す（`nightly-eval.yml` の `provider=bedrock`）
+
+利用者が用意するもの（リポジトリの変数。どれも秘密ではない）:
+
+| 名前 | 値 | 未設定のとき |
+|---|---|---|
+| `DAK_BEDROCK_ROLE_ARN` | 上の雛形で作ったロールの ARN | 「Bedrock のロールが未設定のため省略」と summary に書いて成功で終わる |
+| `DAK_BEDROCK_REGION` | 推論プロファイルを使うリージョン | 同上 |
+| `DAK_CLOUD_EVAL_MONTHLY_LIMIT` | 月の回数の上限 | 4 |
+
+GitHub の environment `cloud-eval` は、ジョブが参照すると GitHub が自動で作る。信頼ポリシーの `sub` をこの environment に絞るなら、先に作っておく。
+
+```bash
+gh workflow run nightly-eval.yml -f provider=bedrock                       # 既定は bedrock/us.openai.gpt-5.6-luna
+gh workflow run nightly-eval.yml -f provider=bedrock -f cloud_model=<LiteLLM のモデル名>
+```
+
+- 認証は `aws-actions/configure-aws-credentials` が GitHub OIDC で得た一時クレデンシャルだけ。長期のアクセスキーや Bedrock API キーは secret に置かない
+- LLM を呼ぶ前に `dak-maint eval-budget --provider bedrock` が、リリース `eval-history` の asset の今月の `provider: bedrock` の行数を上限と比べる。上限に達していれば理由を summary に書き、スタックを起動せずに成功で終わる
+- 結果は Ollama と同じ `history.jsonl` に `provider: bedrock` の行で残る。入力なしの起動と定期実行は、今までどおり Ollama のジョブだけが動く
+
 ## 結果
 
 （1 回目の手動実行のあとに書く: 実行の URL、pass-rate、所要時間、通ったモデル名の形、実際の費用と見積もりとの差）
