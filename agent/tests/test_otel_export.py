@@ -21,7 +21,8 @@ with trace.get_tracer("dak-test").start_as_current_span("execute_tool echo") as 
     s.set_attribute("gen_ai.operation.name", "execute_tool")
     s.set_attribute("gen_ai.tool.name", "echo")
 trace.get_tracer_provider().force_flush()
-print(type(trace.get_tracer_provider()).__name__)
+p = trace.get_tracer_provider()
+print(type(p).__name__, len(p._active_span_processor._span_processors))
 """
 
 
@@ -70,11 +71,7 @@ def otlp_sink():
     s.close()
 
 
-@pytest.fixture
-def langfuse_sink():
-    s = Sink()
-    yield s
-    s.close()
+langfuse_sink = otlp_sink  # a second, independent instance of the same fixture
 
 
 def _run(**env):
@@ -90,7 +87,7 @@ def _tools(sink):
 
 def test_otlp_only(otlp_sink):
     out = _run(OTEL_EXPORTER_OTLP_ENDPOINT=otlp_sink.url, OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf")
-    assert out.stdout.strip() == "TracerProvider"
+    assert out.stdout.split()[0] == "TracerProvider"
     assert "/v1/traces" in otlp_sink.paths
     assert [s["attributes"]["gen_ai.tool.name"] for s in _tools(otlp_sink)] == ["echo"]
 
@@ -105,7 +102,7 @@ def test_langfuse_and_otlp(otlp_sink, langfuse_sink):
 
 def test_no_endpoint(otlp_sink):
     out = _run()
-    assert out.stdout.strip() == "TracerProvider"
+    assert out.stdout.split() == ["TracerProvider", "0"]  # no span processor, so no exporter
     assert otlp_sink.paths == []
 
 
@@ -115,4 +112,4 @@ def test_unreachable():
         port = s.getsockname()[1]
     out = _run(OTEL_EXPORTER_OTLP_ENDPOINT=f"http://127.0.0.1:{port}", OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf",
                OTEL_EXPORTER_OTLP_TIMEOUT="1")
-    assert out.stdout.strip() == "TracerProvider"
+    assert out.stdout.split()[0] == "TracerProvider"
