@@ -145,6 +145,40 @@ def test_question_is_listed_and_answered(fake_llm):
     assert _pending(user_id, session_id, AGENT_ENFORCER_URL) == []
 
 
+def test_question_with_a_confirmation_in_one_response_waits_only_for_the_confirmation(fake_llm):
+    """ask_question called in the same response as another tool does not wait
+    (#427): only the confirmation is listed, and answering it hands the model
+    both the confirmation's result and the ask_question error."""
+    fake_llm.clear(ENFORCER_MODEL)
+    fake_llm.script(ENFORCER_MODEL, [
+        fake_llm.tool_calls(
+            fake_llm.tool_call("ask_question", questions=["Which file?"], context="ctx"),
+            fake_llm.tool_call("run_command", command="rm permission-flow-never-created.txt")),
+        fake_llm.tool_call("attempt_answer", answer="done", confidence="high", sources_used=[]),
+    ])
+    user_id = f"it_user_{uuid.uuid4().hex[:8]}"
+    session_id = httpx.post(f"{AGENT_ENFORCER_URL}/apps/dak_agent/users/{user_id}/sessions", json={},
+                            timeout=30.0).json()["id"]
+    httpx.post(f"{AGENT_ENFORCER_URL}/run", timeout=AGENT_RUN_TIMEOUT, json={
+        "app_name": "dak_agent", "user_id": user_id, "session_id": session_id,
+        "new_message": {"parts": [{"text": "Clean up"}]},
+        # dak:tools fixes the call's tools, so the enforcer's own are named too.
+        "state_delta": {"dak:tools": ["run_command", "ask_question", "attempt_answer"]}}).raise_for_status()
+
+    pending = _pending(user_id, session_id, AGENT_ENFORCER_URL)
+    assert [p["kind"] for p in pending] == ["approval"], pending
+    assert pending[0]["tool_name"] == "run_command"
+
+    resp = _reply(pending[0]["id"], user_id, session_id, AGENT_ENFORCER_URL, mode="reject", reason="not now")
+    assert resp.status_code == 200, resp.text
+    # The request after the reply (the 2nd) carries both results; the scripted
+    # attempt_answer after it is not an offered tool here, so it is not the last.
+    after_reply = json.dumps(fake_llm.requests(ENFORCER_MODEL)[1]["messages"])
+    assert "ask_question must be called alone" in after_reply
+    assert "denied_by_user" in after_reply and "not now" in after_reply
+    assert _pending(user_id, session_id, AGENT_ENFORCER_URL) == []
+
+
 def test_stream_announces_asked_and_replied(fake_llm):
     user_id, session_id = _start_from_bff(fake_llm, fake_llm.text("Done."))
     params = {"user_id": user_id, "session_id": session_id}
