@@ -1,6 +1,8 @@
 # Fallback for every model no other profile matches. The values are
 # HarnessSettings' defaults (agent/dak_agent/harness.py), written out so a
 # profile can be compared against them.
+# `instruction` replaces the startup base instruction when written
+# (docs/architecture/harness_engineering.md).
 pattern: "*"
 compaction_threshold_ratio: 0.6
 compaction_retain_events: 4
