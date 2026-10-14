@@ -38,16 +38,15 @@ def test_genai_spans(agent, fake_llm):
     resp.raise_for_status()
 
     spans = _spans_of_run()
-    by_op = {}
-    for s in spans:
-        by_op.setdefault(s["attributes"].get("gen_ai.operation.name"), []).append(s)
-    [tool] = [s for s in by_op.get("execute_tool", []) if s["attributes"].get("gen_ai.tool.name") == "run_command"]
-    [invoke, *_] = by_op["invoke_agent"]
-    model_calls = by_op.get("chat", []) + by_op.get("generate_content", [])
+    [tool] = [s for s in spans if s["attributes"].get("gen_ai.operation.name") == "execute_tool"
+              and s["attributes"].get("gen_ai.tool.name") == "run_command"]
+    # only this run's trace: spans of an earlier run may still arrive
+    run = [s for s in spans if s["trace_id"] == tool["trace_id"]]
+    ops = {s["attributes"].get("gen_ai.operation.name"): s for s in run}
+    assert "invoke_agent" in ops, f"spans: {[s['name'] for s in spans]}"
+    model_calls = [s for s in run if s["attributes"].get("gen_ai.operation.name") in ("chat", "generate_content")]
     assert model_calls, f"spans: {[s['name'] for s in spans]}"
     assert all(s["attributes"].get("gen_ai.request.model") for s in model_calls)
-    # one run, one trace
-    assert tool["trace_id"] == invoke["trace_id"] == model_calls[0]["trace_id"]
     # content is opt-in: neither the reply nor the arguments are in any attribute
-    values = [str(v) for s in spans for v in s["attributes"].values()]
+    values = [str(v) for s in run for v in s["attributes"].values()]
     assert not [v for v in values if REPLY_MARKER in v or "git status" in v]

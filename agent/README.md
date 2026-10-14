@@ -171,7 +171,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 ```
 
-Without `OTEL_EXPORTER_OTLP_ENDPOINT` nothing is sent. An endpoint that cannot be reached does not fail a run.
+The same endpoint also receives the agent's metrics and logs (`/v1/metrics`, `/v1/logs`), as the standard OTel variables define. Without `OTEL_EXPORTER_OTLP_ENDPOINT` nothing is sent. An endpoint that cannot be reached does not fail a run.
 
 **Message content is off by default.** Prompts, replies and tool arguments are not put on the spans. `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY` adds the tool call's arguments to the `execute_tool` span as `gen_ai.tool.call.arguments`; they are sent as they are (no redaction), so opt in only for a backend you trust.
 
