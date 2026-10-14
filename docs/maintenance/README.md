@@ -83,6 +83,15 @@ Dependabot PR
   必ず失敗していた。このジョブは PR コードの checkout を一切行わない（GitHub API 呼び出しのみ）
   ため `pull_request_target` に切り替えても信頼できないコード実行のリスクがなく、常に通常の
   Actions secrets が使われるようになった（`dependency-triage.yml` と同じ設計）。
+- **`uv audit`（preview）**: ロックしている版の既知の脆弱性の ID を見る（`maintenance/src/dak_maintenance/audit.py`）。
+  2026-10-14 に uv 0.12.19 で
+  `uv audit --frozen --preview-features audit-command,json-output --output-format json` を各ディレクトリで流した
+  （`schema.version` は `preview`）。件数は `summary.vulnerabilities`（エントリ数。ID の重複を含む）:
+  `agent` 114 / `mcp-server` 69 / `bff` 16 / `cli` 20 / `tests/integration` 4（どれも終了コード 1）。
+  判定に読む欄は `vulnerabilities[].id` と `vulnerabilities[].dependency.{name,version}` だけ。
+  **脆弱性があると終了コードは 1** なので、終了コードでなく JSON が読めるかで成否を決める
+  （読めなければ `AuditResult.error`。「脆弱性 0 件」とは区別する）。preview の出力なので欄は変わりうる。
+  Actions の `astral-sh/setup-uv@v7` の版では未確認（`dependency-triage` の工程を足すときに確かめる）。
 - **Ollama on CPU は遅い**: nightly 限定・小型モデル・寛容アサーション・モデル cache。PR ゲートには載せない。
 - **提案ノイズ**: `tech-watch`/`feature-sync` は 1 実行あたり件数上限を持ち、既存と内容が重なる提案はログに `skip:` を出して起票しない。
   提案（題と本文の先頭）と、既存の要望（`type:request`）・PBI（`type:pbi`）・そのワークフローの
