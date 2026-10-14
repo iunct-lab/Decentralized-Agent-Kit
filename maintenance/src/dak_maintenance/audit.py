@@ -51,4 +51,8 @@ def audit_lock(project_dir: str) -> AuditResult:
     if result.error:
         tail = (proc.stderr or "").strip().splitlines()[-1:] or [""]
         return AuditResult(error=f"{result.error}（終了コード {proc.returncode}: {tail[0][:200]}）")
+    # 脆弱性があれば終了コード 1。ID が無いのに非 0 で終わったなら、脆弱性では説明できない失敗。
+    if proc.returncode != 0 and not result.ids:
+        tail = (proc.stderr or "").strip().splitlines()[-1:] or [""]
+        return AuditResult(error=f"uv audit が終了コード {proc.returncode} で終わった: {tail[0][:200]}")
     return result

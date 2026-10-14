@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 
@@ -32,3 +33,23 @@ def test_audit_failure_is_an_error_not_zero(monkeypatch):
     monkeypatch.setattr(audit.subprocess, "run", fake((FIX / "uv_audit_cli.json").read_text(), 1))
     r = audit.audit_lock(".")
     assert r.error is None and len(r.ids) == 3
+
+
+def test_nonzero_exit_without_ids_is_an_error(monkeypatch):
+    out = (FIX / "uv_audit_empty.json").read_text()
+    monkeypatch.setattr(audit.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a, 2, stdout=out, stderr="resolution failed"))
+    r = audit.audit_lock(".")
+    assert r.ids == [] and r.error and "2" in r.error
+
+
+def test_parse_dedupes_ids_and_maps_packages():
+    text = json.dumps({"vulnerabilities": [
+        {"id": "GHSA-1", "dependency": {"name": "a", "version": "1.0"}},
+        {"id": "GHSA-1", "dependency": {"name": "a", "version": "1.0"}},
+        {"id": "GHSA-2", "dependency": {"name": "b", "version": "2.0"}},
+        {"id": "GHSA-1", "dependency": {"name": "b", "version": "2.0"}},
+    ]})
+    r = audit.parse_audit_json(text)
+    assert r.ids == ["GHSA-1", "GHSA-2"]
+    assert r.packages == {"a==1.0": ["GHSA-1"], "b==2.0": ["GHSA-2", "GHSA-1"]}
