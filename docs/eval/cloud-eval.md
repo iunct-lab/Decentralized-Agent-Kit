@@ -153,7 +153,7 @@ GitHub の environment `cloud-eval` は、ジョブが参照すると GitHub が
 
 ```bash
 gh workflow run nightly-eval.yml -f provider=bedrock                       # 既定は bedrock/us.openai.gpt-5.6-luna
-gh workflow run nightly-eval.yml -f provider=bedrock -f cloud_model=<LiteLLM のモデル名>
+gh workflow run nightly-eval.yml -f provider=bedrock -f cloud_model=bedrock/us.openai.gpt-5.6-luna   # LiteLLM のモデル名で上書きする
 ```
 
 - 認証は `aws-actions/configure-aws-credentials` が GitHub OIDC で得た一時クレデンシャルだけ。長期のアクセスキーや Bedrock API キーは secret に置かない
