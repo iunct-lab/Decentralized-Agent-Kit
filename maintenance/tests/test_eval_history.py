@@ -26,6 +26,7 @@ def test_record_from_junit_keeps_old_keys_and_adds_provider(tmp_path):
     assert rec == {
         "date": "2026-10-02", "model": "llama3.1:8b", "total": 4, "passed": 3, "failed": 1,
         "skipped": 0, "pass_rate": 0.75, "provider": "ollama", "runner": "github-hosted", "profile": "",
+        "vulnerabilities": {},
     }
     assert list(rec)[:7] == ["date", "model", "total", "passed", "failed", "skipped", "pass_rate"]
 
@@ -109,3 +110,32 @@ def test_history_path_is_required(argv):
     with pytest.raises(SystemExit) as exc:
         main(argv)
     assert exc.value.code == 2
+
+
+def _record_argv(tmp_path, *extra):
+    junit = tmp_path / "eval-report.xml"
+    junit.write_text(JUNIT, encoding="utf-8")
+    history = tmp_path / "history.jsonl"
+    return ["eval-record", "--junit", str(junit), "--history", str(history), "--model", "m", *extra], history
+
+
+def test_record_has_vulnerabilities_per_lock(tmp_path):
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    vuln = {"id": "GHSA-aaaa", "dependency": {"name": "p", "version": "1.0"}}
+    (audit_dir / "agent.json").write_text(json.dumps({"vulnerabilities": [vuln]}))
+    (audit_dir / "cli.json").write_text(json.dumps({"vulnerabilities": []}))
+    (audit_dir / "bff.json").write_text("not json")
+    argv, history = _record_argv(tmp_path, "--audit-dir", str(audit_dir))
+    assert main(argv) == 0
+    row = json.loads(history.read_text().splitlines()[-1])
+    v = row["vulnerabilities"]
+    assert v["agent"] == {"ids": ["GHSA-aaaa"], "error": None}
+    assert v["cli"] == {"ids": [], "error": None}
+    assert v["bff"]["ids"] == [] and v["bff"]["error"]
+
+
+def test_record_without_audit_dir_has_empty_vulnerabilities(tmp_path):
+    argv, history = _record_argv(tmp_path)
+    assert main(argv) == 0
+    assert json.loads(history.read_text().splitlines()[-1])["vulnerabilities"] == {}

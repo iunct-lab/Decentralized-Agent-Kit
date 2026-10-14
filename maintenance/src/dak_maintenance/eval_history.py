@@ -29,9 +29,10 @@ def summarize_junit(path: str) -> dict:
 
 
 def make_record(summary: dict, *, model: str, provider: str, runner: str, profile: str,
-                today: datetime.date) -> dict:
+                today: datetime.date, vulnerabilities: dict | None = None) -> dict:
+    """`vulnerabilities` は lock ごとの {"ids": [...], "error": 文字列 or None}（無ければ {}）。"""
     return {"date": today.isoformat(), "model": model, **summary, "provider": provider, "runner": runner,
-            "profile": profile}
+            "profile": profile, "vulnerabilities": vulnerabilities or {}}
 
 
 def count_runs(history_path: str, *, provider: str, year_month: str) -> int:
