@@ -197,6 +197,8 @@ class HarnessSettings:
     # agent's tools yet (PBI #110, #81).
     tool_allowlist: Optional[Tuple[str, ...]] = None
     max_tools: Optional[int] = None
+    # Only resolved from the profile. Replaces the startup base instruction (PBI #750).
+    instruction: Optional[str] = None
 
     @classmethod
     def from_env(cls, model_name: str) -> "HarnessSettings":
@@ -229,6 +231,7 @@ class HarnessSettings:
             output_reserve_tokens=_env_int("DAK_OUTPUT_RESERVE_TOKENS", p("output_reserve_tokens", 4096), 0),
             tool_allowlist=tuple(allowlist) if allowlist is not None else None,
             max_tools=p("max_tools"),
+            instruction=p("instruction"),
         )
 
     @property
