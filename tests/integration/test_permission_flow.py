@@ -67,3 +67,25 @@ def test_state_cannot_preapprove_a_tool(agent):
     assert resp.status_code == 400, resp.text
     state = httpx.get(base, timeout=30.0).json()["state"]
     assert "dak_permission_always_rules" not in state
+
+
+def test_always_reply_keeps_the_rule_in_session_state(agent, fake_llm):
+    command = "rm permission-flow-always-never-created.txt"
+    fake_llm.clear(MODEL)
+    fake_llm.script(MODEL, [fake_llm.tool_call("run_command", command=command), fake_llm.text("held"), fake_llm.text("done")])
+    session_id = agent.create_session()
+    resp = httpx.post(f"{AGENT_URL}/run", json={
+        "app_name": APP_NAME, "user_id": agent.user_id, "session_id": session_id,
+        "new_message": {"parts": [{"text": "run it"}]}, "state_delta": {"dak:tools": ["run_command"]},
+    }, timeout=AGENT_RUN_TIMEOUT)
+    resp.raise_for_status()
+    ids = {"user_id": agent.user_id, "session_id": session_id}
+
+    [pending] = httpx.get(f"{AGENT_URL}/approvals", params=ids, timeout=30.0).json()
+    reply = httpx.post(f"{AGENT_URL}/approvals/{pending['id']}/reply", json={**ids, "mode": "always"},
+                       timeout=AGENT_RUN_TIMEOUT)
+    assert reply.status_code == 200, reply.text
+
+    session = f"{AGENT_URL}/apps/{APP_NAME}/users/{agent.user_id}/sessions/{session_id}"
+    rules = httpx.get(session, timeout=30.0).json()["state"]["dak_permission_always_rules"]
+    assert [(r["tool"], r["pattern"]) for r in rules] == [("run_command", command)]
