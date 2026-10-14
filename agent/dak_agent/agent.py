@@ -5,6 +5,7 @@ harness: compaction + plugins) and falls back to `root_agent`.
 """
 import logging
 import os
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -64,29 +65,43 @@ if ap2_enabled:
     root_agent_tools.extend(wallet_tools)
     logger.info(f"Added {len(wallet_tools)} Solana wallet tools to root agent")
 
-# --- Instruction & callbacks ---
-if enforcer_mode:
-    instruction = ENFORCER_INSTRUCTION
-    after_model_callback = enforcer_validator
-else:
-    instruction = os.getenv(
-        "AGENT_INSTRUCTION",
-        "You are a helpful assistant powered by the Decentralized Agent Kit.",
-    )
-    after_model_callback = None
-instruction = f"{instruction}\n\n{DELEGATION_INSTRUCTION}"
-
 # --- Model ---
 model_name = resolve_model_name()
 formatted_model_name = get_litellm_model_name(model_name)
 model = LiteLlm(model=formatted_model_name)
+
+# --- Harness settings (resolved once for the startup model; carries the profile) ---
+harness_settings = HarnessSettings.from_env(formatted_model_name)
+
+# --- Instruction & callbacks ---
+DEFAULT_INSTRUCTION = "You are a helpful assistant powered by the Decentralized Agent Kit."
+
+
+def base_instruction(enforcer_mode: bool, profile_instruction: Optional[str]) -> str:
+    """Startup system instruction.
+
+    Order: enforcer -> AGENT_INSTRUCTION -> profile `instruction` -> default.
+    Per-call `dak:instruction` and mode-switch instructions still replace it.
+    """
+    if enforcer_mode:
+        text = ENFORCER_INSTRUCTION
+    else:
+        env_text = os.getenv("AGENT_INSTRUCTION")
+        if env_text is not None:
+            text = env_text
+        else:
+            text = profile_instruction if profile_instruction is not None else DEFAULT_INSTRUCTION
+    return f"{text}\n\n{DELEGATION_INSTRUCTION}"
+
+
+instruction = base_instruction(enforcer_mode, harness_settings.instruction)
+after_model_callback = enforcer_validator if enforcer_mode else None
 
 # --- Read-only investigation sub-agent (its tool output stays out of this session) ---
 root_agent_tools.append(make_explorer_tool(mcp_url))
 
 # --- Context harness (compaction + tool-output budget + request guard) ---
 use_harness = harness_enabled()
-harness_settings = HarnessSettings.from_env(formatted_model_name)
 if use_harness:
     root_agent_tools.append(make_read_tool_output_tool(harness_settings.tool_output_chars))
     root_agent_tools.append(make_get_context_remaining_tool(harness_settings, formatted_model_name))
