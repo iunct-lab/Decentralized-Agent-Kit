@@ -95,7 +95,11 @@ def _fixed_vulnerabilities(before_path: str | None, after_path: str | None) -> t
     for label, path in (("更新前", before_path), ("更新後", after_path)):
         if not path or not Path(path).exists():
             return [], f"{label}の audit の出力が無い"
-        r = audit.parse_audit_json(_read(path))
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            return [], f"{label}の audit の出力を読めない: {e}"
+        r = audit.parse_audit_json(text)
         if r.error:
             return [], f"{label}: {r.error}"
         results.append(r)

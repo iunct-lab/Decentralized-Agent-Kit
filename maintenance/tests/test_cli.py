@@ -139,3 +139,22 @@ def test_triage_unreadable_audit_is_reported(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["fixes_vulnerabilities"] == [] and out["audit_error"]
     assert "audit できなかった" in out["decision"]["reason"]
+
+
+def test_triage_non_utf8_audit_is_reported(tmp_path, capsys):
+    bad = tmp_path / "bad.json"
+    bad.write_bytes(b"\xff\xfe\x00")
+    after = _audit_json(tmp_path, "a.json", [])
+    assert main(_TRIAGE + ["--audit-before", str(bad), "--audit-after", after]) == 0
+    assert json.loads(capsys.readouterr().out)["audit_error"]
+
+
+def test_triage_audit_without_fixes_says_none_and_writes_output(tmp_path, capsys, monkeypatch):
+    same = _audit_json(tmp_path, "s.json", ["GHSA-x"])
+    out_file = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out_file))
+    assert main(_TRIAGE + ["--audit-before", same, "--audit-after", same]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["fixes_vulnerabilities"] == [] and out["audit_error"] is None
+    assert "直る脆弱性: なし" in out["decision"]["reason"]
+    assert "fixes=\n" in out_file.read_text()
