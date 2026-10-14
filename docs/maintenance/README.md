@@ -67,6 +67,7 @@
 Dependabot PR
   └─ CI (ci.yml) 完了
        └─ dependency-triage.yml
+            ├─ uv の更新: 更新前後の uv.lock を audit し、直る脆弱性の ID を判定に渡す（可否は変えない）
             ├─ Tier0: semver 判定 + CI 結果
             │    ├─ patch/minor + green + 非破壊 → auto-merge-candidate → gh pr merge --auto
             │    └─ それ以外 → 次へ
@@ -92,6 +93,8 @@ Dependabot PR
   **脆弱性があると終了コードは 1** なので、終了コードでなく JSON が読めるかで成否を決める
   （読めなければ `AuditResult.error`。「脆弱性 0 件」とは区別する）。preview の出力なので欄は変わりうる。
   Actions の `astral-sh/setup-uv@v7` の版では未確認（`dependency-triage` の工程を足すときに確かめる）。
+  `dependency-triage` は uv の更新の PR で、対象ディレクトリの更新前（base）と更新後（PR の head。API でデータとして取る）の
+  `uv.lock` を audit して `triage` に渡し、判定のコメントの理由に「直る脆弱性: <ID / なし / audit できなかった>」を出す。
   `dak-maint triage` は `--audit-before FILE --audit-after FILE`（上の JSON の出力）を受け取ると、更新で直る ID を
   結果の `fixes_vulnerabilities`・理由・`security` ラベルに出す。自動マージの可否（`decide`）は変えない。
 - **Ollama on CPU は遅い**: nightly 限定・小型モデル・寛容アサーション・モデル cache。PR ゲートには載せない。
