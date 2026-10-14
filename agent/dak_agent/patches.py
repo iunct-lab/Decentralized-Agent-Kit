@@ -79,16 +79,39 @@ def ensure_tracer_provider() -> None:
         trace.set_tracer_provider(TracerProvider())
 
 
+def _langfuse_configured() -> bool:
+    return bool(os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"))
+
+
+def _install_otlp_provider() -> None:
+    """Attach the OTLP exporter configured by the standard OTEL_EXPORTER_OTLP_* variables.
+
+    Done before anything else sets the global TracerProvider (it can be set once),
+    so LangFuse and ensure_tracer_provider() join this provider instead of replacing
+    it. Without an endpoint nothing is installed. A provider that is already set
+    (get_fast_api_app) is kept."""
+    from opentelemetry import trace
+
+    if isinstance(trace.get_tracer_provider(), trace.ProxyTracerProvider):
+        from google.adk.telemetry.setup import maybe_set_otel_providers
+
+        maybe_set_otel_providers()
+
+
 def setup_telemetry() -> None:
-    """Instrument google-adk with OpenTelemetry and verify LangFuse credentials if configured."""
+    """Export spans over OTLP if configured; instrument google-adk for LangFuse if its keys are set."""
     try:
-        from openinference.instrumentation.google_adk import GoogleADKInstrumentor
-        from langfuse import get_client
+        _install_otlp_provider()
+    except Exception as e:
+        logger.warning(f"[OTel] Skipping OTLP export: {type(e).__name__} - {e}")
+    if _langfuse_configured():
+        try:
+            from openinference.instrumentation.google_adk import GoogleADKInstrumentor
+            from langfuse import get_client
 
-        GoogleADKInstrumentor().instrument()
-        logger.info("[Langfuse] Instrumentation initialized.")
+            GoogleADKInstrumentor().instrument()
+            logger.info("[Langfuse] Instrumentation initialized.")
 
-        if os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"):
             try:
                 langfuse = get_client()
                 if langfuse.auth_check():
@@ -97,6 +120,6 @@ def setup_telemetry() -> None:
                     logger.warning("[Langfuse] Authentication failed - check your credentials")
             except Exception as e:
                 logger.warning(f"[Langfuse] Connection error: {e}")
-    except Exception as e:
-        logger.warning(f"[Langfuse] Skipping instrumentation: {type(e).__name__} - {e}")
+        except Exception as e:
+            logger.warning(f"[Langfuse] Skipping instrumentation: {type(e).__name__} - {e}")
     ensure_tracer_provider()
