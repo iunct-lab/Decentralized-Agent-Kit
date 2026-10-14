@@ -78,7 +78,9 @@ These tools are active when the agent is in **Enforcer Mode** (Strict Mode), enf
 ### `ask_question`
 *   **Description**: Asks the user a clarifying question. This pauses execution to wait for user input.
 *   **Arguments**:
-    *   `question` (str): The question to ask.
+    *   `questions` (List[str]): The questions to ask.
+    *   `context` (str): Why the questions are asked.
+*   **Note**: Calling it in the same response as another tool returns an error and does not wait; call it alone.
 
 ---
 

@@ -46,6 +46,7 @@ Task 本文の `python3.13` は誤りで、agent の venv は 3.12。
 
 - `ask_question`（`builtin_tools.py:40-49`）は enforcer mode のときだけ出る普通のツール（確認なし）。`end_invocation = True` にして invocation を終え、結果（質問の文面）を functionResponse として残す
 - 答えは次の `POST /run` の自由文（`{"parts": [{"text": "..."}]}`）。これも、どのクライアントが送っても同じセッションが再開する
+- 1 回の応答で `ask_question` と他のツールが呼ばれたら、`ask_question` は invocation を終えずにエラーを返す（#427）ので、質問と確認は同時に待たない。モデルは確認の結果を見てから質問し直す
 - `ask_question` を確認フローに作り替えない（`agent/tests/test_builtin_tools.py` の `test_ask_question_ends_invocation` が固定する挙動を残す）。一覧に「質問」として出し、答えを自由文に組み立てるだけを足す
 
 ## 2. 決定: 一覧の形
@@ -81,7 +82,7 @@ reply は `id` と次の本文で受ける（HTTP は #175 の `POST /approvals/
 
 ### 承認: `{"mode": "once" | "always" | "reject", "reason": ""}`
 
-`approvals.build_reply_function_response(fc_id, mode, reason, unanswered)`（#173、`unanswered` は #406）が作る `new_message`。答える確認への functionResponse に加えて、同じ時点で承認待ちの他の確認（`unanswered`。ADK は最後の user のメッセージの答えしか読まないので、答えないと捨てられる）それぞれに `reject`（理由 `approvals.UNANSWERED_REASON`。期限切れのものは `timed_out`）の functionResponse を同じメッセージに入れる。それらも一覧から消えるので、SSE では `approval.replied` が出る。質問（`ask_question`）は入れない（質問の答えは自由文で、確認の functionResponse では答えられない。質問と確認が同時に待つのは、1 回の応答で `ask_question` と確認の要るツールを両方呼んだときだけで、その場合はどちらに答えてももう一方は捨てられる。扱いは決めていない）:
+`approvals.build_reply_function_response(fc_id, mode, reason, unanswered)`（#173、`unanswered` は #406）が作る `new_message`。答える確認への functionResponse に加えて、同じ時点で承認待ちの他の確認（`unanswered`。ADK は最後の user のメッセージの答えしか読まないので、答えないと捨てられる）それぞれに `reject`（理由 `approvals.UNANSWERED_REASON`。期限切れのものは `timed_out`）の functionResponse を同じメッセージに入れる。それらも一覧から消えるので、SSE では `approval.replied` が出る。質問（`ask_question`）は入れない（質問の答えは自由文で、確認の functionResponse では答えられない。1 回の応答で `ask_question` と他のツールが呼ばれたら、`ask_question` は invocation を終えずにエラーを返す（#427）ので、質問と確認は同時に待たない。モデルは確認の結果を見てから質問し直す）:
 
 | DAK の `mode` | `response.confirmed` | `response.payload` | モデルに届く Observation |
 |---|---|---|---|
