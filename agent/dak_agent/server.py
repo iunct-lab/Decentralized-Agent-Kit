@@ -52,6 +52,12 @@ app = get_fast_api_app(
 
 
 
+def _delta(body: dict) -> dict:
+    """`state_delta`, under both names ADK's request models accept (`stateDelta` too)."""
+    return {**(body.get("state_delta") or {}), **(body.get("stateDelta") or {})} if all(
+        isinstance(body.get(k) or {}, dict) for k in ("state_delta", "stateDelta")) else {}
+
+
 def _caller_state(request: Request, body: object) -> object:
     """Where a request carries session state the caller wrote (None: not one)."""
     if not isinstance(body, dict):
@@ -60,13 +66,13 @@ def _caller_state(request: Request, body: object) -> object:
     parts = path.split("/")
     in_session = len(parts) >= 6 and parts[1] == "apps" and parts[3] == "users" and parts[5] == "sessions"
     if method == "POST" and path in ("/run", "/run_sse"):
-        return body.get("state_delta")
+        return _delta(body)
     if in_session and len(parts) == 6 and method == "POST":
         return body.get("state")
     if in_session and len(parts) == 7 and method == "POST":
         return body
     if in_session and len(parts) == 7 and method == "PATCH":
-        return body.get("state_delta")
+        return _delta(body)
     return None
 
 
