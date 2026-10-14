@@ -138,6 +138,8 @@ _SESSION = "/apps/dak_agent/users/u/sessions"
     ("PATCH", _SESSION + "/s-patch", {"state_delta": {_OWNED: []}}),
     ("POST", "/run", {"app_name": "dak_agent", "user_id": "u", "session_id": "s", "state_delta": {_OWNED: []}}),
     ("POST", "/run_sse", {"app_name": "dak_agent", "user_id": "u", "session_id": "s", "state_delta": {_OWNED: []}}),
+    ("PATCH", _SESSION + "/s-patch", {"stateDelta": {_OWNED: []}}),
+    ("POST", "/run", {"appName": "dak_agent", "userId": "u", "sessionId": "s", "stateDelta": {_OWNED: []}}),
 ])
 def test_caller_cannot_set_always_rules(client, method, path, body):
     r = client.request(method, path, json=body)
