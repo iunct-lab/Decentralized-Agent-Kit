@@ -78,6 +78,12 @@ class FakeLlm:
         return {"tool_call": {"name": name, "args": args}}
 
     @staticmethod
+    def thinking(text: str, then: dict) -> dict:
+        """A signed thinking block before `then` (a `text()` or `tool_call()` item).
+        Only the Anthropic route (`anthropic/fake-claude`) returns it."""
+        return {**then, "thinking": text}
+
+    @staticmethod
     def tool_calls(*calls: dict) -> dict:
         """Parallel calls in one response: `tool_calls(tool_call(...), tool_call(...))`."""
         return {"tool_calls": [c["tool_call"] for c in calls]}
