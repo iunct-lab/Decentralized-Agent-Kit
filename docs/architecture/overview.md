@@ -36,6 +36,32 @@ graph LR
     
     MCP -->|Executes| Tools["Tools (deep_think, etc.)"]
 ```
+## Request log
+
+The agent writes one `request` line per HTTP request to stderr (`agent/dak_agent/request_log.py`). Where it goes after that (a log driver, CloudWatch) is the deployment's concern.
+
+```
+request client=172.19.0.1 method=POST path="/run" status=200 ms=18282 app_name="dak_agent" user_id="demo-user" session_id="demo-session" approval_id=- mode=- trace_id=66f2695d902a8139364e749fbb8d3385
+```
+
+| field | source |
+|-------|--------|
+| `client` | the connection's peer address (`in-process` for the agent's own call from `/approvals/{id}/reply`; `X-Forwarded-For` is not read) |
+| `method`, `path`, `status`, `ms` | the request and its response (for `/run_sse`, `ms` and `status` are those of the response start) |
+| `app_name`, `user_id`, `session_id` | the path (`/apps/.../users/.../sessions/...`), else the query, else the body of `/run`, `/run_sse` and `/approvals/{id}/reply` |
+| `approval_id`, `mode` | `/approvals/{id}/reply` only: the path's id and the body's `mode` (`once` / `always` / `reject`) |
+| `trace_id` | the trace opened for the request (32 hex digits) |
+
+Never logged: the prompt or any body, session state / `state_delta`, tool arguments, a question's answer, a `reason`. Values the caller chooses (`path`, `app_name`, `user_id`, `session_id`, `approval_id`) are written as JSON strings, so a newline or quote cannot forge a line or a field. The caller's `traceparent` is not the parent of the trace: the agent starts it.
+
+### Matching with tool calls
+
+The ADK run and its tool calls are children of the request's trace, so the `trace_id` of a `request` line is the `trace_id` of the agent's `tool_call name=... trace_id=...` lines (`agent/dak_agent/permission.py`) and of the mcp-server's `tool_call` lines (#634, format in `mcp-server/README.md`). To follow one request:
+
+```bash
+docker compose logs agent mcp-server | grep 'trace_id=<id>'
+```
+
 ## Infrastructure
 
 - **Docker Compose**: Orchestrates all services (Agent, UI, Database).
