@@ -6,10 +6,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "httpx>=0.28.1",
-    # mcp 2.x は mcp.server.fastmcp を廃し MCPServer へ移行するため main.py の移行が必要
-    # （PR #97 参照）。DNS rebinding 保護の自動有効化は 1.23 から入っており、main.py の
-    # transport_security で compose のサービス名を許可している。
-    "mcp>=1.30.0,<2",
+    # mcp 2.x の MCPServer（#39）。DNS rebinding 保護は main.py の transport_security で
+    # compose のサービス名を許可している。
+    "mcp>=2.3,<3",
     "uvicorn>=0.53.0",
     "starlette>=1.6.0"
 ]
