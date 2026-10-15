@@ -97,6 +97,21 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 
 イメージは、読み取り専用のルートファイルシステムで動かすため、`entrypoint.sh` が起動時に書く `agent.json` をビルド時に作り、`uv run` を使わず venv の uvicorn を直接起動した（`/tmp` 以外に書かない）。本番の構成（#135）では、この 2 点を引き継ぐかと、呼び出しごとのセッションなら `/tmp` の SQLite を外せるかを決める。
 
+### Lambda の入口（#715）
+
+`agent/dak_agent/lambda_handler.py` の `handler(event, context)`。`adk web` も HTTP サーバも使わず、1 回の呼び出しで 1 ターンを返す。
+
+| | 形 |
+|---|---|
+| 入力 | `{"message": "<text>", "state_delta": {"dak:…": …}}`。`state_delta` は省略可で、`/run` と同じ `dak:` キー（`call_config.md`） |
+| 成功 | `{"status": "succeeded", "output": "<最終応答のテキスト>"}`。`turn_limit_exceeded` などのエラー JSON も `output` にそのまま入る（判定は呼び出し元） |
+| 失敗 | `{"status": "failed", "error": "<例外のクラス名>"}`、または不正な入力で LLM を呼ぶ前に `"invalid_event"`。メッセージは本文を含みうるので返さず、ログにも出さない |
+
+- 呼び出しごとに `InMemorySessionService` を作って捨てる。DB も `/tmp` の SQLite も使わない（`session_id` でターンをまたぐ続きは #721）
+- モジュールの先頭では標準ライブラリだけを import し、`dak_agent.agent` は最初の呼び出しで読む。Init の上限 10 秒（上の実測）に載せないため
+- `dak:tools` が無ければ `[]` を入れる。MCP サーバを配置しないので、届かない接続先を待たない
+- 呼び出しの本文と `state_delta` の値はログに出さない
+
 ### S2: Bedrock AgentCore Runtime（v2、東京対応）
 
 - A2A または HTTP のプロトコルで配置する。呼び出し元は SigV4 で `InvokeAgentRuntime` を呼ぶ。セッションは microVM に固定され、長時間の実行もストリーミングも扱える。
