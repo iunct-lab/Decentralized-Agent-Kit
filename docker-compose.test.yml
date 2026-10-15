@@ -59,7 +59,10 @@ services:
       - MODEL_NAME=openai/fake-default
       - OPENAI_API_BASE=http://fake-llm:8080/v1
       - OPENAI_API_KEY=dummy
-      - DAK_ALLOWED_MODELS=openai/fake-default,openai/fake-alt
+      # Claude route for tests/integration/test_thinking_blocks.py (the fake LLM's /v1/messages)
+      - ANTHROPIC_API_BASE=http://fake-llm:8080
+      - ANTHROPIC_API_KEY=dummy
+      - DAK_ALLOWED_MODELS=openai/fake-default,openai/fake-alt,anthropic/fake-claude
       # tests/integration/test_approvals.py: planner asks for confirmation (an agent-side tool, no MCP server needed)
       - DAK_PLANNER_REQUIRE_CONFIRMATION=true
       - DAK_APPROVAL_TIMEOUT_SECONDS=5
@@ -220,6 +223,9 @@ services:
       - MODEL_NAME=openai/fake-harness
       - OPENAI_API_BASE=http://fake-llm:8080/v1
       - OPENAI_API_KEY=dummy
+      - ANTHROPIC_API_BASE=http://fake-llm:8080
+      - ANTHROPIC_API_KEY=dummy
+      - DAK_ALLOWED_MODELS=openai/fake-harness,anthropic/fake-claude
       - MODEL_CONTEXT_WINDOW=4000
       - DAK_COMPACTION_INTERVAL=3
     depends_on:
