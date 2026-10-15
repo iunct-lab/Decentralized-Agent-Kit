@@ -8,6 +8,7 @@ address (loopback, private, link-local incl. cloud metadata, CGNAT, reserved are
 after the check (DNS rebinding) cannot send the request inside.
 
 Tools that take a URL must use `outbound_client()`; do not build an httpx client yourself.
+Create one client per request (connections are pooled by the pinned address, not the name).
 """
 import ipaddress
 import socket
@@ -25,6 +26,11 @@ def _is_ip_literal(host: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+# IPv6 ranges that carry an IPv4 address in the low 32 bits (NAT64, IPv4-compatible, SIIT)
+_EMBEDDING_NETS = tuple(ipaddress.ip_network(n) for n in ("64:ff9b::/96", "::/96", "::ffff:0:0:0/96"))
+_SITE_LOCAL = ipaddress.ip_network("fec0::/10")
 
 
 def check_outbound_url(url: str) -> list[str]:
@@ -45,7 +51,7 @@ def check_outbound_url(url: str) -> list[str]:
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except OSError as e:
+    except (OSError, UnicodeError) as e:
         raise OutboundURLRefused(f"refused: {url} could not be resolved ({e})") from None
     addresses: list[str] = []
     for info in infos:
@@ -53,6 +59,11 @@ def check_outbound_url(url: str) -> list[str]:
         ip = ipaddress.ip_address(raw)
         if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
             ip = ip.ipv4_mapped
+        if isinstance(ip, ipaddress.IPv6Address):
+            if any(ip in net for net in _EMBEDDING_NETS):
+                ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+            elif ip in _SITE_LOCAL:
+                raise OutboundURLRefused(f"refused: {url} resolves to {ip}, a site-local address")
         if not ip.is_global:
             raise OutboundURLRefused(
                 f"refused: {url} resolves to {ip}, which is not a public address "
@@ -62,7 +73,8 @@ def check_outbound_url(url: str) -> list[str]:
             addresses.append(raw)
     if not addresses:
         raise OutboundURLRefused(f"refused: {url} did not resolve to any address")
-    return addresses
+    # IPv4 first: a host without an IPv6 route still connects to an address that was checked
+    return sorted(addresses, key=lambda a: ":" in a)
 
 
 class PinnedTransport(httpx.HTTPTransport):

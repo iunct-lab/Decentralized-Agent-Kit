@@ -39,6 +39,25 @@ def test_refuses_link_local_metadata(url):
         check_outbound_url(url)
 
 
+@pytest.mark.parametrize("url", [
+    "http://[64:ff9b::7f00:1]/", "http://[64:ff9b::a9fe:a9fe]/", "http://[::127.0.0.1]/",
+    "http://[::10.0.0.1]/", "http://[::ffff:0:7f00:1]/", "http://[fec0::1]/",
+])
+def test_refuses_ipv6_forms_embedding_internal_ipv4(url):
+    with pytest.raises(OutboundURLRefused):
+        check_outbound_url(url)
+
+
+def test_refuses_label_too_long_without_raising_other_errors():
+    with pytest.raises(OutboundURLRefused):
+        check_outbound_url("http://" + "a" * 64 + ".com/")
+
+
+def test_returns_ipv4_before_ipv6(monkeypatch):
+    _dns(monkeypatch, {"dual.example.com": ["2606:4700::1111", "93.184.216.34"]})
+    assert check_outbound_url("https://dual.example.com/") == ["93.184.216.34", "2606:4700::1111"]
+
+
 def test_refuses_ipv4_mapped_loopback():
     with pytest.raises(OutboundURLRefused):
         check_outbound_url("http://[::ffff:127.0.0.1]/")
