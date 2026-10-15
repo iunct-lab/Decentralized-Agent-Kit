@@ -127,6 +127,10 @@ request (41039 tokens) exceeds the available context size (32768 tokens)
      広げる（`_tail_keep_count`、#103）ので、ターンを途中で切らない。ただし広げた tail がリクエストの
      予算（固定部分を除く）を超えるとき（1 ターンの長いツールループ）は広げず、予算の切れ目で切る
      （ガードがそのターンの古い側を縮められるように）。
+   - 署名付きの thought（Anthropic/Gemini）は不透明な状態なので、省略では落とさず残す。ただし
+     Anthropic のモデルで前の部分（system・tools・前のターン）が前回のリクエストから変わったリクエストでは、
+     署名付きの thought を落とす（Claude 5.5 の thinking block の規則、#765。下の「Claude 5.5 の
+     thinking block の規則」節）。Gemini は変わっても残す。
    - 見積もりは **CJK を 1 文字 = 1 トークン**で数える。単純な `len // 4` では日本語で
      3〜4 倍の過小評価になる。
 4. **超過からの回復**（`ContextHarnessPlugin.on_model_error_callback`、#88）
@@ -324,6 +328,41 @@ MRTR（MCP 2026-07-28、SEP-2322）との対応: 保留の 1 件 ↔ `InputRequi
 - 確認待ち・拒否で答えた呼び出しには書き換えの包みもかけない（拒否の理由はエージェントの `_restore_reject_reason` が返す。確認のあとの呼び直しでは PreToolUse がもう一度書き換える）。`read_tool_output` の引数の書き換えは、ツール出力の上限をかけずに `hook_rewrote_input` で包む
 - **Stop は監査・通知専用で、止められない。** ADK の `after_run_callback` は戻り値が `None` 固定で、Claude Code の Stop hook のように拒否してエージェントを続けさせることができない。拒否やエラーが返っても警告をログに出すだけ。ADK は実行がエラーで終わったときは `after_run_callback` を呼ばないので、Stop も起動しない（全実行の記録には使えない）。Stop は最後のイベントの後、応答のストリームを閉じる前に動くので、遅い hook はその間ストリームを開いたままにする（`timeout` を短くする）
 - 検証: `agent/tests/test_hooks.py`（読み込み・exit 2・JSON の拒否・書き換え・タイムアウト・Claude Code 用スクリプトの互換）、`agent/tests/test_harness.py::TestContextHarnessPluginHooks`（結線、Stop がブロックしないこと）
+
+## Claude 5.5 の thinking block の規則（#765）
+
+**規則**（出典: Anthropic の release notes、2026-10-07、Claude Haiku 5.5 の公開と移行の注意）:
+`system`・`tools`・前のターンを変えたあとに thinking block を送り返すと 400 が返る。
+
+**DAK の結果**（署名付きの thinking を返す偽 LLM `anthropic/fake-claude` で確かめた。実際の
+Anthropic API では確かめていない。課金を伴うため）:
+
+| 処理 | 当たったか | 変わる部分 | テスト |
+|------|-----------|-----------|--------|
+| モード切替（`adaptive_agent.py`） | 当たった | system 指示と tools | `tests/integration/test_thinking_blocks.py::test_mode_switch_with_signed_thinking_continues` |
+| 圧縮（`BudgetedEventSummarizer`） | 当たった | 前のターン（要約に置き換わる） | `test_compaction_with_signed_thinking_continues` |
+| 予算の歯止めの省略（`fit_request_to_budget`） | 当たりうる（前のターンを変える。圧縮のテストは小さい窓で省略も通る） | 前のターン | 同上と `agent/tests/test_harness.py::TestSignedThoughtsAfterPrefixChange` |
+| 古いツール結果の刈り込み（`prune_old_tool_results`） | 当たりうる（前のターンを変える） | 前のターン | 同上 |
+| 保存したセッションの読み戻し（PostgreSQL の jsonb） | 当たった | ツール結果の key の順番（LiteLLM は順番のまま送る） | `test_compaction_with_signed_thinking_continues`（sort_keys を使った版は 400 のまま残った） |
+
+省略と刈り込みは個別の統合テストを持たない（モード切替・圧縮と同じ経路で、
+`before_model_callback` の末尾が前回との差で扱うため）。
+
+**直し方**（`ContextHarnessPlugin.before_model_callback` の末尾、`harness.py`）: Anthropic のモデル
+（`anthropic/` か名前に claude）のとき、今回のリクエストの形（`request_shape`: system・tools・各ターンの
+digest）をセッションの state `dak_harness_last_request_shape` の前回と比べ（`prefix_changed`）、前の
+部分が変わっていれば署名付きの thought を落とす（`drop_signed_thoughts`）。そのあと、送った形を
+state に書く。変わっていなければ残す。digest は key の順番を整えない（プロバイダが見る順番のまま）。
+モード切替・圧縮・省略・刈り込みのどれで変わっても同じ経路で扱う。前の部分を変えないように
+モード切替・圧縮を作り替えることはしていない（モード切替を残すかは #92）。
+
+**Gemini**: 署名付きの thought の扱いは変えていない（前の部分が変わっても残す。
+`test_signed_thoughts_kept_for_gemini_when_prefix_changes`）。
+
+**偽 LLM**（`tests/integration/fake_llm/app.py`）: `POST /v1/messages`（Anthropic Messages、非ストリーム）が
+署名付きの thinking（`sig-<連番>`）を台本で返せる。モデルごと・ツールの有無ごとに前回のリクエストを持ち、
+system・tools・前のターンのどれかが変わったのに署名付きの thinking を送り返すと 400 にする。
+ツール無しの呼び出し（要約）は別の会話として数える。
 
 ## 4. 残りのギャップとバックログ（優先度順）
 
