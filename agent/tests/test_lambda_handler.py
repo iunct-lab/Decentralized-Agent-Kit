@@ -249,3 +249,38 @@ async def test_failed_turn_and_oversized_output_are_recorded(monkeypatch, table)
     await lambda_handler.run({"message": "hi", "job_id": "big"}, _Context())
     got = await lambda_handler.run({"op": "get", "job_id": "big"})
     assert got["status"] == "failed" and got["error"] == "output_too_large" and "output" not in got
+
+
+@pytest.mark.asyncio
+async def test_expired_job_row_is_not_found(table):
+    table.items[("J#old", "JOB")] = {"pk": "J#old", "sk": "JOB", "status": "succeeded",
+                                     "output": "x", "expires_at": 1}
+    assert (await lambda_handler.run({"op": "get", "job_id": "old"}))["status"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_start_error_other_than_exists_is_a_failed_result(monkeypatch, table):
+    from botocore.exceptions import ClientError
+
+    def throttled(**kwargs):
+        raise ClientError({"Error": {"Code": "ProvisionedThroughputExceededException"}}, "PutItem")
+
+    monkeypatch.setattr(table, "put_item", throttled)
+    llm, requests = _llm()
+    _install(monkeypatch, llm)
+    result = await lambda_handler.run({"message": "hi", "job_id": "j1"}, _Context())
+    assert result == {"status": "failed", "error": "ClientError"}
+    assert requests == []
+
+
+@pytest.mark.asyncio
+async def test_finish_error_is_a_failed_result_and_the_row_stays_running(monkeypatch, table):
+    def broken(**kwargs):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(table, "update_item", broken)
+    llm, _ = _llm()
+    _install(monkeypatch, llm)
+    result = await lambda_handler.run({"message": "hi", "job_id": "j1"}, _Context())
+    assert result == {"status": "failed", "error": "RuntimeError"}
+    assert table.items[("J#j1", "JOB")]["status"] == "running"
