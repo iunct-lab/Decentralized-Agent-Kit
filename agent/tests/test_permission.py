@@ -520,3 +520,18 @@ def test_owned_state_keys():
         "dak_active_skills", "dak_mode_instruction", "dak_permission_always_rules",
         "enforcer_allowed_tools", "temp:dak_call_count",
     ]
+
+
+def test_fetch_url_asks_by_default():
+    assert evaluate(DEFAULT_RULES, "local", "fetch_url", {"url": "https://example.com/a"}) == "ask"
+
+
+def test_fetch_url_always_matches_only_the_same_url():
+    always = {("local", "fetch_url", "https://example.com/a")}
+
+    def decide(url):
+        return evaluate(DEFAULT_RULES, "local", "fetch_url", {"url": url}, always)
+
+    assert decide("https://example.com/a") == "allow"
+    assert decide("https://example.com/a?x=1") == "ask"
+    assert decide("https://example.com/b") == "ask"

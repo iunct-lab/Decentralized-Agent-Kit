@@ -5,13 +5,16 @@
 
 import base64
 import importlib.util
+import ipaddress
 import json
 import os
+import socket
 from types import SimpleNamespace
 
 import httpx
 import pytest
 
+from dak_agent import outbound_url
 from dak_agent.skill_registry import SkillRegistry
 
 SKILLS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../..", "skills"))
@@ -52,12 +55,29 @@ def paid_server(monkeypatch):
             return httpx.Response(402, headers={"PAYMENT-REQUIRED": header}, json={})
         return httpx.Response(200, text="premium data")
 
-    real_client = httpx.Client
+    class CheckedMock(httpx.MockTransport):
+        """The real destination check, then the fake server (nothing leaves the process)."""
+
+        def handle_request(self, request):
+            outbound_url.check_outbound_url(str(request.url))
+            return super().handle_request(request)
+
+    dns = {}  # host -> address; any other host resolves to a public address
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        try:
+            ipaddress.ip_address(host)
+            addr = host  # a literal resolves to itself
+        except ValueError:
+            addr = dns.get(host, "93.184.216.34")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (addr, port or 0))]
+
+    monkeypatch.setattr(outbound_url.socket, "getaddrinfo", fake_getaddrinfo)
     monkeypatch.setattr(
-        tools.httpx, "Client",
-        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
+        tools, "outbound_client",
+        lambda **kw: httpx.Client(transport=CheckedMock(handler), follow_redirects=False, **kw),
     )
-    return SimpleNamespace(requests=requests, state=state)
+    return SimpleNamespace(requests=requests, state=state, dns=dns)
 
 
 def _tool_context():
@@ -98,10 +118,9 @@ def test_fetch_url_200_returns_body(paid_server):
 
 
 def test_fetch_url_broken_402_reports_reason(monkeypatch):
-    real_client = httpx.Client
     monkeypatch.setattr(
-        tools.httpx, "Client",
-        lambda **kw: real_client(transport=httpx.MockTransport(lambda r: httpx.Response(402, text="pay")), **kw),
+        tools, "outbound_client",
+        lambda **kw: httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(402, text="pay")), **kw),
     )
     ctx = _tool_context()
 
@@ -125,11 +144,52 @@ def test_fetch_url_does_not_follow_redirects(monkeypatch):
         seen.append(request)
         return httpx.Response(302, headers={"Location": "https://elsewhere.example.com/"})
 
-    real_client = httpx.Client
+    class CheckedMock(httpx.MockTransport):
+        """The real destination check, then the fake server (nothing leaves the process)."""
+
+        def handle_request(self, request):
+            outbound_url.check_outbound_url(str(request.url))
+            return super().handle_request(request)
+
+    dns = {}  # host -> address; any other host resolves to a public address
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        addr = dns.get(host, "93.184.216.34")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (addr, port or 0))]
+
+    monkeypatch.setattr(outbound_url.socket, "getaddrinfo", fake_getaddrinfo)
     monkeypatch.setattr(
-        tools.httpx, "Client",
-        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
+        tools, "outbound_client",
+        lambda **kw: httpx.Client(transport=CheckedMock(handler), follow_redirects=False, **kw),
     )
 
     assert tools.fetch_url(URL, _tool_context()).startswith("HTTP 302")
     assert len(seen) == 1
+
+
+@pytest.mark.parametrize("url", [
+    "http://169.254.169.254/latest/meta-data/",
+    "http://127.0.0.1:8001/mcp",
+    "http://mcp-server:8000/mcp",
+])
+def test_fetch_url_refuses_internal_address_without_connecting(paid_server, url):
+    out = tools.fetch_url(url, _tool_context())
+
+    assert out.startswith("Not fetched:")
+    assert paid_server.requests == []
+
+
+def test_fetch_url_refuses_name_resolving_to_private(paid_server):
+    paid_server.dns["internal.example.com"] = "10.0.0.5"
+
+    out = tools.fetch_url("https://internal.example.com/data", _tool_context())
+
+    assert out.startswith("Not fetched:") and "10.0.0.5" in out
+    assert paid_server.requests == []
+
+
+def test_fetch_url_refuses_non_http_scheme(paid_server):
+    out = tools.fetch_url("file:///etc/passwd", _tool_context())
+
+    assert out.startswith("Not fetched:")
+    assert paid_server.requests == []

@@ -62,6 +62,8 @@ def subject(tool_name: str, args: Mapping[str, Any]) -> str:
         return str(args.get("command", ""))
     if tool_name in _PATH_TOOLS:
         return str(args.get("path", "."))
+    if tool_name == "fetch_url":
+        return str(args.get("url", ""))
     return ""
 
 
@@ -189,6 +191,8 @@ _READ_ONLY_GIT = ("status", "log", "diff", "show")
 DEFAULT_RULES: List[Rule] = [
     # Tools inside the agent process: unchanged behaviour (no confirmation).
     Rule("local", "*", "*", "allow"),
+    # A URL the agent fetches goes outside: the user confirms it (#728).
+    Rule("local", "fetch_url", "*", "ask"),
     # Tools the caller chose with `dak:tools` run without confirmation (#136).
     Rule("caller", "*", "*", "allow"),
     # The default MCP server: ask, except reads and read-only git.
