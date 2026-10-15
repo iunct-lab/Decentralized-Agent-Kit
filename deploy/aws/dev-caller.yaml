@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  A dev stand-in for a caller app: an execution role that DAK's resource-based
+  policy allows, a small function that runs one job (Event + polling), and a role
+  with no permission to check that DAK refuses it. Developers assume CallerRole.
+
+Parameters:
+  DakFunctionArn:
+    Type: String
+  DeveloperPrincipalArn:
+    Type: String
+    Description: The principal that may assume CallerRole and ProbeRole.
+
+Resources:
+  CallerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+          - Effect: Allow
+            Principal: {AWS: !Ref DeveloperPrincipalArn}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      # No lambda:InvokeFunction here: DAK's resource-based policy is what lets this role call it.
+
+  ProbeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {AWS: !Ref DeveloperPrincipalArn}
+            Action: sts:AssumeRole
+
+  CallerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt CallerRole.Arn
+      Timeout: 900
+      Environment:
+        Variables:
+          DAK_FUNCTION_ARN: !Ref DakFunctionArn
+      Code:
+        ZipFile: |
+          import json, os, time, uuid
+          import boto3
+
+          client = boto3.client("lambda")
+
+
+          def handler(event, context):
+              arn = os.environ["DAK_FUNCTION_ARN"]
+              job_id = str(uuid.uuid4())
+              body = {"message": event["message"], "state_delta": event.get("state_delta", {}), "job_id": job_id}
+              client.invoke(FunctionName=arn, InvocationType="Event", Payload=json.dumps(body).encode())
+              while True:
+                  time.sleep(5)
+                  got = json.loads(client.invoke(
+                      FunctionName=arn, Payload=json.dumps({"op": "get", "job_id": job_id}).encode())["Payload"].read())
+                  if got.get("status") not in ("running", "not_found"):
+                      return got
+
+Outputs:
+  CallerRoleArn:
+    Value: !GetAtt CallerRole.Arn
+  ProbeRoleArn:
+    Value: !GetAtt ProbeRole.Arn
+  CallerFunctionName:
+    Value: !Ref CallerFunction
