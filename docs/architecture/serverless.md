@@ -178,6 +178,19 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 依存で大きいのは `litellm`（85 MB）、`google`（32 MB）、`botocore`（25 MB）。どれもモデルの呼び出しに要る。`a2a-sdk` は 2 MB 未満で、ADK の A2A の受け口に要る。
 ビルドの仕組みで値が変わる点に注意する。#253 で、PR #449・#563（依存の変更）より前の `agent/Dockerfile` を BuildKit を使わない別の環境でビルドしたときは、非圧縮が 1.54 GB と出た（依存も違うので、差の全部がビルドの仕組みによるとは言えない。内訳は調べていない。uv のキャッシュ `/root/.cache` がレイヤに残ると増える。上の環境では 5 MB）。本番のビルド（#135）では、配置する環境と同じ仕組みで測り直す。
 
+#### Lambda 用イメージ（#717、2026-10-15）
+
+`agent/Dockerfile.lambda`（公式の `public.ecr.aws/lambda/python:3.12` の 2 段。ビルド段だけ `gcc` と uv を持ち、実行段は依存と `dak_agent/`・`skills/`・`provider_skills/`・`profiles/`・`agent_config.yaml` だけ）を、上と同じ使い捨ての arm64 の環境でビルドした値。
+
+| 項目 | 値 | Lambda（10 GB）に対して |
+|---|---:|---:|
+| 非圧縮（`docker image inspect` の Size） | 986 MB | 10% |
+| 圧縮（`docker save \| gzip -1`） | 367 MB | 4% |
+
+- 削ったもの: `gcc`・`python3-dev`・uv 本体・dev の依存・`agent.json`（実行段に入らない）。ただし上の `agent/Dockerfile`（767 MB）より**大きい**。Lambda のベースイメージが `python:3.12-slim` より大きく、依存を `pip install --target` で入れるためと見られる（レイヤの内訳は測っていない）。上限には余裕があるので、削るのは #719 の実測でコールドスタートが問題になってからにする
+- 読み取り専用: 実行段は `/tmp` 以外に書かない（`PYTHONDONTWRITEBYTECODE=1`）。統合テストは `read_only: true` + `tmpfs: /tmp` で動かす
+- 鍵: `env` に `api_key`・`secret`・`AKIA`・`token` を含む行は 0 件。`dak_agent/` と `agent_config.yaml` に `AKIA…` の形も 0 件（`ls -R` の名前の一致は、依存のモジュール名）
+
 ### 参考: 常時稼働（Fargate）
 
 0.5 vCPU / 1 GB を 1 台置くだけで月約 22 USD（東京）。ALB（月約 18 USD〜）と DB を加えると、月 60 USD 前後になる。小さな呼び出し元の予算の目安（月 5〜10 USD）に収まらない。
