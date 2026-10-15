@@ -284,3 +284,67 @@ async def test_finish_error_is_a_failed_result_and_the_row_stays_running(monkeyp
     result = await lambda_handler.run({"message": "hi", "job_id": "j1"}, _Context())
     assert result == {"status": "failed", "error": "RuntimeError"}
     assert table.items[("J#j1", "JOB")]["status"] == "running"
+
+
+class _FakeSsm:
+    def __init__(self, value="the-key-value", error=None):
+        self.calls, self.value, self.error = [], value, error
+
+    def get_parameter(self, Name, WithDecryption):
+        self.calls.append((Name, WithDecryption))
+        if self.error:
+            raise self.error
+        return {"Parameter": {"Value": self.value}}
+
+
+@pytest.fixture
+def ssm(monkeypatch):
+    fake = _FakeSsm()
+    monkeypatch.setattr(lambda_handler, "_ssm", lambda: fake)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_api_key_is_read_from_the_parameter_once(monkeypatch, ssm):
+    monkeypatch.setenv("DAK_API_KEY_PARAMETER", "/some/parameter")
+    llm, _ = _llm()
+    _install(monkeypatch, llm)
+    await lambda_handler.run({"message": "hi"})
+    await lambda_handler.run({"message": "hi"})
+    import os
+    assert os.environ["ANTHROPIC_API_KEY"] == "the-key-value"
+    assert ssm.calls == [("/some/parameter", True)]
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+
+
+@pytest.mark.asyncio
+async def test_no_parameter_name_reads_nothing(monkeypatch, ssm):
+    monkeypatch.delenv("DAK_API_KEY_PARAMETER", raising=False)
+    llm, _ = _llm()
+    _install(monkeypatch, llm)
+    assert (await lambda_handler.run({"message": "hi"}))["status"] == "succeeded"
+    assert ssm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_unreadable_parameter_fails_without_calling_the_llm(monkeypatch, caplog, ssm):
+    monkeypatch.setenv("DAK_API_KEY_PARAMETER", "/some/parameter")
+    ssm.error = RuntimeError("denied")
+    llm, requests = _llm()
+    _install(monkeypatch, llm)
+    with caplog.at_level(logging.DEBUG):
+        result = await lambda_handler.run({"message": "hi"})
+    assert result == {"status": "failed", "error": "RuntimeError"}
+    assert requests == []
+
+
+@pytest.mark.asyncio
+async def test_key_value_is_not_logged(monkeypatch, caplog, ssm):
+    monkeypatch.setenv("DAK_API_KEY_PARAMETER", "/some/parameter")
+    llm, _ = _llm()
+    _install(monkeypatch, llm)
+    with caplog.at_level(logging.DEBUG):
+        await lambda_handler.run({"message": "hi"})
+    assert "the-key-value" not in caplog.text
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)

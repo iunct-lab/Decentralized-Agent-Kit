@@ -9,6 +9,9 @@ table `DAK_TABLE` (pk `J#<job_id>`, sk `JOB`, expires after a day), so an async
 (Event) caller can poll with {"op": "get", "job_id": "<id>"}. The status is one of
 running | succeeded | failed | timed_out | not_found.
 
+If `DAK_API_KEY_PARAMETER` names an SSM parameter, its value is read once into
+`ANTHROPIC_API_KEY` (the key itself is in no file, image or log).
+
 Each call runs in a throwaway InMemory session, so nothing is written to disk.
 Neither the message nor the state_delta values are logged or returned in errors.
 Only the standard library is imported at module level: `dak_agent.agent` (telemetry,
@@ -27,6 +30,24 @@ _app_cache = None
 JOB_TTL_SECONDS = 24 * 3600
 MAX_OUTPUT_BYTES = 350 * 1024  # DynamoDB's item limit is 400 KB
 _loop = None  # one loop per container: the cached App may hold loop-bound async clients
+
+
+def _ssm():
+    """The SSM client. Tests replace this."""
+    import boto3
+    return boto3.client("ssm")
+
+
+def _ensure_api_key() -> None:
+    """Read the model API key from Parameter Store once per container.
+
+    `DAK_API_KEY_PARAMETER` is the parameter's *name*; the value goes only into
+    `ANTHROPIC_API_KEY` and is never logged or returned."""
+    name = os.environ.get("DAK_API_KEY_PARAMETER")
+    if not name or os.environ.get("ANTHROPIC_API_KEY"):
+        return
+    value = _ssm().get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
+    os.environ["ANTHROPIC_API_KEY"] = value
 
 
 def _app():
@@ -170,6 +191,7 @@ async def _turn(event) -> dict:
     if owned_state_keys(state_delta):
         return {"status": "failed", "error": "invalid_event"}
     try:
+        _ensure_api_key()
         return {"status": "succeeded", "output": await _run_turn(message, state_delta)}
     except Exception as exc:  # the message may contain the request text: log the class only
         logger.error("turn failed: %s", type(exc).__name__)
