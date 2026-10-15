@@ -81,6 +81,35 @@ async def test_no_tools_declared_when_dak_tools_omitted(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_tools_are_not_offered_when_dak_tools_omitted_but_agent_has_one(monkeypatch):
+    def lookup(q: str) -> str:
+        """Look something up."""
+        return q
+
+    llm, requests = _llm()
+    _install(monkeypatch, llm, tools=[lookup])
+    await lambda_handler.run({"message": "hi"})
+    await lambda_handler.run({"message": "hi", "state_delta": {"dak:tools": ["lookup"]}})
+    offered = lambda r: [d.name for t in (r.config.tools or []) for d in (t.function_declarations or [])]
+    assert "lookup" not in offered(requests[0])
+
+
+@pytest.mark.asyncio
+async def test_owned_state_keys_are_refused_like_run(monkeypatch):
+    llm, requests = _llm()
+    _install(monkeypatch, llm)
+    event = {"message": "hi", "state_delta": {"dak_permission_always_rules": ["*"]}}
+    assert await lambda_handler.run(event) == {"status": "failed", "error": "invalid_event"}
+    assert requests == []
+
+
+def test_handler_survives_repeated_calls_on_one_loop(monkeypatch):
+    llm, _ = _llm("ok")
+    _install(monkeypatch, llm)
+    assert [lambda_handler.handler({"message": "hi"})["output"] for _ in range(3)] == ["ok"] * 3
+
+
+@pytest.mark.asyncio
 async def test_two_calls_do_not_share_conversation(monkeypatch):
     llm, requests = _llm()
     _install(monkeypatch, llm)

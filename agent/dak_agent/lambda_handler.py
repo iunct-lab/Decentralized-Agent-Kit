@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 _USER_ID = "lambda"
 _app_cache = None
+_loop = None  # one loop per container: the cached App may hold loop-bound async clients
 
 
 def _app():
@@ -60,6 +61,9 @@ async def run(event) -> dict:
     state_delta = event.get("state_delta", {}) if isinstance(event, dict) else None
     if not isinstance(message, str) or not isinstance(state_delta, dict):
         return {"status": "failed", "error": "invalid_event"}
+    from .permission import owned_state_keys  # same refusal as server.py: no pre-approval via state_delta
+    if owned_state_keys(state_delta):
+        return {"status": "failed", "error": "invalid_event"}
     try:
         return {"status": "succeeded", "output": await _run_turn(message, state_delta)}
     except Exception as exc:  # the message may contain the request text: log the class only
@@ -68,4 +72,7 @@ async def run(event) -> dict:
 
 
 def handler(event, context=None):
-    return asyncio.run(run(event))
+    global _loop
+    if _loop is None or _loop.is_closed():
+        _loop = asyncio.new_event_loop()
+    return _loop.run_until_complete(run(event))
