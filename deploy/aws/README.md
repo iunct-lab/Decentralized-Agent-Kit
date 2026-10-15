@@ -27,9 +27,20 @@ sam deploy -t deploy/aws/template.yaml --stack-name <name> --capabilities CAPABI
     BedrockModelArns=<arn,arn> CallerRoleArn=<role arn> BudgetEmail=<address>
 ```
 
-For a dev check, deploy `dev-caller.yaml` first (`DakFunctionArn` is the output of the DAK
-stack; `DeveloperPrincipalArn` is who may assume the roles) and pass its `CallerRoleArn` to the
-DAK stack as `CallerRoleArn`.
+For a dev check, deploy `dev-caller.yaml` as well (it needs `--capabilities CAPABILITY_IAM`):
+
+```bash
+sam deploy -t deploy/aws/dev-caller.yaml --stack-name <name> --capabilities CAPABILITY_IAM \
+  --parameter-overrides DakFunctionArn=<arn> DeveloperPrincipalArn=<arn>
+```
+
+The roles and the function ARN depend on each other, so: deploy the DAK stack with a role you
+already have as `CallerRoleArn`, deploy `dev-caller.yaml` with the DAK function's ARN
+(`DeveloperPrincipalArn` is who may assume the roles), then update the DAK stack with the
+`CallerRoleArn` output.
+
+An async call that is throttled by `ReservedConcurrency` is dropped after 60 s (`MaximumEventAgeInSeconds`),
+so it is not run later; polling it returns `not_found`.
 
 ## Call it
 

@@ -80,6 +80,7 @@ Resources:
         LogGroup: !Ref FunctionLogs
       EventInvokeConfig:
         MaximumRetryAttempts: 0   # an async retry would bill the LLM call again
+        MaximumEventAgeInSeconds: 60   # a throttled event (ReservedConcurrency) is dropped, not retried for hours
       Environment:
         Variables:
           MODEL_NAME: !Ref ModelName
