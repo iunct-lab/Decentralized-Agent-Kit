@@ -265,7 +265,7 @@ class TestMCPTools(unittest.IsolatedAsyncioTestCase):
 
 
 def _ctx(session_key=None):
-    """The smallest stand-in for FastMCP's Context: only the HTTP request headers."""
+    """The smallest stand-in for MCPServer's Context: only the HTTP request headers."""
     headers = {} if session_key is None else {"x-dak-session-key": session_key}
     return SimpleNamespace(request_context=SimpleNamespace(request=SimpleNamespace(headers=headers)))
 

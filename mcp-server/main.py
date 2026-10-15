@@ -7,7 +7,7 @@ import re
 import subprocess
 import glob
 import tarfile
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.routing import Mount
@@ -16,7 +16,7 @@ import uvicorn
 import command_sandbox
 from sandbox import DOCKER_SOCKET, DOCKER_WORKDIR, SANDBOX_TTL_SECONDS, SandboxManager, check_socket_exposure
 
-# DNS rebinding protection: since mcp 1.23 FastMCP auto-enables it for its
+# DNS rebinding protection: since mcp 1.23 the server auto-enables it for its
 # default host (127.0.0.1) and then accepts only localhost Host headers, which
 # rejects the agent's `Host: mcp-server:8000` with 421. Keep the protection on
 # and allow the compose service name; MCP_ALLOWED_HOSTS (comma-separated
@@ -38,8 +38,8 @@ def _transport_security() -> TransportSecuritySettings:
     )
 
 
-# Initialize FastMCP server with recommended settings
-mcp = FastMCP("dak-agent-mcp", json_response=True, transport_security=_transport_security())
+# Initialize the MCPServer (mcp 2.x); json_response / transport_security are passed to streamable_http_app()
+mcp = MCPServer("dak-agent-mcp")
 
 # Output bounds: an unbounded tool result (a whole file, a recursive listing)
 # can overflow the calling model's context window in one call. Tools return at
@@ -595,7 +595,7 @@ async def lifespan(app: Starlette):
     reaper = asyncio.create_task(reap_loop())
     try:
         async with contextlib.AsyncExitStack() as stack:
-            # Initialize the FastMCP session manager
+            # Initialize the MCPServer session manager
             await stack.enter_async_context(mcp.session_manager.run())
             yield
     finally:
@@ -605,7 +605,7 @@ async def lifespan(app: Starlette):
 # Mount the StreamableHTTP server to a Starlette app
 app = Starlette(
     routes=[
-        Mount("/", app=mcp.streamable_http_app()),
+        Mount("/", app=mcp.streamable_http_app(json_response=True, transport_security=_transport_security())),
     ],
     lifespan=lifespan
 )

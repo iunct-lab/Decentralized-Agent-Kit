@@ -26,7 +26,7 @@ HEADERS = {"Accept": "application/json, text/event-stream"}
 class TestTransportSecurity(unittest.TestCase):
     """The agent reaches this server as `mcp-server:8000` inside docker compose.
 
-    mcp >= 1.23 auto-enables DNS rebinding protection for FastMCP's default
+    mcp >= 1.23 auto-enables DNS rebinding protection for the server's default
     host and rejects any non-localhost Host header with 421, which silently
     leaves the agent without MCP tools. Unit tests that call tool functions
     directly never send a Host header, so check the HTTP layer here.
