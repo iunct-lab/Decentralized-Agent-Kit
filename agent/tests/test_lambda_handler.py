@@ -152,3 +152,100 @@ def test_importing_the_module_does_not_load_the_agent():
     code = ("import sys, dak_agent.lambda_handler; "
             "sys.exit(1 if 'dak_agent.agent' in sys.modules else 0)")
     assert subprocess.run([sys.executable, "-c", code]).returncode == 0
+
+
+class _FakeTable:
+    """A dict-backed stand-in for the boto3 Table: the calls the job code makes."""
+
+    def __init__(self):
+        self.items = {}
+
+    def get_item(self, Key, ConsistentRead=False):
+        item = self.items.get((Key["pk"], Key["sk"]))
+        return {"Item": dict(item)} if item else {}
+
+    def put_item(self, Item, ConditionExpression=None):
+        from botocore.exceptions import ClientError
+        key = (Item["pk"], Item["sk"])
+        if ConditionExpression and key in self.items:
+            raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "PutItem")
+        self.items[key] = dict(Item)
+
+    def update_item(self, Key, ExpressionAttributeNames, ExpressionAttributeValues, UpdateExpression=None):
+        item = self.items[(Key["pk"], Key["sk"])]
+        for placeholder, name in ExpressionAttributeNames.items():
+            item[name] = ExpressionAttributeValues[":" + placeholder[1:]]
+
+
+class _Context:
+    def get_remaining_time_in_millis(self):
+        return 60_000
+
+
+@pytest.fixture
+def table(monkeypatch):
+    fake = _FakeTable()
+    monkeypatch.setattr(lambda_handler, "_table", lambda: fake)
+    return fake
+
+
+@pytest.mark.asyncio
+async def test_job_result_is_polled_with_get(monkeypatch, table):
+    llm, _ = _llm("done")
+    _install(monkeypatch, llm)
+    event = {"message": "hi", "job_id": "j1"}
+    assert await lambda_handler.run(event, _Context()) == {"status": "succeeded", "output": "done"}
+    got = await lambda_handler.run({"op": "get", "job_id": "j1"})
+    assert got == {"job_id": "j1", "status": "succeeded", "output": "done"}
+    assert table.items[("J#j1", "JOB")]["expires_at"] > 0
+
+
+@pytest.mark.asyncio
+async def test_same_job_id_twice_does_not_call_the_llm_again(monkeypatch, table):
+    llm, requests = _llm()
+    _install(monkeypatch, llm)
+    await lambda_handler.run({"message": "hi", "job_id": "j1"}, _Context())
+    again = await lambda_handler.run({"message": "hi", "job_id": "j1"}, _Context())
+    assert again == {"status": "failed", "error": "job_exists"}
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_running_job_past_its_deadline_is_timed_out(table):
+    table.items[("J#j1", "JOB")] = {"pk": "J#j1", "sk": "JOB", "status": "running", "deadline": 1}
+    assert (await lambda_handler.run({"op": "get", "job_id": "j1"}))["status"] == "timed_out"
+    table.items[("J#j2", "JOB")] = {"pk": "J#j2", "sk": "JOB", "status": "running",
+                                    "deadline": 9_999_999_999}
+    assert (await lambda_handler.run({"op": "get", "job_id": "j2"}))["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_unknown_job_is_not_found(table):
+    assert await lambda_handler.run({"op": "get", "job_id": "nope"}) == {
+        "job_id": "nope", "status": "not_found"}
+
+
+@pytest.mark.asyncio
+async def test_job_without_table_is_not_configured(monkeypatch):
+    monkeypatch.delenv("DAK_TABLE", raising=False)
+    llm, requests = _llm()
+    _install(monkeypatch, llm)
+    expected = {"status": "failed", "error": "table_not_configured"}
+    assert await lambda_handler.run({"message": "hi", "job_id": "j1"}, _Context()) == expected
+    assert await lambda_handler.run({"op": "get", "job_id": "j1"}) == expected
+    assert requests == []
+
+
+@pytest.mark.asyncio
+async def test_failed_turn_and_oversized_output_are_recorded(monkeypatch, table):
+    llm, _ = _llm(error=RuntimeError("boom"))
+    _install(monkeypatch, llm)
+    await lambda_handler.run({"message": "hi", "job_id": "bad"}, _Context())
+    assert await lambda_handler.run({"op": "get", "job_id": "bad"}) == {
+        "job_id": "bad", "status": "failed", "error": "RuntimeError"}
+
+    llm, _ = _llm("x" * (lambda_handler.MAX_OUTPUT_BYTES + 1))
+    _install(monkeypatch, llm)
+    await lambda_handler.run({"message": "hi", "job_id": "big"}, _Context())
+    got = await lambda_handler.run({"op": "get", "job_id": "big"})
+    assert got["status"] == "failed" and got["error"] == "output_too_large" and "output" not in got
