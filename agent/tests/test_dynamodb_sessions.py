@@ -241,7 +241,7 @@ async def test_concurrent_user_state_updates_are_not_lost(svc):
     overwriting the first writer's key."""
     a = await svc.create_session(app_name=APP, user_id="u", session_id="a")
     b = await svc.create_session(app_name=APP, user_id="u", session_id="b")
-    real_get = svc._get
+    real_get = svc._get_raw
     raced = []
 
     def racing_get(pk, sk):
@@ -252,9 +252,9 @@ async def test_concurrent_user_state_updates_are_not_lost(svc):
             other._put_scoped_state(pk, {"from_a": 1}, time.time())
         return item
 
-    svc._get = racing_get
+    svc._get_raw = racing_get
     await svc.append_event(b, _event("x", 2.0, delta={"user:from_b": 2}))
-    svc._get = real_get
+    svc._get_raw = real_get
 
     assert await svc.get_user_state(app_name=APP, user_id="u") == {"from_a": 1, "from_b": 2}
 
