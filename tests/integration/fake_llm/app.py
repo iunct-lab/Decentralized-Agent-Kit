@@ -20,8 +20,11 @@ DELETE /script/{model} clears them with the script.
 POST /v1/messages is the Anthropic Messages API (non-streaming only; DAK never
 streams). Its requests are logged as {"system", "tools", "messages"} in the
 Anthropic shape. It enforces Claude 5.5's rule: a request whose system, tools
-or earlier turns changed since the model's previous request gets a 400 when it
-sends back a signed thinking block.
+or earlier turns changed since the previous request gets a 400 when it sends
+back a signed thinking block. "Previous" is per model and per has-tools: a call
+without tools (a mode switch's meta call, a compaction summary) is a different
+conversation from the agent's own. A rejected request still becomes the
+previous one.
 """
 import json
 import time
