@@ -1,0 +1,145 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  DAK as a Lambda function (docs/architecture/serverless.md, S1). Callers invoke it
+  with IAM (lambda:InvokeFunction) as an async Event with a job_id, then poll with
+  {"op": "get"}. No API key is stored: the model is called with the execution role.
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: Image built from agent/Dockerfile.lambda (arm64), already pushed to ECR.
+  ModelName:
+    Type: String
+    Description: LiteLLM model id, e.g. bedrock/converse/<model id>.
+  BedrockRegion:
+    Type: String
+    Default: us-east-1
+    Description: Region the model is called in (AWS_REGION_NAME).
+  BedrockModelArns:
+    Type: CommaDelimitedList
+    Description: ARNs allowed for bedrock:InvokeModel (foundation models / inference profiles).
+  CallerRoleArn:
+    Type: String
+    Description: The execution role that may invoke the function.
+  SecondCallerRoleArn:
+    Type: String
+    Default: ''
+    Description: Another role that may invoke the function (optional).
+  ReservedConcurrency:
+    Type: Number
+    Default: 2
+  MaxLlmCalls:
+    Type: Number
+    Default: 3
+    Description: Default DAK_MAX_LLM_CALLS per turn (#134).
+  MaxOutputTokens:
+    Type: Number
+    Default: 8000
+    Description: Default DAK_MAX_OUTPUT_TOKENS per LLM call (#134).
+  BudgetLimitUsd:
+    Type: Number
+    Default: 10
+    Description: Monthly budget; notified at 50% and 100% of the actual cost.
+  BudgetEmail:
+    Type: String
+
+Conditions:
+  HasSecondCaller: !Not [!Equals [!Ref SecondCallerRoleArn, '']]
+
+Resources:
+  JobTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: pk, AttributeType: S}
+        - {AttributeName: sk, AttributeType: S}
+      KeySchema:
+        - {AttributeName: pk, KeyType: HASH}
+        - {AttributeName: sk, KeyType: RANGE}
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+
+  FunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 7
+
+  DakFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      ImageUri: !Ref ImageUri
+      Architectures: [arm64]
+      MemorySize: 1536
+      Timeout: 900
+      ReservedConcurrentExecutions: !Ref ReservedConcurrency
+      LoggingConfig:
+        LogGroup: !Ref FunctionLogs
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0   # an async retry would bill the LLM call again
+      Environment:
+        Variables:
+          MODEL_NAME: !Ref ModelName
+          AWS_REGION_NAME: !Ref BedrockRegion
+          DAK_TABLE: !Ref JobTable
+          DAK_MAX_LLM_CALLS: !Ref MaxLlmCalls
+          DAK_MAX_OUTPUT_TOKENS: !Ref MaxOutputTokens
+          DAK_MAX_TURN_SECONDS: '840'   # stop before the 900 s timeout
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource: !Ref BedrockModelArns
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem]
+              Resource: !GetAtt JobTable.Arn
+
+  CallerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DakFunction
+      Principal: !Ref CallerRoleArn
+
+  SecondCallerPermission:
+    Type: AWS::Lambda::Permission
+    Condition: HasSecondCaller
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DakFunction
+      Principal: !Ref SecondCallerRoleArn
+
+  Budget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref BudgetLimitUsd
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 50
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - {SubscriptionType: EMAIL, Address: !Ref BudgetEmail}
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - {SubscriptionType: EMAIL, Address: !Ref BudgetEmail}
+
+Outputs:
+  FunctionArn:
+    Value: !GetAtt DakFunction.Arn
+  TableName:
+    Value: !Ref JobTable

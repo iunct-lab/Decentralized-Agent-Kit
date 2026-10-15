@@ -13,6 +13,7 @@ Claude Code 向けのリポジトリ・ガイド。エージェント全般の�
 | `mcp-server/` | FastMCP ツールサーバ（`main.py`, `policy.py` の安全層） | 8001 |
 | `bff/` | HTMX 用 Backend-for-Frontend（FastAPI） | 8002 |
 | `cli/` | `dak-cli`（Typer/Rich） | — |
+| `deploy/aws/` | Lambda 配置の SAM テンプレートと dev 用の呼び出し元役（`README.md`、`docs/architecture/serverless.md`） | — |
 | `tests/integration/` | Docker 横断の統合/E2E（fake-LLM, Playwright, 実LLMスモーク） | — |
 | `maintenance/` | 自己保守ツールキット（依存トリアージ）。`docs/maintenance/README.md` | — |
 
