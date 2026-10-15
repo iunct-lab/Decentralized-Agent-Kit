@@ -304,6 +304,24 @@ services:
       retries: 30
       start_period: 20s
 
+  # tests/integration/test_lambda_entry.py: the Lambda image (agent/Dockerfile.lambda) run
+  # with the runtime interface emulator, read-only root file system, no session database.
+  agent-lambda:
+    build:
+      context: ./agent
+      dockerfile: Dockerfile.lambda
+    read_only: true
+    tmpfs:
+      - /tmp
+    ports:
+      - "8016:8080"
+    environment:
+      - MODEL_NAME=openai/fake-lambda
+      - OPENAI_API_BASE=http://fake-llm:8080/v1
+      - OPENAI_API_KEY=dummy
+    depends_on:
+      - fake-llm
+
   mcp-server:
     healthcheck:
       # GET /mcp answers 4xx without a proper MCP handshake; any HTTP response means the server is up

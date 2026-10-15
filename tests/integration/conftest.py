@@ -17,6 +17,7 @@ AGENT_HARNESS_EVAL_URL = os.getenv("DAK_AGENT_HARNESS_EVAL_URL", "http://localho
 AGENT_CONSUMER_URL = os.getenv("DAK_AGENT_CONSUMER_URL", "http://localhost:8013")
 AGENT_AP2_INTENT_URL = os.getenv("DAK_AGENT_AP2_INTENT_URL", "http://localhost:8014")
 AGENT_WEBSEARCH_URL = os.getenv("DAK_AGENT_WEBSEARCH_URL", "http://localhost:8015")
+AGENT_LAMBDA_URL = os.getenv("DAK_AGENT_LAMBDA_URL", "http://localhost:8016")
 MCP_URL = os.getenv("DAK_MCP_URL", "http://localhost:8001/mcp")
 BFF_URL = os.getenv("DAK_BFF_URL", "http://localhost:8002")
 FAKE_LLM_URL = os.getenv("DAK_FAKE_LLM_URL", "http://localhost:8089")

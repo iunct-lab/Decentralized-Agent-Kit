@@ -1,0 +1,31 @@
+# Lambda container image for the DAK entry point `dak_agent.lambda_handler.handler`
+# (docs/architecture/serverless.md). Not the compose / dev image (`Dockerfile`).
+#
+# Two stages on the same base, so the wheels are built against the glibc they run on.
+# The runtime stage has only the dependencies and the agent: no gcc, uv or dev
+# dependencies. `agent.json` is not made: this entry does not serve an A2A card.
+# Nothing is written outside /tmp, so the root file system can be read-only.
+#
+#   docker buildx build --platform linux/arm64 -f agent/Dockerfile.lambda agent
+FROM public.ecr.aws/lambda/python:3.12 AS build
+
+RUN microdnf install -y gcc gcc-c++ && microdnf clean all
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --no-dev --no-emit-project --no-hashes -o /tmp/requirements.txt \
+    && pip install --no-cache-dir --target /deps -r /tmp/requirements.txt
+
+
+FROM public.ecr.aws/lambda/python:3.12
+
+ENV PYTHONDONTWRITEBYTECODE=1
+
+COPY --from=build /deps ${LAMBDA_TASK_ROOT}
+COPY dak_agent ${LAMBDA_TASK_ROOT}/dak_agent
+COPY skills ${LAMBDA_TASK_ROOT}/skills
+COPY provider_skills ${LAMBDA_TASK_ROOT}/provider_skills
+COPY profiles ${LAMBDA_TASK_ROOT}/profiles
+COPY agent_config.yaml ${LAMBDA_TASK_ROOT}/agent_config.yaml
+
+CMD ["dak_agent.lambda_handler.handler"]
