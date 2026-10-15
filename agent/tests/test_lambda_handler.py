@@ -3,6 +3,7 @@ turn in a throwaway in-memory session, without a database, and keeps the
 request text out of logs. Recording `BaseLlm` as in
 `test_call_scoped_output_schema.py`."""
 import logging
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -302,7 +303,8 @@ def ssm(monkeypatch):
     fake = _FakeSsm()
     monkeypatch.setattr(lambda_handler, "_ssm", lambda: fake)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    return fake
+    yield fake
+    os.environ.pop("ANTHROPIC_API_KEY", None)  # set by the code under test, not by monkeypatch
 
 
 @pytest.mark.asyncio
@@ -312,10 +314,8 @@ async def test_api_key_is_read_from_the_parameter_once(monkeypatch, ssm):
     _install(monkeypatch, llm)
     await lambda_handler.run({"message": "hi"})
     await lambda_handler.run({"message": "hi"})
-    import os
     assert os.environ["ANTHROPIC_API_KEY"] == "the-key-value"
     assert ssm.calls == [("/some/parameter", True)]
-    monkeypatch.delenv("ANTHROPIC_API_KEY")
 
 
 @pytest.mark.asyncio
@@ -347,4 +347,3 @@ async def test_key_value_is_not_logged(monkeypatch, caplog, ssm):
     with caplog.at_level(logging.DEBUG):
         await lambda_handler.run({"message": "hi"})
     assert "the-key-value" not in caplog.text
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)

@@ -23,8 +23,9 @@ Parameters:
   ApiKeyParameterName:
     Type: String
     Default: ''
+    AllowedPattern: '^(/.+)?$'
     Description: >
-      Name (not the value) of an SSM Parameter Store SecureString that holds the model API key,
+      Name, starting with `/` (not the value), of an SSM Parameter Store SecureString that holds the model API key,
       e.g. for Anthropic's API. The function may read only this parameter. Empty = no key is read.
   CallerRoleArn:
     Type: String
