@@ -44,8 +44,10 @@ DEFAULT_TEXT = "FAKE_LLM_DEFAULT_RESPONSE"
 _scripts: Dict[str, deque] = defaultdict(deque)
 # Log of received chat requests per model, for debugging from tests.
 _requests_log: Dict[str, List[dict]] = defaultdict(list)
-# The previous /v1/messages request per model, for the thinking-resend rule.
-_last_anthropic_request: Dict[str, dict] = {}
+# The previous /v1/messages request per (model, has tools), for the
+# thinking-resend rule. Calls without tools (the mode switch's meta call, the
+# compaction summarizer) are a different conversation from the agent's own.
+_last_anthropic_request: Dict[tuple, dict] = {}
 _signature_counter = 0
 
 
@@ -74,7 +76,8 @@ def set_script(model: str, script: Script):
 def clear_script(model: str):
     _scripts[_normalize_model(model)].clear()
     _requests_log[_normalize_model(model)].clear()
-    _last_anthropic_request.pop(_normalize_model(model), None)
+    for has_tools in (True, False):
+        _last_anthropic_request.pop((_normalize_model(model), has_tools), None)
     return {"queued": 0}
 
 
@@ -140,7 +143,7 @@ def _has_signed_thinking(messages: List[dict]) -> bool:
 def _thinking_resend_error(model: str, body: dict) -> Optional[str]:
     """The 400 message when a signed thinking block comes back after the
     request's system, tools or earlier turns changed; else None."""
-    previous = _last_anthropic_request.get(model)
+    previous = _last_anthropic_request.get((model, bool(body.get("tools"))))
     if previous is None:
         return None
     messages = body.get("messages", [])
@@ -161,7 +164,7 @@ async def anthropic_messages(body: dict):
     _requests_log[model].append({"system": system, "tools": tools, "messages": messages})
 
     error = _thinking_resend_error(model, body)
-    _last_anthropic_request[model] = {"system": system, "tools": tools, "messages": messages}
+    _last_anthropic_request[(model, bool(tools))] = {"system": system, "tools": tools, "messages": messages}
     if error:
         return JSONResponse(
             {"type": "error", "error": {"type": "invalid_request_error", "message": error}},
