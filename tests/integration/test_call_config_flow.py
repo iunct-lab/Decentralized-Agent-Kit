@@ -92,7 +92,7 @@ def test_call_model_rejected_when_not_in_allow_list(agent, fake_llm):
     errors = [json.loads(t) for t in event_texts(events) if "model_not_allowed" in t]
     assert errors, f"events: {events}"
     assert errors[-1]["requested_model"] == "openai/not-allowed"
-    assert errors[-1]["allowed_models"] == ["openai/fake-alt", "openai/fake-default"]
+    assert errors[-1]["allowed_models"] == ["anthropic/fake-claude", "openai/fake-alt", "openai/fake-default"]
     # No LLM was called at all.
     assert {m: _llm_requests(m) for m in before} == before
 
