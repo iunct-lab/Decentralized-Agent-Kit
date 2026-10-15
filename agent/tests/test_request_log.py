@@ -92,3 +92,16 @@ def test_fields_from_query_and_body():
     fields = request_log.request_fields(
         "/run", {"user_id": "q"}, {"session_id": "b", "app_name": 5, "state_delta": {"k": "v"}})
     assert fields == {"user_id": "q", "session_id": "b"}
+
+
+def test_body_ids_win_over_query_and_odd_mode_is_ignored():
+    fields = request_log.request_fields(
+        "/approvals/a/reply", {"user_id": "decoy", "session_id": "decoy"},
+        {"user_id": "victim", "session_id": "real", "mode": []})
+    assert fields == {"user_id": "victim", "session_id": "real", "approval_id": "a"}
+
+
+def test_handler_adds_a_timestamp():
+    [handler] = [h for h in request_log.logger.handlers if type(h) is request_log.logging.StreamHandler]
+    record = request_log.logging.LogRecord("n", 20, "f", 1, "request x", None, None)
+    assert re.match(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} request x$", handler.format(record))

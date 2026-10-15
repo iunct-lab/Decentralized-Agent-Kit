@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 # Uvicorn configures only its own loggers; like the tool_call line, this goes to
 # stderr on its own and only once.
 if not logger.handlers:
-    logger.addHandler(logging.StreamHandler())
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    logger.addHandler(_handler)
     logger.setLevel(logging.INFO)
     logger.propagate = False
 
@@ -35,16 +37,17 @@ def request_fields(path: str, query: Mapping[str, str], body: Any) -> dict[str, 
     fields: dict[str, str] = {}
     if m := _SESSION_PATH.match(path):
         fields.update({k: v for k, v in zip(_IDS, m.groups()) if v})
-    for key in _IDS:
-        if key not in fields and key in query:
-            fields[key] = query[key]
+    # The body wins over the query: the POST routes act on the body's ids.
     if isinstance(body, dict):
         for key in _IDS:
             if key not in fields and isinstance(body.get(key), str):
                 fields[key] = body[key]
+    for key in _IDS:
+        if key not in fields and key in query:
+            fields[key] = query[key]
     if m := _APPROVAL_REPLY.match(path):
         fields["approval_id"] = m.group(1)
-        if isinstance(body, dict) and body.get("mode") in MODES:
+        if isinstance(body, dict) and isinstance(body.get("mode"), str) and body["mode"] in MODES:
             fields["mode"] = body["mode"]
     return fields
 
