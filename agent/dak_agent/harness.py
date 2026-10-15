@@ -883,26 +883,36 @@ def _digest(value: Any) -> str:
 
 
 def request_shape(llm_request) -> dict:
-    """What a provider that keys on the request's earlier parts sees: digests of
-    the system instruction, the tool declarations and each turn."""
+    """What a provider that keys on the request's earlier parts sees: digests
+    of the system instruction and the tool declarations, the number of turns,
+    and one digest of all of them (a list per turn would grow with the session
+    state)."""
     config = getattr(llm_request, "config", None)
     tools = [t.model_dump(mode="json", exclude_none=True) for t in (getattr(config, "tools", None) or [])]
+    contents = [c.model_dump(mode="json", exclude_none=True) for c in llm_request.contents or []]
     return {
         "system": _digest(str(getattr(config, "system_instruction", None))),
         "tools": _digest(tools),
-        "contents": [_digest(c.model_dump(mode="json", exclude_none=True)) for c in llm_request.contents or []],
+        "turns": len(contents),
+        "contents": _digest(contents),
     }
 
 
-def prefix_changed(prev: Optional[dict], cur: dict) -> bool:
-    """True when `cur` is not `prev` plus newer turns: the system instruction or
-    the tools differ, or an earlier turn was changed (compaction, elision,
-    pruning). No `prev` (the first call of the session) is not a change."""
+def prefix_changed(prev: Optional[dict], llm_request) -> bool:
+    """True when `llm_request` is not the `prev` request plus newer turns: the
+    system instruction or the tools differ, or one of the turns `prev` had was
+    changed (compaction, elision, pruning). No `prev` (the first call of the
+    session) is not a change."""
     if not isinstance(prev, dict):
         return False
-    old = prev.get("contents") or []
-    return (prev.get("system") != cur["system"] or prev.get("tools") != cur["tools"]
-            or cur["contents"][:len(old)] != old)
+    cur = request_shape(llm_request)
+    if prev.get("system") != cur["system"] or prev.get("tools") != cur["tools"]:
+        return True
+    turns = prev.get("turns")
+    if not isinstance(turns, int) or turns > cur["turns"]:
+        return True
+    earlier = [c.model_dump(mode="json", exclude_none=True) for c in (llm_request.contents or [])[:turns]]
+    return _digest(earlier) != prev.get("contents")
 
 
 def drop_signed_thoughts(llm_request) -> int:
@@ -1489,14 +1499,12 @@ class ContextHarnessPlugin(BasePlugin):
         if not _is_anthropic_model(getattr(llm_request, "model", None)):
             return
         state = callback_context.state
-        shape = request_shape(llm_request)
-        if prefix_changed(state.get(STATE_LAST_REQUEST_SHAPE), shape):
+        if prefix_changed(state.get(STATE_LAST_REQUEST_SHAPE), llm_request):
             dropped = drop_signed_thoughts(llm_request)
             if dropped:
                 logger.info("Context harness: the request's earlier parts changed; dropped %d signed thought(s)",
                             dropped)
-                shape = request_shape(llm_request)
-        state[STATE_LAST_REQUEST_SHAPE] = shape
+        state[STATE_LAST_REQUEST_SHAPE] = request_shape(llm_request)
 
     async def on_model_error_callback(self, *, callback_context, llm_request, error) -> Optional[LlmResponse]:
         """Retry a request the model rejected for size on a halved budget, a
@@ -1515,6 +1523,8 @@ class ContextHarnessPlugin(BasePlugin):
         for attempt in range(1, settings.model_error_retry_attempts + 1):
             budget = max(1, budget // 2)
             elided = fit_request_to_budget(llm_request, budget)
+            if elided and _is_anthropic_model(getattr(llm_request, "model", None)):
+                drop_signed_thoughts(llm_request)  # the elision changed earlier turns (#765)
             logger.warning(
                 "Context harness: model rejected the request for size; retry %d/%d on %d tokens "
                 "(%d part(s) elided): %s", attempt, settings.model_error_retry_attempts, budget, elided, error)

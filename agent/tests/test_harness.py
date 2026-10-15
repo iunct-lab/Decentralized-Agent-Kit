@@ -2484,3 +2484,20 @@ class TestSignedThoughtsAfterPrefixChange:
         state = {}
         await self._send(self._plugin(), state, request({"b": 1, "a": 2}))
         assert await self._send(self._plugin(), state, request({"a": 2, "b": 1})) == []
+
+    @pytest.mark.asyncio
+    async def test_thoughts_stay_dropped_on_the_calls_after_a_change(self):
+        # The session rebuilds the signed thoughts every call; the provider saw
+        # them dropped, so sending them back again would change earlier turns.
+        state = {}
+        model = "anthropic/claude-haiku-5-5"
+        await self._send(self._plugin(), state, self._request(model))
+        assert await self._send(self._plugin(), state, self._request(model, system="sys2")) == []
+        assert await self._send(self._plugin(), state, self._request(model, system="sys2", extra_user_turns=1)) == []
+
+    @pytest.mark.asyncio
+    async def test_state_holds_one_digest_not_one_per_turn(self):
+        state = {}
+        await self._send(self._plugin(), state, self._request("anthropic/claude-haiku-5-5", extra_user_turns=20))
+        shape = state[harness.STATE_LAST_REQUEST_SHAPE]
+        assert shape["turns"] == 23 and isinstance(shape["contents"], str)
