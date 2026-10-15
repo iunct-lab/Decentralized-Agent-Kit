@@ -112,6 +112,15 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 - `dak:tools` が無ければ `[]` を入れる。MCP サーバを配置しないので、届かない接続先を待たない
 - 呼び出しの本文と `state_delta` の値はログに出さない
 
+#### ジョブ（非同期の受け取り、#716）
+
+結果の受け取りは「Event 呼び出し + 同じ関数の `op: get` でポーリング」に決めた（A2A の task は Lambda が呼び出しをまたいで持てず、Destinations は結果がジョブ ID でポーリングできないため）。
+
+- 開始: `{"message": …, "job_id": "<id>"}` を `InvokeFunction`（Event）で呼ぶ。`job_id` があると、ターンの前に `DAK_TABLE` へ `pk = J#<job_id>`, `sk = JOB` を条件付きで書く（同じ `job_id` の 2 回目は実行せず `job_exists`）。終わると `succeeded`（`output`）か `failed`（`error`）に更新する。1 日後に TTL（`expires_at`）で消える
+- 確認: `{"op": "get", "job_id": "<id>"}` を同期 `Invoke` で呼ぶと `{"job_id", "status", "output"?, "error"?}` を返す
+- 状態: `running` / `succeeded` / `failed` / `timed_out`（`running` のまま Lambda のタイムアウトの時刻を過ぎた）/ `not_found`
+- 失敗の理由: `job_exists`、`table_not_configured`（`DAK_TABLE` が無い）、`output_too_large`（350 KB 超。DynamoDB の 1 件の上限 400 KB）、`invalid_event`、例外のクラス名
+
 ### S2: Bedrock AgentCore Runtime（v2、東京対応）
 
 - A2A または HTTP のプロトコルで配置する。呼び出し元は SigV4 で `InvokeAgentRuntime` を呼ぶ。セッションは microVM に固定され、長時間の実行もストリーミングも扱える。
