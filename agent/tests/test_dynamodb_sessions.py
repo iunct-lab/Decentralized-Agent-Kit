@@ -257,3 +257,16 @@ async def test_concurrent_user_state_updates_are_not_lost(svc):
     svc._get = real_get
 
     assert await svc.get_user_state(app_name=APP, user_id="u") == {"from_a": 1, "from_b": 2}
+
+
+@pytest.mark.asyncio
+async def test_expired_user_state_not_yet_deleted_can_be_replaced():
+    table = FakeTable()
+    old = DynamoDbSessionService(table, ttl_seconds=-10)
+    old._put_scoped_state("U#a#u", {"stale": 1}, time.time())
+    svc = DynamoDbSessionService(table)
+    assert await svc.get_user_state(app_name="a", user_id="u") == {}
+
+    svc._put_scoped_state("U#a#u", {"fresh": 2}, time.time())
+
+    assert await svc.get_user_state(app_name="a", user_id="u") == {"fresh": 2}
