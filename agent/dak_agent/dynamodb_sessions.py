@@ -81,8 +81,11 @@ class DynamoDbSessionService(BaseSessionService):
     def _expires_at(self, now: float) -> int:
         return int(now) + self._ttl
 
+    def _get_raw(self, pk: str, sk: str) -> Optional[dict[str, Any]]:
+        return self._table.get_item(Key={"pk": pk, "sk": sk}, ConsistentRead=True).get("Item")
+
     def _get(self, pk: str, sk: str) -> Optional[dict[str, Any]]:
-        item = self._table.get_item(Key={"pk": pk, "sk": sk}, ConsistentRead=True).get("Item")
+        item = self._get_raw(pk, sk)
         if item is None or int(item.get("expires_at", 0)) < time.time():
             return None
         return item
@@ -119,8 +122,11 @@ class DynamoDbSessionService(BaseSessionService):
         # app:/user: state is shared by sessions that may run concurrently, so a
         # plain read-modify-write would lose updates: write conditionally on `ver`.
         for _ in range(_STATE_RETRIES):
-            item = self._get(pk, "STATE")
-            state = json.loads(item["state"]) if item else {}
+            # An expired item still exists until DynamoDB deletes it: keep its
+            # version for the condition, but start from empty state.
+            item = self._get_raw(pk, "STATE")
+            live = item is not None and int(item.get("expires_at", 0)) >= time.time()
+            state = json.loads(item["state"]) if live else {}
             state.update(delta)
             ver = int(item["ver"]) if item else 0
             try:
@@ -277,7 +283,7 @@ class DynamoDbSessionService(BaseSessionService):
         # (`temp:` keys trimmed) must fit in one item.
         sk = _event_sk(event)
         body = self._trim_temp_delta_state(event.model_copy(deep=True)).model_dump_json()
-        if len(body.encode("utf-8")) + len(pk.encode("utf-8")) + len(sk) + _ITEM_OVERHEAD > MAX_ITEM_BYTES:
+        if len(body.encode("utf-8")) + len(pk.encode("utf-8")) + len(sk.encode("utf-8")) + _ITEM_OVERHEAD > MAX_ITEM_BYTES:
             raise ValueError("event_too_large")
         # Applies the state delta to `session` in memory and trims `temp:` keys
         # from the event, so they are never written.
