@@ -61,10 +61,14 @@ Resources:
               job_id = str(uuid.uuid4())
               body = {"message": event["message"], "state_delta": event.get("state_delta", {}), "job_id": job_id}
               client.invoke(FunctionName=arn, InvocationType="Event", Payload=json.dumps(body).encode())
+              missing = 0
               while True:
                   time.sleep(5)
                   got = json.loads(client.invoke(
                       FunctionName=arn, Payload=json.dumps({"op": "get", "job_id": job_id}).encode())["Payload"].read())
+                  missing = missing + 1 if got.get("status") == "not_found" else 0
+                  if missing > 12:  # the event was dropped (e.g. throttled): do not wait for ever
+                      return {"status": "failed", "error": "job_not_started"}
                   if got.get("status") not in ("running", "not_found"):
                       return got
 
