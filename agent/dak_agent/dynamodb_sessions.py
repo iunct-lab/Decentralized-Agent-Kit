@@ -21,8 +21,10 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from urllib.parse import quote
 from typing import Any, Optional
 
+from botocore.exceptions import ClientError
 from google.adk.errors.already_exists_error import AlreadyExistsError
 from google.adk.errors.session_not_found_error import SessionNotFoundError
 from google.adk.events.event import Event
@@ -36,23 +38,30 @@ from google.adk.sessions.session import Session
 from google.adk.sessions.state import State
 
 TTL_SECONDS = 7 * 24 * 3600
-# DynamoDB's item limit is 400 KB; leave room for the key and attributes.
-MAX_EVENT_BYTES = 400 * 1024 - 1024
+MAX_ITEM_BYTES = 400 * 1024  # DynamoDB's item limit
+_ITEM_OVERHEAD = 256  # attribute names, `expires_at`, and a margin
+_STATE_RETRIES = 5
 
 _EVENT_PREFIX = "E#"
 _EVENT_END = "E#~"  # above any timestamp / uuid, below "META"
 
 
+def _q(part: str) -> str:
+    # "#" separates the parts of a key; escape it so that two different
+    # (app, user, session) triples can never produce the same key.
+    return quote(part, safe="")
+
+
 def _session_pk(app_name: str, user_id: str, session_id: str) -> str:
-    return f"S#{app_name}#{user_id}#{session_id}"
+    return f"S#{_q(app_name)}#{_q(user_id)}#{_q(session_id)}"
 
 
 def _user_pk(app_name: str, user_id: str) -> str:
-    return f"U#{app_name}#{user_id}"
+    return f"U#{_q(app_name)}#{_q(user_id)}"
 
 
 def _app_pk(app_name: str) -> str:
-    return f"A#{app_name}"
+    return f"A#{_q(app_name)}"
 
 
 def _event_sk(event: Event) -> str:
@@ -73,7 +82,7 @@ class DynamoDbSessionService(BaseSessionService):
         return int(now) + self._ttl
 
     def _get(self, pk: str, sk: str) -> Optional[dict[str, Any]]:
-        item = self._table.get_item(Key={"pk": pk, "sk": sk}).get("Item")
+        item = self._table.get_item(Key={"pk": pk, "sk": sk}, ConsistentRead=True).get("Item")
         if item is None or int(item.get("expires_at", 0)) < time.time():
             return None
         return item
@@ -88,6 +97,7 @@ class DynamoDbSessionService(BaseSessionService):
         start_key = None
         while True:
             call = dict(
+                ConsistentRead=True,
                 KeyConditionExpression="pk = :pk AND sk BETWEEN :lo AND :hi",
                 ExpressionAttributeValues={":pk": pk, ":lo": lo, ":hi": hi},
                 **kwargs,
@@ -106,9 +116,25 @@ class DynamoDbSessionService(BaseSessionService):
         return json.loads(item["state"]) if item else {}
 
     def _put_scoped_state(self, pk: str, delta: dict[str, Any], now: float) -> None:
-        state = self._scoped_state(pk)
-        state.update(delta)
-        self._put(pk, "STATE", now, state=json.dumps(state))
+        # app:/user: state is shared by sessions that may run concurrently, so a
+        # plain read-modify-write would lose updates: write conditionally on `ver`.
+        for _ in range(_STATE_RETRIES):
+            item = self._get(pk, "STATE")
+            state = json.loads(item["state"]) if item else {}
+            state.update(delta)
+            ver = int(item["ver"]) if item else 0
+            try:
+                self._table.put_item(
+                    Item={"pk": pk, "sk": "STATE", "expires_at": self._expires_at(now),
+                          "state": json.dumps(state), "ver": ver + 1},
+                    ConditionExpression="attribute_not_exists(pk) OR ver = :ver",
+                    ExpressionAttributeValues={":ver": ver},
+                )
+                return
+            except ClientError as e:
+                if e.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                    raise
+        raise RuntimeError("state_update_conflict")
 
     def _merged(self, session: Session) -> Session:
         for key, value in self._scoped_state(_app_pk(session.app_name)).items():
@@ -247,15 +273,18 @@ class DynamoDbSessionService(BaseSessionService):
         pk = _session_pk(session.app_name, session.user_id, session.id)
         if self._get(pk, "META") is None:
             raise SessionNotFoundError(f"Session {session.id} not found.")
+        # Reject before touching `session`: the event as it will be written
+        # (`temp:` keys trimmed) must fit in one item.
+        sk = _event_sk(event)
+        body = self._trim_temp_delta_state(event.model_copy(deep=True)).model_dump_json()
+        if len(body.encode("utf-8")) + len(pk.encode("utf-8")) + len(sk) + _ITEM_OVERHEAD > MAX_ITEM_BYTES:
+            raise ValueError("event_too_large")
         # Applies the state delta to `session` in memory and trims `temp:` keys
         # from the event, so they are never written.
         await super().append_event(session, event)
-        body = event.model_dump_json()
-        if len(body.encode("utf-8")) > MAX_EVENT_BYTES:
-            raise ValueError("event_too_large")
         now = time.time()
         session.last_update_time = event.timestamp
-        self._put(pk, _event_sk(event), now, event=body)
+        self._put(pk, sk, now, event=body)
         if event.actions and event.actions.state_delta:
             deltas = _session_util.extract_json_safe_state_delta(event.actions.state_delta)
             if deltas["app"]:
