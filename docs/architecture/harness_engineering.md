@@ -341,18 +341,19 @@ Anthropic API では確かめていない。課金を伴うため）:
 |------|-----------|-----------|--------|
 | モード切替（`adaptive_agent.py`） | 当たった | system 指示と tools | `tests/integration/test_thinking_blocks.py::test_mode_switch_with_signed_thinking_continues` |
 | 圧縮（`BudgetedEventSummarizer`） | 当たった | 前のターン（要約に置き換わる） | `test_compaction_with_signed_thinking_continues` |
-| 予算の歯止めの省略（`fit_request_to_budget`） | 当たりうる（前のターンを変える。圧縮のテストは小さい窓で省略も通る） | 前のターン | 同上と `agent/tests/test_harness.py::TestSignedThoughtsAfterPrefixChange` |
+| 予算の歯止めの省略（`fit_request_to_budget`） | 当たりうる（前のターンを変える。統合テストで省略が起きたかは確かめていない） | 前のターン | 同上と `agent/tests/test_harness.py::TestSignedThoughtsAfterPrefixChange` |
 | 古いツール結果の刈り込み（`prune_old_tool_results`） | 当たりうる（前のターンを変える） | 前のターン | 同上 |
-| 保存したセッションの読み戻し（PostgreSQL の jsonb） | 当たった | ツール結果の key の順番（LiteLLM は順番のまま送る） | `test_compaction_with_signed_thinking_continues`（sort_keys を使った版は 400 のまま残った） |
+| 保存したセッションの読み戻し（PostgreSQL の jsonb） | 当たった | ツール結果の key の順番（LiteLLM は順番のまま送る） | `test_compaction_with_signed_thinking_continues`、単体は `test_reordered_keys_in_an_earlier_turn_count_as_a_change`（key の順番を整える版では 400 のまま残った） |
 
 省略と刈り込みは個別の統合テストを持たない（モード切替・圧縮と同じ経路で、
 `before_model_callback` の末尾が前回との差で扱うため）。
 
 **直し方**（`ContextHarnessPlugin.before_model_callback` の末尾、`harness.py`）: Anthropic のモデル
-（`anthropic/` か名前に claude）のとき、今回のリクエストの形（`request_shape`: system・tools・各ターンの
-digest）をセッションの state `dak_harness_last_request_shape` の前回と比べ（`prefix_changed`）、前の
+（`anthropic/` か名前に claude）のとき、今回のリクエストの形（`request_shape`: system・tools の digest、ターン数、
+全ターンの digest 1 つ）をセッションの state `dak_harness_last_request_shape` の前回と比べ（`prefix_changed`）、前の
 部分が変わっていれば署名付きの thought を落とす（`drop_signed_thoughts`）。そのあと、送った形を
-state に書く。変わっていなければ残す。digest は key の順番を整えない（プロバイダが見る順番のまま）。
+state に書く（落とした後の形なので、変更のあとの呼び出しでも毎回落とす）。サイズ超過の再試行
+（`on_model_error_callback`）で省略したときも落とす。変わっていなければ残す。digest は key の順番を整えない（プロバイダが見る順番のまま）。
 モード切替・圧縮・省略・刈り込みのどれで変わっても同じ経路で扱う。前の部分を変えないように
 モード切替・圧縮を作り替えることはしていない（モード切替を残すかは #92）。
 
