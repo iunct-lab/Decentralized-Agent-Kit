@@ -2418,3 +2418,69 @@ async def test_tool_error_after_a_rewrite_takes_the_usual_error_path(monkeypatch
         monkeypatch, shell, {"hookSpecificOutput": {"updatedInput": {"command": "ls -la"}}})
     assert response["observation"] == "hook_rewrote_input"
     assert response["result"] == {"error": "boom: ls -la"}
+
+
+class TestSignedThoughtsAfterPrefixChange:
+    """PBI #765: Claude 5.5 answers 400 to a signed thinking block sent back in
+    a request whose system, tools or earlier turns changed since the last one."""
+
+    def _request(self, model, system="sys", extra_user_turns=0):
+        contents = [
+            types.Content(role="user", parts=[types.Part(text="q")]),
+            types.Content(role="model", parts=[
+                types.Part(text="hmm", thought=True, thought_signature=b"sig"),
+                types.Part(function_call=types.FunctionCall(id="1", name="t", args={}))]),
+            types.Content(role="user", parts=[types.Part(function_response=types.FunctionResponse(
+                id="1", name="t", response={"result": "ok"}))]),
+        ]
+        contents += [types.Content(role="user", parts=[types.Part(text=f"more {i}")]) for i in range(extra_user_turns)]
+        return LlmRequest(model=model, contents=contents,
+                          config=types.GenerateContentConfig(system_instruction=system))
+
+    async def _send(self, plugin, state, request):
+        ctx = _ArtifactContext()
+        ctx.state = state
+        with patch("dak_agent.call_config.resolve_dak_settings", return_value={}):
+            await plugin.before_model_callback(callback_context=ctx, llm_request=request)
+        return [p for c in request.contents for p in c.parts or [] if p.thought and p.thought_signature]
+
+    def _plugin(self):
+        return ContextHarnessPlugin(HarnessSettings(context_window=200_000), "test-model")
+
+    @pytest.mark.asyncio
+    async def test_signed_thoughts_dropped_for_anthropic_when_prefix_changes(self):
+        state = {}
+        assert await self._send(self._plugin(), state, self._request("anthropic/claude-haiku-5-5"))
+        after_switch = await self._send(self._plugin(), state, self._request("anthropic/claude-haiku-5-5", system="sys2"))
+        assert after_switch == []
+        # an earlier turn changed (compaction) on a later call: still dropped
+        state2 = {}
+        await self._send(self._plugin(), state2, self._request("anthropic/claude-haiku-5-5", extra_user_turns=1))
+        compacted = self._request("anthropic/claude-haiku-5-5", extra_user_turns=1)
+        compacted.contents[0] = types.Content(role="user", parts=[types.Part(text="summary")])
+        assert await self._send(self._plugin(), state2, compacted) == []
+
+    @pytest.mark.asyncio
+    async def test_signed_thoughts_kept_for_anthropic_when_prefix_unchanged(self):
+        state = {}
+        await self._send(self._plugin(), state, self._request("anthropic/claude-haiku-5-5"))
+        grown = self._request("anthropic/claude-haiku-5-5", extra_user_turns=1)
+        assert len(await self._send(self._plugin(), state, grown)) == 1
+
+    @pytest.mark.asyncio
+    async def test_signed_thoughts_kept_for_gemini_when_prefix_changes(self):
+        state = {}
+        await self._send(self._plugin(), state, self._request("gemini/gemini-3-flash"))
+        changed = self._request("gemini/gemini-3-flash", system="sys2")
+        assert len(await self._send(self._plugin(), state, changed)) == 1
+
+    @pytest.mark.asyncio
+    async def test_reordered_keys_in_an_earlier_turn_count_as_a_change(self):
+        # A session stored as jsonb returns a tool response's keys reordered; the provider sees that.
+        def request(response):
+            r = self._request("anthropic/claude-haiku-5-5", extra_user_turns=1)
+            r.contents[2].parts[0].function_response.response = response
+            return r
+        state = {}
+        await self._send(self._plugin(), state, request({"b": 1, "a": 2}))
+        assert await self._send(self._plugin(), state, request({"a": 2, "b": 1})) == []

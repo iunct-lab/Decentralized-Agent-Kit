@@ -72,6 +72,7 @@ READ_TOOL_OUTPUT_NAME = "read_tool_output"
 # more than `compaction_warning_count` (a new session would answer better).
 STATE_COMPACTION_COUNT = "dak_compaction_count"
 STATE_RECOMMEND_NEW_SESSION = "dak_recommend_new_session"
+STATE_LAST_REQUEST_SHAPE = "dak_harness_last_request_shape"  # digests of the last request sent (#765)
 
 # Fraction of the context window a single tool result may occupy. Several
 # results usually accumulate before compaction can run, so keep it small.
@@ -875,6 +876,55 @@ def _tail_keep_count(contents: list, budget_tokens: int, limit_tokens: int) -> i
     return total - boundary if _is_user_turn(contents[boundary]) else total - start
 
 
+def _digest(value: Any) -> str:
+    # Not sort_keys: the provider sees the key order, and a session stored in
+    # PostgreSQL (jsonb) comes back reordered, which changes the request.
+    return hashlib.sha256(json.dumps(value, default=str).encode()).hexdigest()
+
+
+def request_shape(llm_request) -> dict:
+    """What a provider that keys on the request's earlier parts sees: digests of
+    the system instruction, the tool declarations and each turn."""
+    config = getattr(llm_request, "config", None)
+    tools = [t.model_dump(mode="json", exclude_none=True) for t in (getattr(config, "tools", None) or [])]
+    return {
+        "system": _digest(str(getattr(config, "system_instruction", None))),
+        "tools": _digest(tools),
+        "contents": [_digest(c.model_dump(mode="json", exclude_none=True)) for c in llm_request.contents or []],
+    }
+
+
+def prefix_changed(prev: Optional[dict], cur: dict) -> bool:
+    """True when `cur` is not `prev` plus newer turns: the system instruction or
+    the tools differ, or an earlier turn was changed (compaction, elision,
+    pruning). No `prev` (the first call of the session) is not a change."""
+    if not isinstance(prev, dict):
+        return False
+    old = prev.get("contents") or []
+    return (prev.get("system") != cur["system"] or prev.get("tools") != cur["tools"]
+            or cur["contents"][:len(old)] != old)
+
+
+def drop_signed_thoughts(llm_request) -> int:
+    """Drop the thoughts that carry a signature from the request's turns
+    (replaced, not mutated: the Content objects are the session's own).
+    Returns how many parts were dropped."""
+    contents = llm_request.contents or []
+    dropped = 0
+    for index, content in enumerate(contents):
+        parts = content.parts or []
+        kept = [p for p in parts if not (p.thought and p.thought_signature)]
+        if len(kept) == len(parts):
+            continue
+        dropped += len(parts) - len(kept)
+        contents[index] = types.Content(role=content.role, parts=kept or [types.Part(text="[thoughts elided]")])
+    return dropped
+
+
+def _is_anthropic_model(model: Any) -> bool:
+    return isinstance(model, str) and (model.startswith("anthropic/") or "claude" in model.lower())
+
+
 def fit_request_to_budget(llm_request, budget_tokens: int, keep_last: int = 2) -> int:
     """Elide the oldest tool payloads / long texts until the request fits.
 
@@ -1426,7 +1476,27 @@ class ContextHarnessPlugin(BasePlugin):
         keep_last = _tail_keep_count(llm_request.contents or [], settings.tail_reserve_tokens,
                                      budget - _fixed_request_tokens(llm_request))
         fit_request_to_budget(llm_request, budget, keep_last=keep_last)
+        self._drop_signed_thoughts_after_change(callback_context, llm_request)
         return None
+
+    @staticmethod
+    def _drop_signed_thoughts_after_change(callback_context, llm_request) -> None:
+        """Claude 5.5 answers 400 to a signed thinking block sent back in a
+        request whose system, tools or earlier turns changed since the last
+        one (#765). A mode switch, a compaction, an elision or a prune changes
+        them, so drop the signed thoughts then. Other providers (Gemini) keep
+        theirs: their signature is state the next call needs."""
+        if not _is_anthropic_model(getattr(llm_request, "model", None)):
+            return
+        state = callback_context.state
+        shape = request_shape(llm_request)
+        if prefix_changed(state.get(STATE_LAST_REQUEST_SHAPE), shape):
+            dropped = drop_signed_thoughts(llm_request)
+            if dropped:
+                logger.info("Context harness: the request's earlier parts changed; dropped %d signed thought(s)",
+                            dropped)
+                shape = request_shape(llm_request)
+        state[STATE_LAST_REQUEST_SHAPE] = shape
 
     async def on_model_error_callback(self, *, callback_context, llm_request, error) -> Optional[LlmResponse]:
         """Retry a request the model rejected for size on a halved budget, a

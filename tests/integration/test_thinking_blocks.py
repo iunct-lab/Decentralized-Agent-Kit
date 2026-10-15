@@ -9,26 +9,25 @@ import json
 import uuid
 
 import httpx
-import pytest
 
 from conftest import APP_NAME, event_texts, function_calls
 
-XFAIL = pytest.mark.xfail(strict=True, reason="#765: 前の部分が変わったリクエストに署名付きの thinking を送り返して 400（修正は #771）")
 MODEL = "fake-claude"
+META_MODEL = "fake-default"
 STATE = {"dak:model": f"anthropic/{MODEL}"}
 ORIGINAL_REQUEST = "Please tidy the notes folder, step by step."
 
 
-@XFAIL
 def test_mode_switch_with_signed_thinking_continues(agent, fake_llm):
     fake_llm.clear(MODEL)
+    fake_llm.clear(META_MODEL)
     fake_llm.script(MODEL, [
         fake_llm.thinking("a mode switch may help", fake_llm.tool_call("switch_mode", reason="focus", new_focus="read files")),
-        # mode_manager's meta call reads the same scripted model
-        fake_llm.text(json.dumps({"instruction": "Focus on reading files.",
-                                  "selected_tools": ["read_file", "switch_mode"], "selected_skills": []})),
         fake_llm.thinking("now answer", fake_llm.text("switched and answered")),
     ])
+    # mode_manager's meta call runs on the startup model, not the call's `dak:model`
+    fake_llm.script(META_MODEL, [fake_llm.text(json.dumps({
+        "instruction": "Focus on reading files.", "selected_tools": ["read_file", "switch_mode"], "selected_skills": []}))])
 
     events = agent.run(agent.create_session(STATE), "Look at the files.")
 
@@ -36,7 +35,6 @@ def test_mode_switch_with_signed_thinking_continues(agent, fake_llm):
     assert "switched and answered" in event_texts(events), f"events: {events}"
 
 
-@XFAIL
 def test_compaction_with_signed_thinking_continues(agent_harness_eval, fake_llm):
     fake_llm.clear(MODEL)
     session_id = agent_harness_eval.create_session(STATE)
