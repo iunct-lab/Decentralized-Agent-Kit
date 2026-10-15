@@ -129,6 +129,23 @@ MRTR の形: サーバはクライアントの要求（`tools/call` など）に
 | — | `sampling/createMessage` の `inputRequests` | **未対応**（範囲外） |
 | mcp-server が `input_required` を返したときの透過 | — | **未対応**。agent の mcp は 2.3.0 から `InputRequiredResult` を持つが、ADK（2.11）の `McpTool` は結果の `resultType` を捨てるだけで扱わない。mcp-server 側の対応は #112 で追う |
 
+## Lambda でのセッションの保存先（PBI #721 / Task #720）
+
+保留（承認と質問）は専用の置き場を持たず、セッションのイベント列から導く（上の設計のとおり）。Lambda でターンをまたいで残すときは、`agent/dak_agent/dynamodb_sessions.py` の `DynamoDbSessionService`（ADK の `BaseSessionService`）がイベントを DynamoDB に置く。ジョブと同じ 1 つの表に、キーの接頭辞で分ける:
+
+| `pk` | `sk` | 中身 |
+|---|---|---|
+| `S#<app>#<user>#<session>` | `META` | セッションの state・`last_update_time` |
+| 同上 | `E#<timestamp>#<event_id>` | イベント 1 件（`Event` の JSON） |
+| `U#<app>#<user>` | `STATE` | `user:` の state |
+| 同上 | `S#<session>` | その利用者のセッションの索引（`list_sessions` を Scan せずに引く） |
+| `A#<app>` | `STATE` | `app:` の state |
+
+- 各項目は最後の書き込みから 7 日で TTL により消える（`expires_at`）。DynamoDB の削除は遅れるので、読むときも期限切れは無いものとして扱う。長く続くセッションの古いイベントは、書いてから 7 日で先に消える
+- `temp:` の state は書かない。1 件が約 400 KB を超えるイベントは書かずに `ValueError("event_too_large")`
+- アーティファクト（`read_tool_output` の全文）は残さない。同じターンの中でだけ読める
+- 同じセッションの同時書き込みの錠はこのサービスにはない（#722 の `lambda_handler.py` が持つ）
+
 ## Task への影響（PBI #100 の決定ログにも書く）
 
 - #173: 一覧の各件のキー名を `fc_id` ではなく `id` にし、`kind` もここで付ける（質問と同じ一覧に並べるため）。それ以外は Task 本文どおり
