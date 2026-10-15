@@ -162,7 +162,7 @@ class DynamoDbSessionService(BaseSessionService):
         )
         self._put(
             _user_pk(session.app_name, session.user_id),
-            f"S#{session.id}",
+            f"S#{_q(session.id)}",
             now,
             session_id=session.id,
         )
@@ -243,7 +243,7 @@ class DynamoDbSessionService(BaseSessionService):
         if user_id is None:
             raise ValueError("user_id is required: DynamoDbSessionService does not scan the table")
         sessions = []
-        for entry in self._query(_user_pk(app_name, user_id), "S#", "S#~"):
+        for entry in self._query(_user_pk(app_name, user_id), "S#", "S#\U0010ffff"):
             meta = self._get(_session_pk(app_name, user_id, entry["session_id"]), "META")
             if meta is None:
                 continue
@@ -268,7 +268,7 @@ class DynamoDbSessionService(BaseSessionService):
         pk = _session_pk(app_name, user_id, session_id)
         for item in self._query(pk, "E#", "META"):  # events and META
             self._table.delete_item(Key={"pk": pk, "sk": item["sk"]})
-        self._table.delete_item(Key={"pk": _user_pk(app_name, user_id), "sk": f"S#{session_id}"})
+        self._table.delete_item(Key={"pk": _user_pk(app_name, user_id), "sk": f"S#{_q(session_id)}"})
 
     async def get_user_state(self, *, app_name: str, user_id: str) -> dict[str, Any]:
         return self._scoped_state(_user_pk(app_name, user_id))

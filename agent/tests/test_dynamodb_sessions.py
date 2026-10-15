@@ -270,3 +270,16 @@ async def test_expired_user_state_not_yet_deleted_can_be_replaced():
     svc._put_scoped_state("U#a#u", {"fresh": 2}, time.time())
 
     assert await svc.get_user_state(app_name="a", user_id="u") == {"fresh": 2}
+
+
+@pytest.mark.asyncio
+async def test_non_ascii_session_ids_are_listed_and_deleted(svc):
+    for sid in ("日本語", "~tilde", "plain"):
+        await svc.create_session(app_name=APP, user_id="u", session_id=sid)
+
+    listed = {s.id for s in (await svc.list_sessions(app_name=APP, user_id="u")).sessions}
+    assert listed == {"日本語", "~tilde", "plain"}
+
+    await svc.delete_session(app_name=APP, user_id="u", session_id="日本語")
+    listed = {s.id for s in (await svc.list_sessions(app_name=APP, user_id="u")).sessions}
+    assert listed == {"~tilde", "plain"}
