@@ -2,7 +2,10 @@
 DynamoDB continues across turns. A dict-backed fake table stands in for boto3's
 `Table`; the 2-turn test drives a real ADK `Runner` with a recording `BaseLlm`
 (same technique as `test_call_scoped_output_schema.py`)."""
+import time
+
 import pytest
+from botocore.exceptions import ClientError
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
 from google.adk.sessions.base_session_service import GetSessionConfig
@@ -21,11 +24,17 @@ class FakeTable:
         self.items: dict[tuple[str, str], dict] = {}
         self.writes = 0
 
-    def put_item(self, Item):
+    def put_item(self, Item, ConditionExpression=None, ExpressionAttributeValues=None):
+        if ConditionExpression:
+            assert ConditionExpression == "attribute_not_exists(pk) OR ver = :ver"
+            cur = self.items.get((Item["pk"], Item["sk"]))
+            if cur is not None and cur["ver"] != ExpressionAttributeValues[":ver"]:
+                raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "PutItem")
         self.writes += 1
         self.items[(Item["pk"], Item["sk"])] = dict(Item)
 
-    def get_item(self, Key):
+    def get_item(self, Key, ConsistentRead=False):
+        assert ConsistentRead is True
         item = self.items.get((Key["pk"], Key["sk"]))
         return {"Item": dict(item)} if item else {}
 
@@ -33,7 +42,8 @@ class FakeTable:
         self.items.pop((Key["pk"], Key["sk"]), None)
 
     def query(self, KeyConditionExpression, ExpressionAttributeValues, ScanIndexForward=True,
-              Limit=None, ExclusiveStartKey=None):
+              Limit=None, ExclusiveStartKey=None, ConsistentRead=False):
+        assert ConsistentRead is True
         assert KeyConditionExpression == "pk = :pk AND sk BETWEEN :lo AND :hi"
         v = ExpressionAttributeValues
         rows = sorted(
@@ -202,3 +212,48 @@ async def test_second_turn_request_carries_first_turn_history():
 
     sent = [p.text for c in requests[1].contents for p in (c.parts or []) if p.text]
     assert "first question" in sent and "reply1" in sent and "second question" in sent
+
+
+@pytest.mark.asyncio
+async def test_keys_with_separators_do_not_collide_across_users(svc):
+    await svc.create_session(app_name=APP, user_id="alice", session_id="x#s")
+    await svc.create_session(app_name=APP, user_id="alice#x", session_id="s")
+
+    assert (await svc.get_session(app_name=APP, user_id="alice", session_id="s")) is None
+    await svc.delete_session(app_name=APP, user_id="alice#x", session_id="s")
+    assert await svc.get_session(app_name=APP, user_id="alice", session_id="x#s") is not None
+
+
+@pytest.mark.asyncio
+async def test_rejected_event_leaves_session_untouched(svc):
+    s = await svc.create_session(app_name=APP, user_id="u", session_id="s")
+    big = _event("x" * (400 * 1024), 1.0, delta={"leak": 1})
+
+    with pytest.raises(ValueError, match="event_too_large"):
+        await svc.append_event(s, big)
+
+    assert s.events == [] and "leak" not in s.state
+
+
+@pytest.mark.asyncio
+async def test_concurrent_user_state_updates_are_not_lost(svc):
+    """A second writer that read the same STATE version retries instead of
+    overwriting the first writer's key."""
+    a = await svc.create_session(app_name=APP, user_id="u", session_id="a")
+    b = await svc.create_session(app_name=APP, user_id="u", session_id="b")
+    real_get = svc._get
+    raced = []
+
+    def racing_get(pk, sk):
+        item = real_get(pk, sk)
+        if sk == "STATE" and not raced:  # another session writes between read and put
+            raced.append(1)
+            other = DynamoDbSessionService(svc._table)
+            other._put_scoped_state(pk, {"from_a": 1}, time.time())
+        return item
+
+    svc._get = racing_get
+    await svc.append_event(b, _event("x", 2.0, delta={"user:from_b": 2}))
+    svc._get = real_get
+
+    assert await svc.get_user_state(app_name=APP, user_id="u") == {"from_a": 1, "from_b": 2}
