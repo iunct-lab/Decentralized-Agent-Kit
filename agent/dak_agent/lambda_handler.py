@@ -145,7 +145,12 @@ async def run(event, context=None) -> dict:
         return {"status": "failed", "error": "table_not_configured"}
     if not isinstance(event.get("message"), str):
         return {"status": "failed", "error": "invalid_event"}
-    if not _start_job(table, job_id, context):
+    try:
+        started = _start_job(table, job_id, context)
+    except Exception as exc:
+        logger.error("job start failed: %s", type(exc).__name__)
+        return {"status": "failed", "error": type(exc).__name__}
+    if not started:
         return {"status": "failed", "error": "job_exists"}
     result = await _turn(event)
     try:

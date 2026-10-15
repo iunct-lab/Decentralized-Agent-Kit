@@ -79,7 +79,7 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 
 - 呼び出し元が `InvokeFunction`（非同期の Event）で起動する。上限は 1 回 15 分、応答は 6 MB（ストリーミング時 20 MB）。
 - 利点: 呼び出し元が Lambda なら、同じ仕組みで配置・運用できる。
-- 欠点: A2A の task を複数回の呼び出しにまたがって保持できない。ジョブ管理を自前で作る。Event 呼び出しは応答を返さないので、結果の受け取り方（Lambda Destinations か、呼び出し元の書き込み）を決める必要がある。実測は下の表。
+- 欠点: A2A の task を複数回の呼び出しにまたがって保持できない。ジョブ管理を自前で作る。Event 呼び出しは応答を返さないので、結果は DynamoDB のジョブに書き、呼び出し元がポーリングする（「ジョブ」の節、#716 で決定）。実測は下の表。
 
 ### S1 の実測（#252、2026-10-07）
 
@@ -118,7 +118,7 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 
 - 開始: `{"message": …, "job_id": "<id>"}` を `InvokeFunction`（Event）で呼ぶ。`job_id` があると、ターンの前に `DAK_TABLE` へ `pk = J#<job_id>`, `sk = JOB` を条件付きで書く（同じ `job_id` の 2 回目は実行せず `job_exists`）。終わると `succeeded`（`output`）か `failed`（`error`）に更新する。1 日後に TTL（`expires_at`）で消える
 - 確認: `{"op": "get", "job_id": "<id>"}` を同期 `Invoke` で呼ぶと `{"job_id", "status", "output"?, "error"?}` を返す
-- 状態: `running` / `succeeded` / `failed` / `timed_out`（`running` のまま Lambda のタイムアウトの時刻を過ぎた）/ `not_found`
+- 状態: `running` / `succeeded` / `failed` / `timed_out`（`running` のまま Lambda のタイムアウトの時刻を過ぎた。ターンの後の結果の書き込みに失敗したときも `running` のままなので同じく `timed_out` と読める。呼び出し元は再投入してよい）/ `not_found`
 - 失敗の理由: `job_exists`、`table_not_configured`（`DAK_TABLE` が無い）、`output_too_large`（350 KB 超。DynamoDB の 1 件の上限 400 KB）、`invalid_event`、例外のクラス名
 
 ### S2: Bedrock AgentCore Runtime（v2、東京対応）
@@ -258,7 +258,7 @@ DAK 経由には `dak:max_llm_calls: 1` も付けた。出力スキーマに合�
 | 5 | #134 / #140 / #138 | 上限、検査と再試行、モデルの選択を、呼び出しごとに指定する |
 | 6 | #132 | 実用途で実測し、直接呼び出しとの差を要因ごとに説明する |
 | 並行 | #141 | AgentCore Runtime と Lambda の実現性を実機で確かめ、実行環境を選ぶ（DAK の改修とは独立）|
-| 7 | #135 | AWS のサーバレス環境に配置する。#141 で Lambda（S1）に決めた。#141 で残ったこと: 起動を Init の上限 10 秒に収める、結果の受け取り方（同期 `Invoke` か Destinations）を決める、別の Lambda からの IAM 認証の呼び出しを確かめる、読み取り専用のルートファイルシステムの扱い（`agent.json` をビルド時に作る、`uv run` を使わない）を引き継ぐか決める、呼び出しごとのセッションなら `/tmp` の SQLite を外せるか決める |
+| 7 | #135 | AWS のサーバレス環境に配置する。#141 で Lambda（S1）に決めた。#141 で残ったこと: 起動を Init の上限 10 秒に収める、結果の受け取り方（#716 で決定: Event + ポーリング）、別の Lambda からの IAM 認証の呼び出しを確かめる、読み取り専用のルートファイルシステムの扱い（`agent.json` をビルド時に作る、`uv run` を使わない）を引き継ぐか決める、呼び出しごとのセッションなら `/tmp` の SQLite を外せるか決める |
 
 ## 6. 決定事項と未決事項
 
