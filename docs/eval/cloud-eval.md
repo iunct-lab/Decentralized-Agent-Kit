@@ -162,4 +162,10 @@ gh workflow run nightly-eval.yml -f provider=bedrock -f cloud_model=bedrock/us.o
 
 ## 結果
 
-（1 回目の手動実行のあとに書く: 実行の URL、pass-rate、所要時間、通ったモデル名の形、実際の費用と見積もりとの差）
+### 1 回目（2026-10-16、手動実行）
+
+- 実行: https://github.com/iunct-lab/Decentralized-Agent-Kit/actions/runs/38837313909（`provider=bedrock`、OIDC の一時クレデンシャル。長期の鍵なし）
+- モデル: `bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0`。Luna（`us.openai.gpt-5.6-luna`）はこのアカウントでは「not available」で呼べず、Haiku 4.5 で測った
+- LiteLLM で通ったモデル名の形: `bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0`（`bedrock/converse/...` は不要だった）
+- pass-rate: **0.8**（4 passed / 1 skipped、スモークは 42 秒）。同じ記録の Ollama `llama3.1:8b` は 2026-10-15 に 0.6（3/5）
+- 費用: Cost Explorer は 1 日ほど遅れて反映されるため、実測は未確認。見積もりは 1 回約 $0.02（表の Haiku 4.5 の行。価格は二次資料の値）。確認できたら追記する
