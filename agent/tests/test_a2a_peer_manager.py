@@ -243,6 +243,13 @@ def test_card_description_includes_the_card_and_its_skills(keys, monkeypatch):
         " Skills: forecast: Tomorrow's weather.; premium_service: A paid report.")
 
 
+def test_remote_agent_uses_namespaced_context_id(monkeypatch):
+    monkeypatch.setattr(a2a_peer_manager, "fetch_agent_card", lambda url, timeout=10.0: _card_with_skills())
+    (agent,) = create_remote_a2a_agents([A2APeerConfig("peer", "http://peer:8000/a2a/dak_agent")])
+
+    assert agent._config.forward_session_id_as_context_id == "namespaced"
+
+
 def test_card_description_is_truncated_at_1024(monkeypatch):
     monkeypatch.setattr(a2a_peer_manager, "fetch_agent_card", lambda url, timeout=10.0: _card_with_skills("x" * 2000))
     (agent,) = create_remote_a2a_agents([A2APeerConfig("peer", "http://peer:8000/a2a/dak_agent")])

@@ -470,7 +470,8 @@ ADK の `LlmEventSummarizer` を継承し、要約リクエストを自分で予
 - `agent/tests/test_harness.py`
   - `test_adk_summarizer_overflows_on_a_reasoning_model`: 台本モデルが毎ステップ約 3.4K 文字の
     日本語の思考を出す状況で、ADK 標準の summarizer だと **モデルのリクエストは窓内なのに
-    要約リクエストが窓を超えて run が死ぬ**ことを再現する（本件の縮小版）。
+    要約リクエストが窓を超える**ことを再現する（本件の縮小版。ADK 2.12 以降は圧縮の失敗を
+    ログに出して run は続くので、run が死ぬのは 2.11 まで。要約は作られない）。
   - `test_budgeted_summarizer_keeps_compaction_inside_the_window`: 同じ状況で
     `BudgetedEventSummarizer` なら要約・モデルのリクエストとも窓内で完走する。
   - `TestBudgetedEventSummarizer`: 予算への当てはめ（嵩張るものから落とし、seed は残す）、

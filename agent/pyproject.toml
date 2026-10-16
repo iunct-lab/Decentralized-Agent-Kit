@@ -5,7 +5,7 @@ description = "Decentralized Agent Kit Agent with A2A and MCP support"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-    "google-adk[a2a,db,mcp]>=2.8.0,<3",
+    "google-adk[a2a,db,mcp]>=2.12.0,<3",
     "mcp>=2.3,<3",
     "httpx2>=2.13,<3",
     "asyncpg>=0.30",

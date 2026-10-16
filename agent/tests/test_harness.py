@@ -2095,12 +2095,13 @@ async def test_prune_then_compaction_when_pruning_alone_is_not_enough():
 @pytest.mark.asyncio
 async def test_adk_summarizer_overflows_on_a_reasoning_model():
     """Reproduces the 2026-09-14 wedge: thoughts are not in the model prompt, but
-    ADK's summarizer renders them verbatim, so the *compaction* request overflows."""
+    ADK's summarizer renders them verbatim, so the *compaction* request overflows.
+    ADK 2.12 no longer lets that failure kill the run (compaction errors are logged), but the
+    overflowing summary request is still sent and no summary is made (#767)."""
     llm, _, final_text, error, _ = await _run(use_harness=True, thoughts=True, adk_summarizer=True)
-    assert error is not None and "context size" in str(error)
-    assert final_text is None
     assert max(llm.summary_tokens) > WINDOW
-    assert max(llm.request_tokens) <= WINDOW  # the request guard did its job; compaction killed the run
+    assert max(llm.request_tokens) <= WINDOW  # the request guard did its job
+    assert error is None and final_text == "done"
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ from .config import load_agent_config
 logger = logging.getLogger(__name__)
 
 try:
+    from google.adk.a2a.agent.config import A2aRemoteAgentConfig
     from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
     A2A_AVAILABLE = True
 except ImportError:
@@ -168,11 +169,13 @@ def create_remote_a2a_agents(peers: List[A2APeerConfig]) -> List["RemoteA2aAgent
             if text := card_text(card):
                 description += " " + text
 
-            # ADK still gets the URL: its own https / same-origin checks stay
+            # ADK still gets the URL: its own https / same-origin checks stay.
+            # A stable per-peer context_id is derived from the DAK session; the raw session_id is not sent (#767)
             agent = RemoteA2aAgent(
                 name=peer.name,
                 agent_card=agent_card_url,
                 description=description,
+                config=A2aRemoteAgentConfig(forward_session_id_as_context_id="namespaced"),
             )
             agents.append(agent)
             logger.info(f"Created RemoteA2aAgent: {peer.name} -> {agent_card_url}")
