@@ -13,7 +13,7 @@ PBI #39。mcp-server の `mcp` 依存を 1.30 から 2.x に上げ、`FastMCP` �
 - #211（PR #809）: `cd mcp-server && uv run pytest -q` が 114 件 green。DNS rebinding 保護の許可・拒否
   （`tests/test_transport_security.py`）も 2.x のまま通る
 - ツールの名前・引数・戻り値は変えていない（11 個。エージェントと統合テストが今の名前で呼ぶ）
-- 統合構成（fake-LLM、`tests/integration/test_mcp_server.py` を含む）は PR の CI の integration で確かめる
+- 統合構成（fake-LLM、`tests/integration/test_mcp_server.py` を含む）: PR #809 の CI の `integration` が pass（4m43s）
 - 移すと #322・#326・#629 が進められる（下の表）
 
 ## 1.30 から変わった点
@@ -28,9 +28,11 @@ PBI #39。mcp-server の `mcp` 依存を 1.30 から 2.x に上げ、`FastMCP` �
 
 ## 依存の制約
 
-- `mcp-server/pyproject.toml`: `mcp>=2.3,<3`。3.x は破壊的変更の見込みなので上限を残す
+- `mcp-server/pyproject.toml`: `mcp>=2.3,<3`。major の更新は破壊的変更を含みうる（semver）ので上限を残す
 - `.github/dependabot.yml`（mcp-server の `mcp`）: major の無視は**変えない**。2.x に移った後は 3.x の提案を止める
   ことになり、次の major も移行 PR で扱う。minor / patch はグループ `mcp-minor-patch` で届く
+- `.github/dependabot.yml:24-25` のコメント（「mcp 2.x は main.py の移行が必要」）は移行後は古い。`.github` を触る PR は
+  マージ判定で利用者に聞くことになり、挙動は変わらないので、意図して直していない。無視を外さないこと
 
 ## この移行を前提にする PBI
 
