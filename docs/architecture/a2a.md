@@ -185,12 +185,25 @@ a2a_peers:
     card_public_key_file: "/run/secrets/peer-card.pub.pem"  # 相手のカードの署名を確かめる公開鍵（下の「カードの署名と検証」）。書かなければ unchecked
 ```
 
-ADK（2.11）の `RemoteA2aAgent` は、ネットワークから取るカードの URL と、カードが示す RPC の URL の両方に **https** を求める（http はループバックの名前 `localhost`・`*.localhost`・`127.0.0.1` などだけ。外す設定は無い）。
+ADK（2.12）の `RemoteA2aAgent` は、ネットワークから取るカードの URL と、カードが示す RPC の URL の両方に **https** を求める（http はループバックの名前 `localhost`・`*.localhost`・`127.0.0.1` などだけ。外す設定は無い）。
 カードの RPC の URL は、カードを取った URL と同じ origin でなければならない。別のホストの DAK に任せるときは、相手の窓口を https で公開する。
 `url` にクエリ文字列を付けない（カードのパスがクエリの後ろに付き、カードを取れない）。
 
 DAK の窓口のパスは、相手の `AGENT_NAME` ではなく、ADK のアプリ（エージェントのディレクトリ）の名前 `dak_agent` で決まる。`AGENT_NAME` はカードの `name` を変えるだけ。
 fake-LLM の構成の `agent-consumer` → `agent-peer`（カードの名前は `dak_peer`。http で呼ぶため、compose のネットワークの別名 `agent-peer.localhost` を使う）で、この委譲を `tests/integration/test_a2a.py::test_delegation_to_peer_with_non_default_name` が確かめる。
+
+### 会話の続き（context_id）
+
+PBI #767。DAK は `RemoteA2aAgent` に `A2aRemoteAgentConfig(forward_session_id_as_context_id="namespaced")` を渡す（`agent/dak_agent/a2a_peer_manager.py`。ADK 2.12 以上が前提で、`agent/pyproject.toml` が `google-adk>=2.12.0` を要求する）。
+
+- 相手に渡る `context_id` は、DAK のセッションの app・user・session_id から SHA-256 で作った値。同じ DAK のセッションの次のターンは同じ値になり、相手側の同じ会話として続く。別のセッション・別のユーザーからは別の値になる
+- 相手に渡らないのは DAK の生の `session_id`（と user_id）。`context_id` から元の値は引けない。相手の `context_id` を DAK の `session_id` として扱わない
+- 相手が DAK なら、ADK の A2A の窓口がこの `context_id` を自分のセッションの id にし、user を `A2A_USER_<context_id>` にする
+- input-required / auth-required で止まった相手のタスクは、普通の返事で同じ task_id のまま再開される（ADK 2.12、google/adk-python#7313）。DAK のテストでは確かめていない（`agent-peer` はその状態を返さない）
+- 渡し方は設定で選べない（`a2a_peers` に項目は無い）
+
+`tests/integration/test_a2a.py::test_two_turn_delegation_continues_the_peer_conversation` が、同じ consumer のセッションの 2 ターンで相手の 2 回目のリクエストに 1 回目のやり取りが入り、相手のセッションが 1 つで id が consumer の `session_id` と違うことを、
+`test_delegation_from_another_session_uses_another_context_id` が、別のセッションからの委譲では相手のセッションの id が変わることを確かめる（相手のセッションは `agent-peer` のホストのポート 8017 の `/apps/dak_agent/users/A2A_USER_<context_id>/sessions` で見る）。
 
 ### カードの `skills` と sub-agent の説明
 
