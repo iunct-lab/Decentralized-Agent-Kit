@@ -92,7 +92,7 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 | 30 秒を超えるターン（同期 Invoke） | 約 2,500 語の出力を求めて 379 秒、HTTP 200 で完了。直接の `Invoke` は API Gateway の 30 秒に縛られない |
 | 30 秒を超えるターン（非同期 Event） | 同じ指示で `InvokeFunction` が 0.85 秒で 202 を返し、約 86 秒（約 11 秒間隔のポーリングで完了を見た時刻）で完了。同じ指示でも 86〜379 秒とばらついた。Event は応答を返さず、失敗時は既定で最大 2 回再試行される（二重実行になりうる。未実測） |
 | 完了の受け取り（ポーリング） | `GET /apps/.../sessions/<id>` は、ターンの実行中は別のコンテナが受けて 404 になった（ログで確認。セッションがコンテナの `/tmp` にある）。完了後に同じコンテナへ届いた 1 回だけ 200。呼び出しごとのセッションで動かす方針（§3 共通）なら DAK のセッションをポーリングする設計にはならず、結果は呼び出し元が受ける経路（Destinations、または同期 `Invoke`）で決める |
-| IAM 認証の呼び出し | `lambda:InvokeFunction` を持つロールは成功（200）、持たないロールは AccessDeniedException。別の Lambda からの呼び出しは未実施（#135 で確かめる） |
+| IAM 認証の呼び出し | `lambda:InvokeFunction` を持つロールは成功（200）、持たないロールは AccessDeniedException。別の Lambda からの呼び出しは #135 で確かめた（下の「dev での実機の確認」） |
 | 費用 | Lambda の実行は約 490 秒 × 1.5 GB（Max Memory Used 約 500 MB）で約 0.01 USD（arm64 の単価、0.0000133 USD / GB 秒。リクエスト料金・ECR・ログは除く）。§4 の S1 は x86 の単価で見積もっていて、約 2 割高め。モデルのトークン数は計測していない |
 
 イメージは、読み取り専用のルートファイルシステムで動かすため、`entrypoint.sh` が起動時に書く `agent.json` をビルド時に作り、`uv run` を使わず venv の uvicorn を直接起動した（`/tmp` 以外に書かない）。本番の構成（#135）では、この 2 点を引き継ぐかと、呼び出しごとのセッションなら `/tmp` の SQLite を外せるかを決める。
@@ -121,6 +121,24 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 - 状態: `running` / `succeeded` / `failed` / `timed_out`（`running` のまま Lambda のタイムアウトの時刻を過ぎた。ターンの後の結果の書き込みに失敗したときも `running` のままなので同じく `timed_out` と読める。呼び出し元は再投入してよい）/ `not_found`
 - 失敗の理由: `job_exists`、`table_not_configured`（`DAK_TABLE` が無い）、`output_too_large`（350 KB 超。DynamoDB の 1 件の上限 400 KB）、`invalid_event`、例外のクラス名
 
+### dev での実機の確認（#719、2026-10-16）
+
+`deploy/aws/` の 2 つのテンプレートを、東京の dev に配置して確かめた。`agent/Dockerfile.lambda` の arm64 イメージ（ECR 上で 337 MB）、メモリ 1,536 MB、モデルは us-east-1 の Claude Haiku 4.5（`bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0`、IAM ロールで呼ぶ）。呼び出し元は `dev-caller.yaml` の `CallerRole` と `CallerFunction`。確かめたあと、両方のスタックと ECR の画像、呼び出し元のログを消した。各数値は 1 回の測定で、ばらつきは見ていない。
+
+| 確かめたこと | 結果 |
+|---|---|
+| IAM の許可と拒否 | `CallerRole` の `Invoke` は 200。`ProbeRole`（呼び出しの権限なし）は `AccessDeniedException`。`CallerFunction`（別の Lambda）から `Event` で起動して `op: get` でポーリングし、結果を受け取れた |
+| 出力スキーマ | 架空の要約の依頼（`dak:instruction` / `dak:output_schema` / `dak:tools: []`）で、スキーマに合う JSON（`summary` と `keywords`）が返った。**ただし `minItems` / `maxItems` を付けたスキーマは、3 回とも `{"status": "failed", "error": "BadRequestError"}`（Bedrock の構造化出力が配列の個数の制約を受け付けないためと推測。未確認）。外すと通った** |
+| 出力上限（#134） | `dak:max_output_tokens: 20` の呼び出しは `status: succeeded` で、`output` に `{"error": "output_schema_validation_failed", "attempts": 3, "issues": [{"message": "invalid JSON: …"}], "last_response": "<途中で切れた JSON>"}` が入った。切れたことは分かるが、出力上限に達したという理由は返らない |
+| 60 秒を超えるターン | 約 8,000 トークンの長文を `CallerFunction` 経由（Event + 5 秒間隔のポーリング）で求め、74 秒（`CallerFunction` の Duration 72 秒、DAK の Duration 68 秒）で `succeeded`（8,111 字）。DAK の `START` は 1 回で、再試行は起きていない |
+| コールドスタート（3 回） | Init 0.21 / 0.20 / 0.31 秒（ハンドラが `dak_agent.agent` を最初の呼び出しで読むため）。最初の呼び出しの Duration は 35.2 / 15.2 / 15.2 秒（呼び出し側 36.6 / 16.5 / 16.6 秒） |
+| ウォーム（3 回） | Duration 4.97 / 4.67 / 4.71 秒（呼び出し側 5.8 / 5.5 / 5.5 秒）。同じ要約の依頼で、モデルの時間を含む |
+| ログ | 関数と `CallerFunction` の CloudWatch Logs の全件（約 720 行）を取り出して検索し、依頼文・出力・`state_delta` の値・認証情報は 0 件。出るのは START / END / REPORT、ライブラリの警告（MCP に届かない、Google の認証の警告）と、失敗した呼び出しの例外の記録 |
+| 鍵 | `grep -rniE 'api_key\|secret\|AKIA' deploy/aws/ agent/Dockerfile.lambda` は何も出さない |
+| 費用 | 呼び出しは約 30 回、Lambda の実行は合計約 5 分、Bedrock の出力は合計 2 万トークン未満。Haiku 4.5 と Lambda の単価での見積もりは 0.1 USD 未満（Cost Explorer では確かめていない） |
+
+最初のコールドスタートが長い（35 秒）のは、新しい実行環境でイメージを初めて読んだためと推測している（未確認）。2 回目以降の 15 秒の内訳（依存の読み込み、MCP への接続待ち）は未計測。
+
 ### S2: Bedrock AgentCore Runtime（v2、東京対応）
 
 - A2A または HTTP のプロトコルで配置する。呼び出し元は SigV4 で `InvokeAgentRuntime` を呼ぶ。セッションは microVM に固定され、長時間の実行もストリーミングも扱える。
@@ -142,7 +160,7 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 | 30 秒を超えるターン（同期） | 45 秒のターンが 47.4 秒、120 秒のターンが 122.1 秒で、JSON の応答を受け取れた。API Gateway を挟まない `InvokeAgentRuntime` は 30 秒に縛られない（同期の上限は 15 分） |
 | 30 秒を超えるターン（ストリーミング） | `"stream": true` で、45 秒のターンが 48.7 秒、120 秒のターンが 121.1 秒。応答は部分（`partial: true`）のイベントの列で返った。偽のサーバは 5 秒ごとに部分を出すが、届いた時刻は測っていない（ストリーミングの上限は 60 分） |
 | アイドルの回収 | 150 秒あけて同じセッション ID で呼ぶと、前とは別の、前もって起動していたプロセスが答えた（9.1 秒。ほとんどは最初のターンの 7.6 秒）。前のプロセスの `/tmp` のセッションは引き継がれないと見られる（会話の履歴が残るかは試していない）。呼び出しごとのセッションで動かす方針（§3 共通）なら影響しない |
-| SigV4 の呼び出し | `bedrock-agentcore:InvokeAgentRuntime` を持つロールは成功、持たないロールは AccessDeniedException（どちらも同じマシンから）。別の Lambda からの呼び出しは未実施（S1 と同じく #135 で確かめる） |
+| SigV4 の呼び出し | `bedrock-agentcore:InvokeAgentRuntime` を持つロールは成功、持たないロールは AccessDeniedException（どちらも同じマシンから）。別の Lambda からの呼び出しは未実施（実行環境を Lambda に決めたので確かめない） |
 | 後片付け | `delete-agent-runtime` でランタイムとワークロード ID が消えた。ECR の画像も消した。前からあった ECR のリポジトリと実行ロールは消していない。この作業で作られたサービスにリンクされたロール（下）は残る |
 | 費用 | 未計測（実行環境を Lambda に決めたので測らない。要るときは Cost Explorer で見る） |
 
@@ -271,7 +289,7 @@ DAK 経由には `dak:max_llm_calls: 1` も付けた。出力スキーマに合�
 | 5 | #134 / #140 / #138 | 上限、検査と再試行、モデルの選択を、呼び出しごとに指定する |
 | 6 | #132 | 実用途で実測し、直接呼び出しとの差を要因ごとに説明する |
 | 並行 | #141 | AgentCore Runtime と Lambda の実現性を実機で確かめ、実行環境を選ぶ（DAK の改修とは独立）|
-| 7 | #135 | AWS のサーバレス環境に配置する。#141 で Lambda（S1）に決めた。#141 で残ったこと: 起動を Init の上限 10 秒に収める、結果の受け取り方（#716 で決定: Event + ポーリング）、別の Lambda からの IAM 認証の呼び出しを確かめる、読み取り専用のルートファイルシステムの扱い（`agent.json` をビルド時に作る、`uv run` を使わない）を引き継ぐか決める、呼び出しごとのセッションなら `/tmp` の SQLite を外せるか決める |
+| 7 | #135 | AWS のサーバレス環境に配置する。#141 で Lambda（S1）に決めた。#141 で残ったこと: 起動を Init の上限 10 秒に収める、結果の受け取り方（#716 で決定: Event + ポーリング）、別の Lambda からの IAM 認証の呼び出し（#719 で確認済み）、読み取り専用のルートファイルシステムの扱い（`agent.json` をビルド時に作る、`uv run` を使わない）を引き継ぐか決める、呼び出しごとのセッションなら `/tmp` の SQLite を外せるか決める |
 
 ## 6. 決定事項と未決事項
 
@@ -294,7 +312,7 @@ DAK 経由には `dak:max_llm_calls: 1` も付けた。出力スキーマに合�
 | 30 秒を超えるターン | 同期 `Invoke` で 379 秒まで受け取れた（上限 15 分）。非同期 Event は応答を返さず、失敗時に最大 2 回再試行する（二重実行になりうる。未実測） | 同期とストリーミングで 120 秒まで受け取れた（上限は同期 15 分、ストリーミング 60 分、非同期ジョブ 8 時間） |
 | 状態 | 実行中は別のコンテナが受けるとセッションが見えない | セッション ID ごとに別のプロセス。アイドルで回収される |
 | 呼び出しの認証 | IAM（`lambda:InvokeFunction`）で許可と拒否を確かめた | SigV4（`InvokeAgentRuntime`）で許可と拒否を確かめた |
-| 別の Lambda から | 未実施（#135） | 未実施（#135） |
+| 別の Lambda から | 成功（#719。`Event` + ポーリング） | 未実施 |
 | 配置の権限 | 関数の名前で絞れる | 作成の中のエンドポイントとワークロード ID が名前の決まる前に評価され、名前だけでは絞れない。アカウントで初回にサービスにリンクされたロールが要る |
 | 費用 | 計測した約 490 秒で約 0.01 USD。§4 の見積もりで月 300 セッションなら 6.7 USD | 未計測（Lambda に決めたので測らない）。§4 の見積もりで 10.5 USD |
 | 呼び出し元との相性 | 呼び出し元が Lambda なら同じ仕組みで配置・運用できる | A2A の task をそのまま使える |
