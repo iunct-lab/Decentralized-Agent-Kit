@@ -63,13 +63,18 @@ def _trace_id(meta) -> str:
     return "-"
 
 
+def _one_line(value) -> str:
+    """Escape control characters and spaces so a caller-chosen name or key cannot split or forge a log line."""
+    return str(value).encode("unicode_escape").decode("ascii").replace(" ", "\\x20")
+
+
 class ToolCallLogMiddleware(ServerMiddleware):
     async def __call__(self, ctx: ServerRequestContext, call_next: CallNext) -> HandlerResult:
         if ctx.method != "tools/call":
             return await call_next(ctx)
-        name = (ctx.params or {}).get("name", "-")
+        name = _one_line((ctx.params or {}).get("name", "-"))
         headers = getattr(ctx.request, "headers", None)
-        session = headers.get("x-dak-session-key", "default") if headers is not None else "default"
+        session = _one_line(headers.get("x-dak-session-key", "default")) if headers is not None else "default"
         trace_id = _trace_id(ctx.meta)
         ok = False
         try:

@@ -62,6 +62,20 @@ class TestToolCallLog(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn("trace_id=- ok=true", out[0])
 
+    def test_caller_chosen_name_stays_on_one_line(self):
+        headers = {**HEADERS, "X-DAK-Session-Key": "s-630"}
+        init = self._client.post("/mcp", json=INITIALIZE, headers=headers)
+        headers["mcp-session-id"] = init.headers["mcp-session-id"]
+        self._client.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=headers)
+        params = {"name": "x\ntool_call name=forged ok=true", "arguments": {}}
+        with self.assertLogs("dak.mcp.tool_call", logging.INFO) as cm:
+            self._client.post(
+                "/mcp", json={"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": params}, headers=headers
+            )
+        self.assertEqual(len(cm.output), 1)
+        self.assertNotIn("\n", cm.output[0])
+        self.assertIn("ok=false", cm.output[0])
+
     def test_failed_call_logs_ok_false(self):
         # read_file reports a missing file as ordinary text (ok); a call the server rejects is a failure.
         _, out = self._call(None, {"traceparent": TRACEPARENT}, arguments={})
