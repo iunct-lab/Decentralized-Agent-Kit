@@ -226,3 +226,26 @@ INFO:     172.x.x.x:xxxxx - "POST /mcp HTTP/1.1" 200 OK
 Terminating session: <session-id>
 INFO:     172.x.x.x:xxxxx - "DELETE /mcp HTTP/1.1" 200 OK
 ```
+
+### ツール呼び出しのログと trace ID
+
+mcp-server は `tools/call` ごとに標準エラーへ 1 行を出す。
+
+```
+tool_call name=read_file session=<X-DAK-Session-Key> trace_id=<32 桁の 16 進> ok=true
+```
+
+| フィールド | 中身 |
+|-----------|------|
+| `name` | 呼ばれたツール名 |
+| `session` | リクエストヘッダ `X-DAK-Session-Key`（無ければ `default`） |
+| `trace_id` | `_meta.traceparent`（W3C trace context、`00-<trace-id>-<span-id>-<flags>`）の trace ID。`traceparent` が無い・壊れているときは `-` |
+| `ok` | サーバがエラーとして返さなければ `true`。例外や拒否された呼び出しは `false`（`read_file` が存在しないパスを通常のテキストで返す場合は `true`） |
+
+MCP 2026-07-28 版（SEP-414）は、OpenTelemetry の trace context を `_meta` の `traceparent` で運ぶと定めた。DAK のエージェントは mcp SDK 2.x がリクエストの `_meta.traceparent` に今の trace を入れるので、エージェント側の同じ呼び出しの行と同じ trace ID になる。ツールの引数と結果はログに出さない。
+
+エージェントの行（`tool_call name=<ツール名> trace_id=<id>`）と突き合わせるには、エージェントのログから trace ID を取り、両方のログを検索する。
+
+```bash
+docker compose logs agent mcp-server | grep <trace_id>
+```
