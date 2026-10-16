@@ -1,12 +1,14 @@
 import asyncio
 import contextlib
 import io
+import logging
 import os
 import posixpath
 import re
 import subprocess
 import glob
 import tarfile
+from mcp.server.context import CallNext, HandlerResult, ServerMiddleware, ServerRequestContext
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
@@ -39,7 +41,46 @@ def _transport_security() -> TransportSecuritySettings:
 
 
 # Initialize the MCPServer (mcp 2.x); json_response / transport_security are passed to streamable_http_app()
-mcp = MCPServer("dak-agent-mcp")
+
+
+# One stderr line per tools/call: tool name, session key, trace ID, outcome (#630).
+# Arguments and results are never logged (they can carry secrets or personal data).
+tool_call_log = logging.getLogger("dak.mcp.tool_call")
+tool_call_log.setLevel(logging.INFO)
+_log_handler = logging.StreamHandler()
+_log_handler.setFormatter(logging.Formatter("%(message)s"))
+tool_call_log.addHandler(_log_handler)
+tool_call_log.propagate = False
+
+_TRACE_ID = re.compile(r"[0-9a-f]{32}")
+
+
+def _trace_id(meta) -> str:
+    """The trace ID of the W3C `traceparent` in `_meta` (00-<trace-id>-<span-id>-<flags>), or "-"."""
+    parts = str((meta or {}).get("traceparent", "")).split("-")
+    if len(parts) >= 2 and _TRACE_ID.fullmatch(parts[1]) and parts[1] != "0" * 32:
+        return parts[1]
+    return "-"
+
+
+class ToolCallLogMiddleware(ServerMiddleware):
+    async def __call__(self, ctx: ServerRequestContext, call_next: CallNext) -> HandlerResult:
+        if ctx.method != "tools/call":
+            return await call_next(ctx)
+        name = (ctx.params or {}).get("name", "-")
+        headers = getattr(ctx.request, "headers", None)
+        session = headers.get("x-dak-session-key", "default") if headers is not None else "default"
+        trace_id = _trace_id(ctx.meta)
+        ok = False
+        try:
+            result = await call_next(ctx)
+            ok = not (getattr(result, "is_error", False) or (isinstance(result, dict) and result.get("isError")))
+            return result
+        finally:
+            tool_call_log.info("tool_call name=%s session=%s trace_id=%s ok=%s", name, session, trace_id, str(ok).lower())
+
+
+mcp = MCPServer("dak-agent-mcp", middleware=[ToolCallLogMiddleware()])
 
 # Output bounds: an unbounded tool result (a whole file, a recursive listing)
 # can overflow the calling model's context window in one call. Tools return at

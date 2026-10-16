@@ -3,7 +3,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from starlette.testclient import TestClient
+from conftest import shared_client
 
 # Add parent directory to path to import main
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -34,13 +34,7 @@ class TestTransportSecurity(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        # The session manager's lifespan can only start once per process.
-        cls._client = TestClient(main.app)
-        cls._client.__enter__()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls._client.__exit__(None, None, None)
+        cls._client = shared_client()
 
     def _initialize(self, host: str) -> int:
         resp = self._client.post("/mcp", json=INITIALIZE, headers={**HEADERS, "Host": host})
