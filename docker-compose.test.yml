@@ -245,6 +245,9 @@ services:
   # on a loopback name; *.localhost counts, so the peer is reached as agent-peer.localhost.
   agent-peer:
     build: ./agent
+    # host port for tests/integration/test_a2a.py: it lists the sessions the consumer's delegations created here
+    ports:
+      - "8017:8000"
     networks:
       default:
         aliases:
