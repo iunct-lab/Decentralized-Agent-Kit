@@ -1,7 +1,77 @@
 {
   "projectUrl": "https://github.com/orgs/iunct-lab/projects/3",
+  "envPrefix": "DAK",
   "fields": {
-    "area": ["agent", "mcp", "bff", "cli", "infra"],
-    "phase": ["Phase 0", "Phase 1", "Phase 2", "Phase 3", "Phase 4"]
-  }
+    "area": [
+      "agent",
+      "mcp",
+      "bff",
+      "cli",
+      "infra"
+    ],
+    "kind": [
+      "bug",
+      "feature",
+      "deps",
+      "tech-watch",
+      "eval",
+      "chore"
+    ],
+    "priority": [
+      "P0",
+      "P1",
+      "P2",
+      "P3"
+    ],
+    "phase": [
+      "Phase 0",
+      "Phase 1",
+      "Phase 2",
+      "Phase 3",
+      "Phase 4"
+    ]
+  },
+  "milestone": {
+    "pattern": "^Phase \\d+ — "
+  },
+  "sections": {
+    "pbi": [
+      "ユーザーストーリー",
+      "到達点 / 受け入れ条件",
+      "スコープ外",
+      {
+        "name": "元要望",
+        "hint": "要望 Issue の番号。無ければ「なし（理由）」"
+      }
+    ],
+    "task": [
+      "親 PBI",
+      "やること",
+      "手順",
+      "検証",
+      "完了条件"
+    ],
+    "request": [
+      {
+        "name": "要望",
+        "hint": "意図を変えずに整えた文を入れる"
+      },
+      {
+        "name": "出典",
+        "hint": "誰から / いつ / 経路"
+      }
+    ],
+    "origin": {
+      "name": "元要望",
+      "pattern": "^(#[0-9]+([^0-9].*)?|なし[（(].+[）)].*)$",
+      "hint": "`#N（要望のどの部分か）` か `なし（理由）`"
+    }
+  },
+  "storyPoints": [
+    1,
+    2,
+    3,
+    5,
+    8
+  ]
 }
