@@ -1,6 +1,8 @@
 # クラウドモデルでの実LLMスモーク（Bedrock）を CI に入れるかの材料
 
-夜間の Ollama（`nightly-eval.yml`）と同じスモーク（`tests/integration/test_smoke_real_llm.py` の 4 件）を、
+> **#822（2026-10-17）で `nightly-eval.yml` と IAM ロール `dak-cloud-eval-bedrock`（と変数・environment）を消した。** この文書は当時の調査と実行の記録で、「手動で回す」の手順は今は動かない。
+
+夜間の Ollama（当時の `nightly-eval.yml`）と同じスモーク（`tests/integration/test_smoke_real_llm.py` の 4 件）を、
 Bedrock 上のクラウドモデルで手動実行するときの費用・認証・頻度を比べる。
 決めること（使うか・認証・費用の上限）は元要望 #68、計画は PBI #334。
 
@@ -139,7 +141,7 @@ GitHub Actions のランナーは、このリポジトリが公開なので無�
 どの案でも月 1 ドルを下回る見積もり。費用より、結果の読み方（傾向として何を見るか）と、
 有料の経路を自動で回すこと自体を許すかで決めることになる。定期実行に入れるかは、1 回実行した結果を見て決める（PBI #334 の条件 6）。
 
-## 手動で回す（`nightly-eval.yml` の `provider=bedrock`）
+## 手動で回す（`nightly-eval.yml` の `provider=bedrock`。#822 でやめた）
 
 利用者が用意するもの（リポジトリの変数。どれも秘密ではない）:
 

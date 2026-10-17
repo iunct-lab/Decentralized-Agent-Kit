@@ -9,19 +9,18 @@ DAK の「実モデル」品質を継続的に測るための仕組み（要件6
    → `tests/integration/test_golden_replay.py`
    → 増やし方: `tests/integration/golden/README.md`
 
-2. **nightly 実LLM eval**（夜間, 小型 Ollama, 寛容アサーション）
-   `.github/workflows/nightly-eval.yml` が小型モデルでゲート済みスモークを実行し、
-   pass-rate を `history.jsonl`（リリース `eval-history` の asset）に追記する。PR ゲートではなく傾向シグナル。
+2. **実LLM スモーク**（小型 Ollama, 寛容アサーション, 手動）
+   以前は `nightly-eval.yml` が夜間に回して pass-rate を `history.jsonl`（リリース `eval-history` の asset）に追記していた。#822 でやめたので、回帰の検知は `./scripts/smoke_local_llm.sh`（`DAK_SMOKE_REAL_LLM=1`）の手動実行。PR ゲートではなく傾向シグナル。
 
 補助: 同じスモークを安価なクラウドモデルで手動実行することもできる
 （`./scripts/smoke_cloud_llm.sh`、既定 `openai/gpt-5.6-luna`、1 回数セント程度）。
 ローカルの GPU/メモリが塞がっている時や、プロバイダ採用前の品質確認に使う。
-Bedrock のクラウドモデルで回すときの費用・認証（GitHub OIDC）・頻度の比較は [cloud-eval.md](cloud-eval.md)。
+Bedrock のクラウドモデルで回すときの費用・頻度の比較（過去の調査。GitHub OIDC の経路と IAM ロールは #822 で消した）は [cloud-eval.md](cloud-eval.md)。
 
 ## history.jsonl
 
 記録は git の外に持つ: リリース `eval-history`（版ではない固定のリリース）の asset `history.jsonl`。
-毎晩 nightly-eval が asset を落として 1 行足し、その全体の写しを実行の artifact `nightly-eval` に残してから asset を差し替える。
+以前は毎晩 nightly-eval（#822 でやめた。記録は 2026-10-17 で止まっている）が asset を落として 1 行足し、その全体の写しを実行の artifact `nightly-eval` に残してから asset を差し替える。
 main への直接の push はルールセットに止められ、評価の結果は枝に含める内容でもないため（#517）。
 
 ```bash

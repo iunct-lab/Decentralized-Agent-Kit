@@ -2,88 +2,49 @@
 
 このリポジトリを継続的・サステナブルに更新し続けるための自動化群の説明。
 全体設計は plan file（`DAK Sustainability & Self-Improvement System`）に対応する。
+定期の workflow は #822 でやめた（下の「ワークフロー一覧」）。以下の Tier とプロバイダの設定は、手元で `dak-maint` を回すときの説明として残す。
 
 ## 判断エンジンの階層
 
 | Tier | 実行者 | 用途 | コスト |
 |------|--------|------|--------|
 | 0 | 決定論ルール | semver 判定 + CI green/red。自動マージ可否の大半 | 無料・即時 |
-| 1 | Ollama 小型 / DAK 自エージェント | changelog リスク・機能差分の一次判定、nightly eval、golden 生成 | 安価（ドッグフード） |
+| 1 | Ollama 小型 / DAK 自エージェント | changelog リスク・機能差分の一次判定、golden 生成 | 安価（ドッグフード） |
 | 2 | `anthropic/claude-code-action` | major/破壊的疑いの精査、機能取り込み提案、新技術ウォッチ、憲章レビュー | 従量 |
 
 ## ワークフロー一覧
 
-| ファイル | トリガ | 役割 | Tier |
-|----------|--------|------|------|
-| `ci.yml` | PR / push(main) | unit マトリクス + fake-LLM 統合（既存）+ 依存のライセンスの確認（`license`。`scripts/license_check.sh`、方針は [license-policy.md](license-policy.md)） | — |
-| `labels.yml` | `labels.yml` 変更 / 手動 | ラベル体系を宣言的に同期 | — |
-| `project-autoadd.yml` | Issue/PR open | 新規 Issue/PR を Project に自動追加し、新しい Issue の Status を Backlog にする | — |
-| `dependency-triage.yml` | `pull_request_target`(dependabot) | 依存PRを判定し auto-merge or レビュー要求 | 0→1 |
-| `feature-sync.yml` | weekly cron | 依存の新機能を要約し、取り込みの要望 Issue を起票 | LLM(中立) |
-| `tech-watch.yml` | 隔週 cron | 憲章に沿う新技術を探索し、要望 Issue を起票 | LLM(中立)+検索 |
-| `charter-review.yml` | 四半期 cron | 憲章の見直しの要望 Issue を起票 | LLM(中立)+検索 |
-| `nightly-eval.yml` | nightly cron | 小型 Ollama で実LLMスモークを実行し pass-rate 記録 | 1 |
-| `capture-golden.yml` | 手動 / nightly | 実LLMセッションを決定論テスト化して PR 提案 | 1 |
+| ファイル | トリガ | 役割 |
+|----------|--------|------|
+| `ci.yml` | PR / push(main) | unit マトリクス + fake-LLM 統合 + 依存のライセンスの確認（`license`。`scripts/license_check.sh`、方針は [license-policy.md](license-policy.md)） |
+| `labels.yml` | `labels.yml` 変更 / 手動 | ラベル体系を宣言的に同期 |
 
-定期実行の提案は `scripts/setup/request_issue.py` が「要望: 」の題・`type:request` ラベルで起票し、Project に Status=Backlog で載せる（`GITHUB_TOKEN` で作った Issue は `project-autoadd` を起動しないため、スクリプトが `gh project` の CLI で自分で行う）。採否を検討して PBI にするのは人。テストは `uv run --no-project --with pytest pytest scripts -q`（CI の maintenance ジョブでも走る）。
+この 2 本は Private の開発用リポジトリでは動かず（Actions が使えない）、公開側のリポジトリで同期の PR のテストとラベルの同期に使う。`ci.yml` は Switchboard の `local-ci.ts` が読む。
+
+**#822 でやめたもの**（2026-10-17。開発用を Private にし、DAK 独自の workflow を減らす決定）: `dependency-triage.yml`・`feature-sync.yml`・`tech-watch.yml`・`charter-review.yml`・`nightly-eval.yml`・`capture-golden.yml`・`verify-anthropic.yml`・`project-autoadd.yml`、`dependabot.yml`、定期実行の起票に使った `request_issue.py`、`dak-cloud-eval-bedrock` の IAM ロール。手放した情報: 依存の自動 triage とマージ（Dependabot の PR も来ない）、新技術・依存の新機能・憲章の定期の提案 Issue、nightly eval の pass rate の記録（回帰の検知は統合テストと実 LLM スモークの手動実行）。ロジックの `maintenance/`（`dak-maint`）と DAK スキル `agent/skills/dependency_maintenance/` は残り、手元で回せる（[maintenance/README.md](../../maintenance/README.md)）。新しい Issue の Project への追加と要望の起票は共通キットの入口（`scripts/setup/`）を使う。
 
 ## 初期セットアップ（一度だけ）
 
-1. **Project 作成**: GitHub Project を作り、フィールド Status（`Backlog` を含む）・Area・Kind・Priority・Phase・Story Points を持たせる。各値の意味と `ops.config.json` は [issue-workflow.md](issue-workflow.md)。URL を `ops.config.json` の `projectUrl` に書き、次を登録:
-   - `gh variable set DAK_PROJECT_URL --body "$(jq -r .projectUrl ops.config.json)"`
-   - `gh secret set DAK_PROJECT_TOKEN --body "<Project の書き込み権限を持つ PAT>"`（`project-autoadd` と `scripts/setup/request_issue.py` が Project に書くため、既定 `GITHUB_TOKEN` では不可）。`capture-golden` が収録した golden の PR もこの PAT で作るので、このリポジトリの Contents と Pull requests の Read and write も持たせる（`GITHUB_TOKEN` で作った PR では CI が起動しない）
-2. **ラベル同期**: `labels.yml` を main に push（`labels.yml` ワークフローが反映）
-3. **リポジトリ設定**:
-   - Settings → General → Pull Requests → **Allow auto-merge** を ON
-   - Settings → Branches → `main` の branch protection で **CI を必須チェック** に
-4. **LLM プロバイダ設定（provider 中立・実行時選択）**: reasoning 系ワークフロー
-   （tech-watch / feature-sync / charter-review）と triage の LLM リスク評価は、以下の
+1. **Project**: GitHub Project にフィールド Status（`Backlog` を含む）・Area・Kind・Priority・Phase・Story Points を持たせる。各値の意味と `ops.config.json` は [issue-workflow.md](issue-workflow.md)。URL を `ops.config.json` の `projectUrl` に書き、`gh variable set DAK_PROJECT_URL --body "$(jq -r .projectUrl ops.config.json)"`（Switchboard の道具が読む）
+2. **ラベル同期**: `labels.yml` を main に push（公開側の `labels.yml` ワークフローが反映）
+3. **LLM プロバイダ設定（手元で `dak-maint` を回すとき。provider 中立・実行時選択）**:
+   reasoning 系（`dak-maint` の watch / feature-sync / charter-review）と triage の LLM リスク評価は、以下の
    env で任意のプロバイダを選ぶ（Gemini / Ollama / OpenAI は OpenAI 互換、Anthropic は native Messages API）:
-   - `gh variable set MAINT_LLM_BASE_URL --body "<base url>"`
-   - `gh variable set MAINT_LLM_MODEL --body "<model id>"`
-   - `gh secret set MAINT_LLM_API_KEY --body "<api key>"`（Ollama は任意の値でOK）
+   - 環境変数 `MAINT_LLM_BASE_URL`（base url）/ `MAINT_LLM_MODEL`（model id）/ `MAINT_LLM_API_KEY`（Ollama は任意の値でOK。キーはファイルに書かず環境から渡す）
    - プリセット例（in/out per 1M tok、2026-10-01 確認。候補の比較・無料枠の条件・月額の見積もり・切り替えと元に戻す手順は [model-choice.md](model-choice.md)）:
-     - **Anthropic 直接 API（Haiku 5.5）**: `MAINT_LLM_MODEL=anthropic/claude-haiku-5-5` と Actions secret `MAINT_LLM_API_KEY`。`MAINT_LLM_BASE_URL` は不要。`MAINT_AWS_ROLE_ARN` を削除して Bedrock の認証手順を無効にする。ホストでの Parameter Store 運用は [anthropic.md](../getting-started/anthropic.md)。キーをローカルファイルへ保存しない。
+     - **Anthropic 直接 API（Haiku 5.5）**: `MAINT_LLM_MODEL=anthropic/claude-haiku-5-5` と `MAINT_LLM_API_KEY`。`MAINT_LLM_BASE_URL` は不要。ホストでの Parameter Store 運用は [anthropic.md](../getting-started/anthropic.md)。キーをローカルファイルへ保存しない。
      - **OpenAI**: `https://api.openai.com/v1` / `gpt-6-luna`（$0.10/$0.50）。`gpt-5.6-luna` $0.20/$1.20、`gpt-5-nano` $0.05/$0.40
      - **Gemini**: `https://generativelanguage.googleapis.com/v1beta/openai` / `gemini-3.5-flash-lite`（$0.30/$2.50、AI Studio 無料枠あり。無料枠の入出力は Google の製品改善に使われうる）。`gemini-3.5-flash` $1.50/$9.00、`gemini-3.8-flash` $0.75/$3.75（2026-12-31 まで。2027-01-01 から $1.50/$7.50）
      - **Ollama**: `http://<host>:11434/v1` / `llama3.1:8b`（無料・要ホスト）
-     - **Amazon Bedrock（IAM。API キー不要）**: `MAINT_LLM_MODEL=bedrock/global.openai.gpt-6-luna`（inference profile。`MAINT_LLM_BASE_URL` / `MAINT_LLM_API_KEY` は使わない）。ワークフローが GitHub の OIDC で IAM ロールを引き受け、Converse API を呼ぶ。準備:
-       - AWS に GitHub の OIDC プロバイダ（`token.actions.githubusercontent.com`、audience `sts.amazonaws.com`）と、`repo:<owner>/<repo>:ref:refs/heads/main` だけが引き受けられるロールを作る。権限は使う inference profile とその基になるモデルへの `bedrock:InvokeModel` だけ
-       - `gh variable set MAINT_AWS_ROLE_ARN --body "<ロールの ARN>"`（リージョンを変えるなら `MAINT_AWS_REGION`。既定 `us-east-1`）
-       - Bedrock に切り替えたら `MAINT_LLM_BASE_URL` を消す（`dependency-triage` は BASE_URL があるときだけ LLM で判定する。Dependabot の PR は main ではないのでロールを引き受けられず、ヒューリスティックの判定のまま動く）
-       - `vars.MAINT_ASSESSOR=llm` を明示しているなら外す（明示すると triage が Bedrock を認証情報なしで呼び、毎回失敗してヒューリスティックに落ちる）
-       - AWS の認証情報は、LLM を呼ぶ手順にだけ渡す（依存の導入や Issue の起票の手順には渡さない）。応答が途中で切れた・空のときは失敗として扱う（「提案 0 件」には見せない）
-   - **triage で LLM 評価も使う場合**は上記を **Dependabot secrets/variables にも登録**
-     （Dependabot PR には通常の Actions secrets が渡らないため）。未設定なら triage は
-     heuristic（キーワード）評価にフォールバックし、reasoning 系は提案 0 件で失敗しない。
-   - **Web 検索は Tavily を使用**: `gh secret set TAVILY_API_KEY`（+ Dependabot は不要）。
-     `tech-watch` / `charter-review` は Web 検索が必須なので、未設定だと提案 0 件になる
+     - **Amazon Bedrock（IAM。API キー不要）**: `MAINT_LLM_MODEL=bedrock/global.openai.gpt-6-luna`（inference profile。`MAINT_LLM_BASE_URL` / `MAINT_LLM_API_KEY` は使わない）。手元の AWS 認証情報で Converse API を呼ぶ（GitHub の OIDC で引き受けていた IAM ロールは #822 で消した）。応答が途中で切れた・空のときは失敗として扱う（「提案 0 件」には見せない）
+   - `MAINT_LLM_BASE_URL` が無いと triage は heuristic（キーワード）評価にフォールバックし、reasoning 系は提案 0 件で失敗しない。
+   - **Web 検索は Tavily を使用**: 環境変数 `TAVILY_API_KEY`。
+     `watch` / `charter-review` は Web 検索が必須なので、未設定だと提案 0 件になる
      （`feature-sync` は changelog ベースなので Tavily 不要）。
      ※ 規約遵守のため DuckDuckGo 等の HTML スクレイピングは行わない。
 
-## エスカレーション経路（依存更新）
-
-```
-Dependabot PR
-  └─ CI (ci.yml) 完了
-       └─ dependency-triage.yml
-            ├─ uv の更新: 更新前後の uv.lock を audit し、直る脆弱性の ID を判定に渡す（可否は変えない）
-            ├─ Tier0: semver 判定 + CI 結果
-            │    ├─ patch/minor + green + 非破壊 → auto-merge-candidate → gh pr merge --auto
-            │    └─ それ以外 → 次へ
-            └─ Tier2(必要時): changelog/CVE 精査
-                 └─ needs-human-review ラベル + リスク要約コメント + Project 追跡
-```
-
 ## 注意・既知の制約
 
-- **Dependabot と secrets**: 上記のとおり両方のストアに登録が必要。
-- **project-autoadd と Dependabot**: 以前 `project-autoadd.yml` は `pull_request`（`_target`
-  ではない）で動いており、Dependabot が起点のイベントは Dependabot secrets ストアからしか
-  secrets が供給されないため、通常の Actions secrets である `DAK_PROJECT_TOKEN` が空になって
-  必ず失敗していた。このジョブは PR コードの checkout を一切行わない（GitHub API 呼び出しのみ）
-  ため `pull_request_target` に切り替えても信頼できないコード実行のリスクがなく、常に通常の
-  Actions secrets が使われるようになった（`dependency-triage.yml` と同じ設計）。
 - **`uv audit`（preview）**: ロックしている版の既知の脆弱性の ID を見る（`maintenance/src/dak_maintenance/audit.py`）。
   2026-10-14 に uv 0.12.19 で
   `uv audit --frozen --preview-features audit-command,json-output --output-format json` を各ディレクトリで流した
@@ -92,12 +53,9 @@ Dependabot PR
   判定に読む欄は `vulnerabilities[].id` と `vulnerabilities[].dependency.{name,version}` だけ。
   **脆弱性があると終了コードは 1** なので、終了コードでなく JSON が読めるかで成否を決める
   （読めなければ `AuditResult.error`。「脆弱性 0 件」とは区別する）。preview の出力なので欄は変わりうる。
-  Actions の `astral-sh/setup-uv@v7` の版では未確認（`dependency-triage` の工程を足すときに確かめる）。
-  `dependency-triage` は uv の更新の PR で、対象ディレクトリの更新前（base）と更新後（PR の head。API でデータとして取る）の
-  `uv.lock` を audit して `triage` に渡し、判定のコメントの理由に「直る脆弱性: <ID / なし / audit できなかった>」を出す。
+  （`dependency-triage` は #822 でやめた。以下は手元の `dak-maint triage` の説明。）
   `dak-maint triage` は `--audit-before FILE --audit-after FILE`（上の JSON の出力）を受け取ると、更新で直る ID を
   結果の `fixes_vulnerabilities`・理由・`security` ラベルに出す。自動マージの可否（`decide`）は変えない。
-- **Ollama on CPU は遅い**: nightly 限定・小型モデル・寛容アサーション・モデル cache。PR ゲートには載せない。
 - **提案ノイズ**: `tech-watch`/`feature-sync` は 1 実行あたり件数上限を持ち、既存と内容が重なる提案はログに `skip:` を出して起票しない。
   提案（題と本文の先頭）と、既存の要望（`type:request`）・PBI（`type:pbi`）・そのワークフローの
   ラベルの Issue（開いた・閉じた）の題を LLM で 1 回突き合わせ、重なる提案は
