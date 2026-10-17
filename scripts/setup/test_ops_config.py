@@ -1,5 +1,4 @@
-"""The root ops.config.json describes DAK's Project: only the values DAK has of its own
-(run: `uv run --no-project --with pytest pytest scripts -q`)."""
+"""The root ops.config.json is in the shared kit's shape (run: `uv run --no-project --with pytest pytest scripts -q`)."""
 import json
 import re
 from pathlib import Path
@@ -11,11 +10,12 @@ def _config():
     return json.loads((ROOT / "ops.config.json").read_text(encoding="utf-8"))
 
 
-def test_ops_config_has_only_dak_values():
+def test_ops_config_has_the_kit_shape():
     config = _config()
 
-    assert set(config) == {"projectUrl", "fields"}
-    assert set(config["fields"]) == {"area", "phase"}
+    assert set(config) == {"projectUrl", "envPrefix", "fields", "milestone", "sections", "storyPoints"}
+    assert set(config["fields"]) == {"area", "kind", "priority", "phase"}
+    assert config["envPrefix"] == "DAK"
     assert re.fullmatch(r"https://github\.com/(orgs|users)/[^/]+/projects/\d+", config["projectUrl"])
 
 
