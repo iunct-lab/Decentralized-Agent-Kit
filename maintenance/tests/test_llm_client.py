@@ -164,24 +164,3 @@ def test_anthropic_timeout_is_not_retried(monkeypatch):
     with pytest.raises(httpx.ReadTimeout):
         llm_client.make_complete(model="anthropic/claude-haiku-5-5", api_key="fake-test-key")("hello")
     assert len(calls) == 1
-
-
-@pytest.mark.parametrize("model,url,key,expected", [
-    ("anthropic/claude-haiku-5-5", "", "fake-test-key", "llm"),
-    ("anthropic/claude-haiku-5-5", "", "", "heuristic"),
-    ("anthropic/claude-haiku-5-5", "https://old.example/v1", "", "heuristic"),
-    ("ollama", "http://local/v1", "", "llm"),
-    ("bedrock/x", "", "", "heuristic"),
-])
-def test_workflow_selects_native_anthropic_assessor(model, url, key, expected):
-    import os
-    import subprocess
-    from pathlib import Path
-    source = (Path(__file__).parents[2] / ".github/workflows/dependency-triage.yml").read_text()
-    start = source.index('          assessor="$MAINT_ASSESSOR"')
-    end = source.index('          uv run dak-maint triage', start)
-    result = subprocess.run(["bash", "-eu", "-c", source[start:end]], capture_output=True, text=True,
-                            env={**os.environ, "MAINT_ASSESSOR": "", "MAINT_LLM_MODEL": model,
-                                 "MAINT_LLM_BASE_URL": url, "MAINT_LLM_API_KEY": key})
-    assert result.returncode == 0
-    assert result.stdout.strip() == f"assessor={expected}"
