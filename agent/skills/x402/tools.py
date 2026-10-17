@@ -4,9 +4,9 @@ A 402 answer becomes an Observation; nothing is paid or signed here (System ENAB
 """
 import dataclasses
 
-import httpx
 from google.adk.tools.tool_context import ToolContext
 
+from dak_agent.outbound_url import OutboundURLRefused, outbound_client
 from dak_agent.payments.x402 import format_x402_observation, parse_payment_required
 
 # Session-state key: {url: [X402Requirement as dict, ...]} read from the last 402 of each URL
@@ -21,14 +21,17 @@ def fetch_url(url: str, tool_context: ToolContext) -> str:
     requirement (amount, asset, network, payTo, expires_in) is returned instead.
 
     Args:
-        url: The URL to fetch.
+        url: The URL to fetch. Only http / https to a public address; internal addresses are refused.
 
     Returns:
         "HTTP <status>" and the body, or the payment requirement for a 402 answer.
     """
     # Redirects are refused: the requirement shown must belong to the URL that would be paid
-    with httpx.Client(follow_redirects=False, timeout=30.0) as client:
-        response = client.get(url)
+    try:
+        with outbound_client(timeout=30.0) as client:
+            response = client.get(url)
+    except OutboundURLRefused as e:
+        return f"Not fetched: {e}"
     if response.status_code != 402:
         return f"HTTP {response.status_code}\n{response.text}"
 
