@@ -37,7 +37,7 @@
      - **Gemini**: `https://generativelanguage.googleapis.com/v1beta/openai` / `gemini-3.5-flash-lite`（$0.30/$2.50、AI Studio 無料枠あり。無料枠の入出力は Google の製品改善に使われうる）。`gemini-3.5-flash` $1.50/$9.00、`gemini-3.8-flash` $0.75/$3.75（2026-12-31 まで。2027-01-01 から $1.50/$7.50）
      - **Ollama**: `http://<host>:11434/v1` / `llama3.1:8b`（無料・要ホスト）
      - **Amazon Bedrock（IAM。API キー不要）**: `MAINT_LLM_MODEL=bedrock/global.openai.gpt-6-luna`（inference profile。`MAINT_LLM_BASE_URL` / `MAINT_LLM_API_KEY` は使わない）。手元の AWS 認証情報で Converse API を呼ぶ（GitHub の OIDC で引き受けていた IAM ロールは #822 で消した）。応答が途中で切れた・空のときは失敗として扱う（「提案 0 件」には見せない）
-   - `MAINT_LLM_BASE_URL` が無いと triage は heuristic（キーワード）評価にフォールバックし、reasoning 系は提案 0 件で失敗しない。
+   - `MAINT_LLM_MODEL` / `MAINT_LLM_API_KEY` / `MAINT_LLM_BASE_URL` が使うモデルに足りないと、triage は heuristic（キーワード）評価にフォールバックし、reasoning 系は提案 0 件で失敗しない。ただし Anthropic のモデル（`anthropic/…`）は `MAINT_LLM_BASE_URL` が無くても API キーがあれば呼ぶので、有料の呼び出しを避けるなら `MAINT_LLM_API_KEY` を渡さない。
    - **Web 検索は Tavily を使用**: 環境変数 `TAVILY_API_KEY`。
      `watch` / `charter-review` は Web 検索が必須なので、未設定だと提案 0 件になる
      （`feature-sync` は changelog ベースなので Tavily 不要）。
