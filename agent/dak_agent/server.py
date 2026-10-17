@@ -11,12 +11,15 @@ Nothing is stored here. The routes read the session and resume it through
 ADK's own REST routes (`GET /apps/.../sessions/...`, `POST /run`), called
 in-process, so any client that answers gets the same result.
 
+Every request is logged as one `request` line (`request_log.py`).
+
 A middleware refuses (400) a session `state` / `state_delta` that sets a key DAK
 owns (`permission.owned_state_keys`), so a caller cannot pre-approve a tool.
 """
 import asyncio
 import json
 import os
+import time
 import weakref
 from typing import Literal, Optional
 from urllib.parse import quote
@@ -25,9 +28,10 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from google.adk.cli.fast_api import get_fast_api_app
+from opentelemetry import trace
 from pydantic import BaseModel
 
-from . import agent_card, approvals, config
+from . import agent_card, approvals, config, patches, request_log
 from .permission import owned_state_keys
 
 # The directory holding `dak_agent/` (what `adk web` got as its working directory).
@@ -49,6 +53,8 @@ app = get_fast_api_app(
     host="0.0.0.0",
     port=8000,
 )
+# So the first request also gets a real trace ID, whichever module loads first.
+patches.ensure_tracer_provider()
 
 
 
@@ -101,7 +107,7 @@ _session_locks: "weakref.WeakValueDictionary[tuple, asyncio.Lock]" = weakref.Wea
 
 
 def _adk() -> httpx.AsyncClient:
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://adk", timeout=None)
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app, client=("in-process", 0)), base_url="http://adk", timeout=None)
 
 
 async def _session_events(client: httpx.AsyncClient, app_name: str, user_id: str, session_id: str) -> list[dict]:
@@ -215,3 +221,32 @@ async def stream(request: Request, user_id: str, session_id: str, app_name: str 
 
 
 app.include_router(router)
+
+
+# Added last, so it is the outermost middleware and also records the 400 above.
+@app.middleware("http")
+async def log_request(request: Request, call_next):
+    path = request.url.path.rstrip("/") or "/"
+    body = None
+    if request_log.reads_body(request.method, path):
+        try:
+            body = json.loads(await request.body())
+        except ValueError:
+            pass  # not JSON: no body fields
+    fields = request_log.request_fields(path, request.query_params, body)
+    fields.update(client=request.client.host if request.client else "-", method=request.method, path=path)
+    started = time.monotonic()
+    # Nothing extracts the caller's `traceparent`, so a caller cannot pick the ID the lines are matched by.
+    with trace.get_tracer(__name__).start_as_current_span("dak.request") as span:
+        trace_id = span.get_span_context().trace_id
+        fields["trace_id"] = format(trace_id, "032x") if trace_id else "-"
+        try:
+            response = await call_next(request)
+            fields["status"] = response.status_code
+        except Exception:
+            fields["status"] = 500
+            raise
+        finally:
+            fields["ms"] = int((time.monotonic() - started) * 1000)
+            request_log.logger.info(request_log.format_line(fields))
+    return response
