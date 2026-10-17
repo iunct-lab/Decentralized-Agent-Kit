@@ -17,8 +17,16 @@ Parameters:
     Default: us-east-1
     Description: Region the model is called in (AWS_REGION_NAME).
   BedrockModelArns:
-    Type: CommaDelimitedList
-    Description: ARNs allowed for bedrock:InvokeModel (foundation models / inference profiles).
+    Type: String
+    Default: ''
+    Description: Comma-separated ARNs allowed for bedrock:InvokeModel. Empty when the model is Anthropic's API.
+  ApiKeyParameterName:
+    Type: String
+    Default: ''
+    AllowedPattern: '^(/.+)?$'
+    Description: >
+      Name, starting with `/` (not the value), of an SSM Parameter Store SecureString that holds the model API key,
+      e.g. for Anthropic's API. The function may read only this parameter. Empty = no key is read.
   CallerRoleArn:
     Type: String
     Description: The execution role that may invoke the function.
@@ -45,6 +53,8 @@ Parameters:
     Type: String
 
 Conditions:
+  HasBedrock: !Not [!Equals [!Ref BedrockModelArns, '']]
+  HasApiKeyParameter: !Not [!Equals [!Ref ApiKeyParameterName, '']]
   HasSecondCaller: !Not [!Equals [!Ref SecondCallerRoleArn, '']]
 
 Resources:
@@ -89,12 +99,22 @@ Resources:
           DAK_MAX_LLM_CALLS: !Ref MaxLlmCalls
           DAK_MAX_OUTPUT_TOKENS: !Ref MaxOutputTokens
           DAK_MAX_TURN_SECONDS: '840'   # stop before the 900 s timeout
+          DAK_API_KEY_PARAMETER: !If [HasApiKeyParameter, !Ref ApiKeyParameterName, !Ref 'AWS::NoValue']
       Policies:
         - Version: '2012-10-17'
           Statement:
-            - Effect: Allow
-              Action: bedrock:InvokeModel
-              Resource: !Ref BedrockModelArns
+            - !If
+              - HasBedrock
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Split [',', !Ref BedrockModelArns]
+              - !Ref 'AWS::NoValue'
+            - !If
+              - HasApiKeyParameter
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ApiKeyParameterName}'
+              - !Ref 'AWS::NoValue'
             - Effect: Allow
               Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem]
               Resource: !GetAtt JobTable.Arn

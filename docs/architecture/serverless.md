@@ -111,6 +111,7 @@ CI の統合テスト `tests/integration/test_minimal_overhead.py` が、指示�
 - モジュールの先頭では標準ライブラリだけを import し、`dak_agent.agent` は最初の呼び出しで読む。Init の上限 10 秒（上の実測）に載せないため
 - `dak:tools` が無ければ `[]` を入れる。MCP サーバを配置しないので、届かない接続先を待たない
 - 呼び出しの本文と `state_delta` の値はログに出さない
+- モデルの API キーを Parameter Store から読める（#804）。`DAK_API_KEY_PARAMETER` にパラメータの**名前**を渡すと、最初の呼び出しで 1 回だけ読んで `ANTHROPIC_API_KEY` に入れる。値はテンプレート・イメージ・ログのどこにも書かない。実行ロールには、そのパラメータだけの `ssm:GetParameter` を許す。指定が無ければ何も読まない（Bedrock を実行ロールで呼ぶ構成）
 
 #### ジョブ（非同期の受け取り、#716）
 

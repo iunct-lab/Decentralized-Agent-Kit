@@ -27,6 +27,11 @@ sam deploy -t deploy/aws/template.yaml --stack-name <name> --capabilities CAPABI
     BedrockModelArns=<arn,arn> CallerRoleArn=<role arn> BudgetEmail=<address>
 ```
 
+To call Anthropic's API instead of Bedrock, leave `BedrockModelArns` empty and pass
+`ApiKeyParameterName=<SSM parameter name>` (a SecureString). Only the *name* is given: the function
+reads that one parameter at its first call (`ssm:GetParameter`) and puts the value in
+`ANTHROPIC_API_KEY`. The value is in no template, image or log.
+
 For a dev check, deploy `dev-caller.yaml` as well (it needs `--capabilities CAPABILITY_IAM`):
 
 ```bash

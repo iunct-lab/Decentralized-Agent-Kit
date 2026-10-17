@@ -1,6 +1,7 @@
 """The properties of `deploy/aws/template.yaml` the cost and access limits rest on
 (PBI #135): no automatic retry, bounded concurrency, Bedrock only for the listed
-models, a budget notified twice, and no key anywhere in `deploy/aws/`."""
+models, a budget notified twice, the key parameter as the only SSM read, and no key
+value anywhere in `deploy/aws/`."""
 import re
 from pathlib import Path
 
@@ -45,15 +46,36 @@ def test_concurrency_is_reserved(function):
     assert function["ReservedConcurrentExecutions"] == {"Ref": "ReservedConcurrency"}
 
 
+def _statements(function):
+    """The policy statements, with the `Fn::If` wrappers opened: [(condition, statement)]."""
+    out = []
+    for s in function["Policies"][0]["Statement"]:
+        if "If" in s:  # `!If [condition, statement, !Ref AWS::NoValue]`
+            out.append((s["If"][0], s["If"][1]))
+        else:
+            out.append((None, s))
+    return [(c, st) for c, st in out if "Action" in st]
+
+
 def test_bedrock_is_limited_to_the_listed_models(function):
-    statements = function["Policies"][0]["Statement"]
-    bedrock = [s for s in statements if s["Action"] == "bedrock:InvokeModel"]
-    assert len(bedrock) == 1 and bedrock[0]["Resource"] == {"Ref": "BedrockModelArns"}
+    bedrock = [(c, s) for c, s in _statements(function) if s["Action"] == "bedrock:InvokeModel"]
+    assert len(bedrock) == 1
+    condition, statement = bedrock[0]
+    assert condition == "HasBedrock"
+    assert statement["Resource"] == {"Split": [",", {"Ref": "BedrockModelArns"}]}
+
+
+def test_api_key_parameter_is_the_only_ssm_read(function):
+    ssm = [(c, s) for c, s in _statements(function) if str(s["Action"]).startswith("ssm:")]
+    assert len(ssm) == 1
+    condition, statement = ssm[0]
+    assert condition == "HasApiKeyParameter" and statement["Action"] == "ssm:GetParameter"
+    assert "${ApiKeyParameterName}" in statement["Resource"]["Sub"]
+    assert "parameter${ApiKeyParameterName}" in statement["Resource"]["Sub"]
 
 
 def test_table_access_is_only_get_put_update(function):
-    statements = function["Policies"][0]["Statement"]
-    actions = [a for s in statements if isinstance(s["Action"], list) for a in s["Action"]]
+    actions = [a for _, s in _statements(function) if isinstance(s["Action"], list) for a in s["Action"]]
     assert sorted(actions) == ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
 
 
@@ -70,4 +92,6 @@ def test_only_listed_roles_may_invoke(resources):
 
 def test_no_key_in_the_deploy_files():
     text = "\n".join(p.read_text() for p in DEPLOY.iterdir())
-    assert not re.search(r"api_key|secret|password|AKIA[0-9A-Z]{16}", text, re.I)
+    # Names such as `ApiKeyParameterName` are expected; a key *value* is not.
+    assert not re.search(r"AKIA[0-9A-Z]{16}|sk-ant-[A-Za-z0-9_-]{10,}", text)
+    assert not re.search(r"(api_?key|secret|password)\s*[:=]\s*['\"]?[A-Za-z0-9/+_-]{16,}", text, re.I)
