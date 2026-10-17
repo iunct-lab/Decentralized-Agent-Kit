@@ -63,7 +63,7 @@ tests/integration/
   test_golden_replay.py     golden を fake-LLM で再生
   tools/capture_golden.py   実LLMセッション → golden 変換
 scripts/setup/
-  （共通キットの入口 lint_backlog.sh ほか。以前の request_issue.py は #822 でやめた）
+  （共通キットの入口 lint_backlog.sh ほか。以前の Python 版の request_issue は #822 でやめた）
 ```
 
 ## 4. 判断エンジン（`maintenance/dak_maintenance`）

@@ -21,7 +21,7 @@
 
 この 2 本は Private の開発用リポジトリでは動かず（Actions が使えない）、公開側のリポジトリで同期の PR のテストとラベルの同期に使う。`ci.yml` は Switchboard の `local-ci.ts` が読む。
 
-**#822 でやめたもの**（2026-10-17。開発用を Private にし、DAK 独自の workflow を減らす決定）: `dependency-triage.yml`・`feature-sync.yml`・`tech-watch.yml`・`charter-review.yml`・`nightly-eval.yml`・`capture-golden.yml`・`verify-anthropic.yml`・`project-autoadd.yml`、`dependabot.yml`、定期実行の起票に使った `request_issue.py`、`dak-cloud-eval-bedrock` の IAM ロール。手放した情報: 依存の自動 triage とマージ（Dependabot の PR も来ない）、新技術・依存の新機能・憲章の定期の提案 Issue、nightly eval の pass rate の記録（回帰の検知は統合テストと実 LLM スモークの手動実行）。ロジックの `maintenance/`（`dak-maint`）と DAK スキル `agent/skills/dependency_maintenance/` は残り、手元で回せる（[maintenance/README.md](../../maintenance/README.md)）。新しい Issue の Project への追加と要望の起票は共通キットの入口（`scripts/setup/`）を使う。
+**#822 でやめたもの**（2026-10-17。開発用を Private にし、DAK 独自の workflow を減らす決定）: `dependency-triage.yml`・`feature-sync.yml`・`tech-watch.yml`・`charter-review.yml`・`nightly-eval.yml`・`capture-golden.yml`・`verify-anthropic.yml`・`project-autoadd.yml`、`dependabot.yml`、定期実行の起票に使った `Python 版の request_issue`、`dak-cloud-eval-bedrock` の IAM ロール。手放した情報: 依存の自動 triage とマージ（Dependabot の PR も来ない）、新技術・依存の新機能・憲章の定期の提案 Issue、nightly eval の pass rate の記録（回帰の検知は統合テストと実 LLM スモークの手動実行）。ロジックの `maintenance/`（`dak-maint`）と DAK スキル `agent/skills/dependency_maintenance/` は残り、手元で回せる（[maintenance/README.md](../../maintenance/README.md)）。新しい Issue の Project への追加と要望の起票は共通キットの入口（`scripts/setup/`）を使う。
 
 ## 初期セットアップ（一度だけ）
 

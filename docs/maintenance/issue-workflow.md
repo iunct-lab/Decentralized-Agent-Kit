@@ -34,7 +34,7 @@ Milestone を作る段階は `Phase N — <その段階の題>` の名前にし�
 
 ## Status
 
-Status の選択肢には `Backlog` が要る。要望は共通キットの入口 `scripts/setup/request_issue.sh` が Status=Backlog で載せるので、無いと失敗する（以前の `project-autoadd` と `request_issue.py` は #822 でやめた）（新しい Project の既定は Todo / In Progress / Done だけ）。
+Status の選択肢には `Backlog` が要る。要望は共通キットの入口 `scripts/setup/request_issue.sh` が Status=Backlog で載せるので、無いと失敗する（以前の `project-autoadd` と `Python 版の request_issue` は #822 でやめた）（新しい Project の既定は Todo / In Progress / Done だけ）。
 
 ## トークン
 
