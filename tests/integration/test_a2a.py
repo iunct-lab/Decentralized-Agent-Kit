@@ -9,6 +9,7 @@ docs/architecture/a2a.md.
 """
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import subprocess
@@ -179,3 +180,64 @@ def test_delegation_to_peer_with_non_default_name(agent_consumer, fake_llm):
     assert "card signature: verified (kid=test-1)" in instruction
     # ...and put the skills the peer's card lists into the sub-agent's description
     assert "premium_service" in instruction, instruction
+
+
+def _namespaced_context_id(app_name: str, user_id: str, session_id: str) -> str:
+    """The context_id ADK 2.12 sends for forward_session_id_as_context_id="namespaced"
+    (`_namespaced_session_context_id` in google/adk/a2a/agent/_remote_a2a_agent.py)."""
+    digest_input = "\x1f".join(f"{len(part)}:{part}" for part in (app_name, user_id, session_id))
+    return hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
+
+
+def _peer_session_ids(agent_peer, context_id: str) -> list:
+    """The peer's sessions for one context_id: ADK's A2A server runs a request as user
+    A2A_USER_<context_id> in a session whose id is the context_id."""
+    resp = httpx.get(
+        f"{agent_peer.base_url}/apps/{APP_NAME}/users/A2A_USER_{context_id}/sessions", timeout=30.0
+    )
+    resp.raise_for_status()
+    return [session["id"] for session in resp.json()]
+
+
+def _delegate(agent_consumer, fake_llm, session_id, request, reply):
+    fake_llm.script("fake-consumer", [fake_llm.tool_call("transfer_to_agent", agent_name="dak_peer")])
+    fake_llm.script("fake-peer", [fake_llm.text(reply)])
+    events = agent_consumer.run(session_id, request)
+    assert reply in event_texts(events), events
+
+
+def test_two_turn_delegation_continues_the_peer_conversation(agent_consumer, agent_peer, fake_llm):
+    """Two turns of one consumer session reach the peer as one conversation: the peer sees the
+    first turn when it answers the second, under one session whose id is not the consumer's
+    session_id (#767)."""
+    fake_llm.clear("fake-consumer")
+    fake_llm.clear("fake-peer")
+
+    session_id = agent_consumer.create_session()
+    _delegate(agent_consumer, fake_llm, session_id, "First request to the peer.", "First reply from the peer.")
+    _delegate(agent_consumer, fake_llm, session_id, "Second request to the peer.", "Second reply from the peer.")
+
+    second = json.dumps(fake_llm.requests("fake-peer")[-1]["messages"])
+    assert "First request to the peer." in second and "First reply from the peer." in second, second
+
+    context_id = _namespaced_context_id(APP_NAME, agent_consumer.user_id, session_id)
+    assert _peer_session_ids(agent_peer, context_id) == [context_id]
+    assert context_id != session_id
+
+
+def test_delegation_from_another_session_uses_another_context_id(agent_consumer, agent_peer, fake_llm):
+    fake_llm.clear("fake-consumer")
+    fake_llm.clear("fake-peer")
+
+    first_session = agent_consumer.create_session()
+    second_session = agent_consumer.create_session()
+    _delegate(agent_consumer, fake_llm, first_session, "Ask the peer.", "Reply for the first session.")
+    _delegate(agent_consumer, fake_llm, second_session, "Ask the peer.", "Reply for the second session.")
+
+    first = _namespaced_context_id(APP_NAME, agent_consumer.user_id, first_session)
+    second = _namespaced_context_id(APP_NAME, agent_consumer.user_id, second_session)
+    assert first != second
+    assert _peer_session_ids(agent_peer, first) == [first]
+    assert _peer_session_ids(agent_peer, second) == [second]
+    # the second session's request did not carry the first session's conversation
+    assert "Reply for the first session." not in json.dumps(fake_llm.requests("fake-peer")[-1]["messages"])

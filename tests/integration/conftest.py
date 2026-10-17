@@ -18,6 +18,7 @@ AGENT_CONSUMER_URL = os.getenv("DAK_AGENT_CONSUMER_URL", "http://localhost:8013"
 AGENT_AP2_INTENT_URL = os.getenv("DAK_AGENT_AP2_INTENT_URL", "http://localhost:8014")
 AGENT_WEBSEARCH_URL = os.getenv("DAK_AGENT_WEBSEARCH_URL", "http://localhost:8015")
 AGENT_LAMBDA_URL = os.getenv("DAK_AGENT_LAMBDA_URL", "http://localhost:8016")
+AGENT_PEER_URL = os.getenv("DAK_AGENT_PEER_URL", "http://localhost:8017")
 MCP_URL = os.getenv("DAK_MCP_URL", "http://localhost:8001/mcp")
 BFF_URL = os.getenv("DAK_BFF_URL", "http://localhost:8002")
 FAKE_LLM_URL = os.getenv("DAK_FAKE_LLM_URL", "http://localhost:8089")
@@ -157,6 +158,11 @@ def agent_harness_eval():
 @pytest.fixture
 def agent_consumer():
     return AgentClient(AGENT_CONSUMER_URL)
+
+
+@pytest.fixture
+def agent_peer():
+    return AgentClient(AGENT_PEER_URL)
 
 
 # --- Event helpers ---
