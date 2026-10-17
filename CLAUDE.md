@@ -39,16 +39,13 @@ fake-LLM はモデル名ごとに応答をスクリプトできる制御API（`/
 
 `docs/maintenance/README.md` が全体像。要点:
 
-- **依存更新**: Dependabot → `dependency-triage` が semver+CI+リスクで判定し安全なら自動マージ。
-  判定ロジックは `maintenance/dak_maintenance`（CLI `dak-maint triage`）。同じロジックは
-  DAK スキル `agent/skills/dependency_maintenance/` からエージェントも実行できる。
-- **新技術ウォッチ**: `tech-watch` / `charter-review` が `docs/CHARTER.md` を軸に提案 Issue を起票。
-- **継続テスト**: `nightly-eval`（小型 Ollama）+ golden replay の自動増殖。`docs/eval/`。
+- **定期の workflow は #822 でやめた**（依存の triage・tech-watch・nightly eval・charter review・feature sync。経緯と手放した情報は `docs/maintenance/README.md`）。残る workflow は `ci.yml` と `labels.yml` だけ。
+- **依存更新・新技術ウォッチ・継続テストのロジックは残してある**: `maintenance/dak_maintenance`（CLI `dak-maint`）と、DAK スキル `agent/skills/dependency_maintenance/`。手元で回す。回帰の検知は統合テストと実 LLM スモーク（`docs/eval/`）。
 - **すべての作業は GitHub Project 管理**（DAK の Project の固有の値は root の `ops.config.json`）。
 
 ## 保守・検証の入口
 
-- 新技術ウォッチ・依存の新機能・憲章見直しは GitHub Actions が定期実行する（`tech-watch` / `feature-sync` / `charter-review`）。今すぐ回すときは `gh workflow run <name>.yml`。依存更新の判定は Dependabot の PR ごとに `dependency-triage` が走る。
+- 新技術ウォッチ・依存の新機能・憲章見直し・依存の triage は、手元で `dak-maint` を回す（定期の workflow は #822 でやめた）。
 - ロジックは `maintenance/`（CLI `dak-maint`、`maintenance/README.md`）、判断基準は `docs/CHARTER.md`。手元で `dak-maint` の `watch` / `feature-sync` / `charter-review` を回すには `MAINT_LLM_*`（`watch` と `charter-review` は `TAVILY_API_KEY` も）が要る。`triage` は無くても動く。
 - テストは上の「テスト 3 層」。
 - ランタイムの DAK スキル（`agent/skills/`）の作り方は `agent/skills/README.md`。

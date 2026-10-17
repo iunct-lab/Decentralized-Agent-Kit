@@ -1,7 +1,7 @@
 # DAK 憲章 (Charter)
 
 > このファイルは Decentralized-Agent-Kit の**目的と判断軸**を定める。
-> 自動化（特に `tech-watch` / `feature-sync`）は、新しいライブラリ・仕様・手法を
+> 手元で回す `dak-maint`（`watch` / `feature-sync`。定期の workflow は #822 でやめた）や人は、新しいライブラリ・仕様・手法を
 > 採用すべきか否かを**この憲章に照らして**判断する。四半期ごとに見直す（下記）。
 
 ## Mission
@@ -43,7 +43,7 @@ Protocol)」を土台とする **P2P AI エージェント・エコシステム*
 - コア MVP に無関係なアプリ機能（汎用 SaaS 化、独自 UI フレームワーク移行など）。
 - 重量級の新規常時依存（小型ローカル LLM での動作を阻害するもの）。
 
-## 新技術の採用基準（tech-watch の判断ルール）
+## 新技術の採用基準（`dak-maint watch` の判断ルール）
 
 提案は次を**すべて**満たすときに Issue 化する:
 
@@ -55,7 +55,7 @@ Protocol)」を土台とする **P2P AI エージェント・エコシステム*
 
 ## 見直しサイクル
 
-- **四半期ごと**に `charter-review` ワークフローが「Charter review」Issue を起票し、
+- **四半期ごと**に（以前は `charter-review` ワークフローが「Charter review」Issue を起票していた。#822 でやめたので、今は `dak-maint charter-review` を手元で回すか人が見直す）、
   landscape の変化（新仕様・新フレームワークの台頭）と本憲章の改訂案を提示する。
 - 初期の目的だけに縛られないよう、スコープ内ドメイン・スコープ外・採用基準を毎回見直す。
 - 憲章の変更は PR で行い、CODEOWNERS（`docs/CHARTER.md`）のレビューを必須とする。

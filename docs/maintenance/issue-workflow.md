@@ -34,8 +34,8 @@ Milestone を作る段階は `Phase N — <その段階の題>` の名前にし�
 
 ## Status
 
-Status の選択肢には `Backlog` が要る。新しい Issue は `project-autoadd` が、定期実行の要望は `scripts/setup/request_issue.py` が Status=Backlog で載せるので、無いと失敗する（新しい Project の既定は Todo / In Progress / Done だけ）。
+Status の選択肢には `Backlog` が要る。要望は共通キットの入口 `scripts/setup/request_issue.sh` が Status=Backlog で載せるので、無いと失敗する（以前の `project-autoadd` と `Python 版の request_issue` は #822 でやめた）（新しい Project の既定は Todo / In Progress / Done だけ）。
 
 ## トークン
 
-`DAK_PROJECT_TOKEN`（Actions の Secrets）は、`project-autoadd` と `request_issue.py` が Project に書くための、Project の書き込み権限を持つトークン。既定の `GITHUB_TOKEN` は Project に書けない。
+`DAK_PROJECT_TOKEN`（Actions の Secrets）は、以前 `project-autoadd` と定期実行の起票が Project に書くために使った。#822 でそれらをやめ、secret も消した。Project への書き込みは共通キットの入口が利用者の認証で行う。

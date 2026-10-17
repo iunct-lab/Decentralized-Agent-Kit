@@ -9,19 +9,18 @@ DAK の「実モデル」品質を継続的に測るための仕組み（要件6
    → `tests/integration/test_golden_replay.py`
    → 増やし方: `tests/integration/golden/README.md`
 
-2. **nightly 実LLM eval**（夜間, 小型 Ollama, 寛容アサーション）
-   `.github/workflows/nightly-eval.yml` が小型モデルでゲート済みスモークを実行し、
-   pass-rate を `history.jsonl`（リリース `eval-history` の asset）に追記する。PR ゲートではなく傾向シグナル。
+2. **実LLM スモーク**（小型 Ollama, 寛容アサーション, 手動）
+   以前は `nightly-eval.yml` が夜間に回して pass-rate を `history.jsonl`（リリース `eval-history` の asset）に追記していた。#822 でやめたので、回帰の検知は `./scripts/smoke_local_llm.sh`（`DAK_SMOKE_REAL_LLM=1`）の手動実行。PR ゲートではなく傾向シグナル。
 
 補助: 同じスモークを安価なクラウドモデルで手動実行することもできる
 （`./scripts/smoke_cloud_llm.sh`、既定 `openai/gpt-5.6-luna`、1 回数セント程度）。
 ローカルの GPU/メモリが塞がっている時や、プロバイダ採用前の品質確認に使う。
-Bedrock のクラウドモデルで回すときの費用・認証（GitHub OIDC）・頻度の比較は [cloud-eval.md](cloud-eval.md)。
+Bedrock のクラウドモデルで回すときの費用・頻度の比較（過去の調査。GitHub OIDC の経路と IAM ロールは #822 で消した）は [cloud-eval.md](cloud-eval.md)。
 
 ## history.jsonl
 
 記録は git の外に持つ: リリース `eval-history`（版ではない固定のリリース）の asset `history.jsonl`。
-毎晩 nightly-eval が asset を落として 1 行足し、その全体の写しを実行の artifact `nightly-eval` に残してから asset を差し替える。
+以前は毎晩 nightly-eval（#822 でやめた。記録は 2026-10-17 で止まっている）が asset を落として 1 行足し、その全体の写しを実行の artifact `nightly-eval` に残してから asset を差し替える。
 main への直接の push はルールセットに止められ、評価の結果は枝に含める内容でもないため（#517）。
 
 ```bash
@@ -36,8 +35,8 @@ gh release download eval-history -p history.jsonl          # 今の記録を落�
 
 - `provider`: どの経路で回したか（`ollama` / `bedrock`）。この項目の無い古い行は `ollama` とみなす
 - `runner`: 実行環境（GitHub のランナーなら `github-hosted`）
-- `profile`: エージェントに `DAK_HARNESS_PROFILE` で指定したハーネスプロファイル（`agent/profiles/<名前>.yaml`）。空は未指定で、モデル名に合う `pattern` のプロファイルが使われる（`qwen` を含むモデルなら `qwen-small`、ほかは `default`）。この項目の無い古い行は空とみなす。プロファイルあり/なしの比較は、同じ `model` で `workflow_dispatch` を `-f profile=` と `-f profile=<名前>` の 2 回流し、2 行の `pass_rate` を見比べる（プロファイルの効かない側を確実にしたいなら `-f profile=default`）
-- `vulnerabilities`: 5 つの `uv.lock`（`agent`・`mcp-server`・`bff`・`cli`・`integration`）を `uv audit`（preview）にかけた結果。lock ごとに `{"ids": [GHSA/CVE の ID], "error": null}`、audit できなかった lock は `ids` が空で `error` に理由。見るだけで、nightly の成否には使わない。ID を渡さない経路（Bedrock のジョブ）と古い行は `{}` か欄なし
+- `profile`: エージェントに `DAK_HARNESS_PROFILE` で指定したハーネスプロファイル（`agent/profiles/<名前>.yaml`）。空は未指定で、モデル名に合う `pattern` のプロファイルが使われる（`qwen` を含むモデルなら `qwen-small`、ほかは `default`）。この項目の無い古い行は空とみなす。プロファイルあり/なしの比較は、同じ `model` で `DAK_HARNESS_PROFILE` を空と `<名前>` にして実LLMスモークを 2 回手動で回し、2 回の `pass_rate` を見比べる（プロファイルの効かない側を確実にしたいなら `default`。以前は `workflow_dispatch` の `-f profile=` で流していた。#822 でやめた）
+- `vulnerabilities`: 5 つの `uv.lock`（`agent`・`mcp-server`・`bff`・`cli`・`integration`）を `uv audit`（preview）にかけた結果。lock ごとに `{"ids": [GHSA/CVE の ID], "error": null}`、audit できなかった lock は `ids` が空で `error` に理由。見るだけで、成否には使わない（nightly は #822 でやめた）。ID を渡さない経路（Bedrock のジョブ）と古い行は `{}` か欄なし
 
 行は `dak-maint eval-record`（`maintenance/`）が JUnit XML から書く。経路ごとの今月の実行回数は
 `dak-maint eval-budget --history <落とした history.jsonl> --provider <経路> --limit <回数>`（`maintenance/` で実行）が数え、上限に達していれば `allowed=false` と理由を出す。
@@ -57,6 +56,6 @@ pass_rate の推移を見て、モデル更新やプロンプト改善の効果�
 ```
 実LLMスモークで新しい成功セッション
   └─ capture_golden.py で決定論 golden に凍結
-       └─ capture-golden ワークフローが PR 提案
+       └─ （以前は capture-golden ワークフローが PR 提案。#822 でやめたので、今は手元で PR にする）
             └─ マージで PR CI の回帰スイートが増える
 ```

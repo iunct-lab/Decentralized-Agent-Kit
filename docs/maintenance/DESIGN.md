@@ -3,6 +3,8 @@
 > このリポジトリを**継続的・サステナブルに自己更新し続ける**ための仕組みの設計。
 > アーキテクチャ図: [`architecture.drawio`](./architecture.drawio)（diagrams.net で開く / 2ページ構成）。
 > 運用手順は [`README.md`](./README.md)、目的の判断軸は [`../CHARTER.md`](../CHARTER.md)。
+>
+> **#822（2026-10-17）で定期・自動の workflow（dependency-triage / feature-sync / tech-watch / charter-review / nightly-eval / capture-golden / verify-anthropic / project-autoadd）と Dependabot をやめた。** 以下は当時の設計の記録で、判断エンジン（`maintenance/`）と DAK スキルは残り、手元の `dak-maint` で回す。
 
 ## 1. 目的とゴール（要件との対応）
 
@@ -42,17 +44,12 @@
 ```
 .github/
   ISSUE_TEMPLATE/ · PULL_REQUEST_TEMPLATE.md · CODEOWNERS · labels.yml   ← Phase1 基盤
-  dependabot.yml                                                          ← Phase2 依存検知
   workflows/
     ci.yml                  (既存: unit + fake-LLM integration。matrix に maintenance 追加)
     labels.yml              ラベル宣言同期
-    project-autoadd.yml     新 Issue/PR を Project へ（新しい Issue は Status=Backlog）
-    dependency-triage.yml   Phase2: 依存判定 + auto-merge
-    feature-sync.yml        Phase2/要件3: 新機能取り込み提案
-    tech-watch.yml          Phase3: 新技術ウォッチ
-    charter-review.yml      Phase3: 憲章の四半期見直し
-    nightly-eval.yml        Phase4/要件6: 小型 Ollama 実LLMスモーク
-    capture-golden.yml      Phase4/要件6: 実セッションを golden 化して PR 提案
+    （以前はここに dependabot.yml と project-autoadd / dependency-triage / feature-sync /
+     tech-watch / charter-review / nightly-eval / capture-golden / verify-anthropic の各 workflow があった。
+     #822 でやめた。判断エンジンは maintenance/ に残り、手元の dak-maint で回す）
 maintenance/                Phase2: 独立 Python パッケージ（判断エンジン本体）
   src/dak_maintenance/{semver,risk,decide,changelog,llm_client,cli}.py
   tests/                    29 unit tests
@@ -66,7 +63,7 @@ tests/integration/
   test_golden_replay.py     golden を fake-LLM で再生
   tools/capture_golden.py   実LLMセッション → golden 変換
 scripts/setup/
-  request_issue.py          定期実行の提案を要望 Issue として起票し Backlog に載せる
+  （共通キットの入口 lint_backlog.sh ほか。以前の Python 版の request_issue は #822 でやめた）
 ```
 
 ## 4. 判断エンジン（`maintenance/dak_maintenance`）
@@ -143,7 +140,7 @@ fake-LLM がモデル名ごとに応答をスクリプトできること（`/scr
 ## 6. GitHub Project を単一の真実に（要件1）
 
 - Project v2 のフィールドは Status（`Backlog` を含む）/Area/Kind/Priority/Phase/Story Points。DAK 固有の値（Project の URL、Area・Phase の選択肢）は root の `ops.config.json`、その意味は [issue-workflow.md](issue-workflow.md)。
-- `project-autoadd.yml` が以後の新 Issue/PR を自動追加し、新しい Issue の Status を Backlog にする（未設定時はスキップして CI を汚さない）。定期実行の提案は `scripts/setup/request_issue.py` が要望 Issue として起票し、自分で Backlog に載せる。
+- 新 Issue の Project への追加と Status=Backlog は、以前は `project-autoadd.yml` が行っていた（#822 でやめた）。今は共通キットの入口（`scripts/setup/`）で追加する。
 - すべての自動化アウトプット（auto-merge PR・レビュー要求・各種提案 Issue）が Project に集約される。
 
 ## 7. セットアップ（マージ後・コード外の手動作業）

@@ -8,11 +8,11 @@ DAK が自分自身を保守するためのツールキット（要件2/3のド�
 - `decide` — bump × CI結果 × リスク → `auto-merge` か `needs-human-review` を理由付きで返す
 - `llm_client` — **provider 中立**な `complete()`（Gemini/Ollama/OpenAI/… を `MAINT_LLM_*` で実行時選択）
 - `search` — Web 検索（**Tavily API**。LLM とは分離。規約遵守のためスクレイピングはしない）
-- `watch` / `feature` / `charter` — tech-watch / feature-sync / charter-review の提案パイプライン
+- `watch` / `feature` / `charter` — tech-watch / feature-sync / charter-review の提案パイプライン（これらを定期に回していた workflow は #822 でやめた。手元で回す）
 - `model_compare` — 固定の入力（`tests/fixtures/model_compare/`）で複数のモデルに保守のプロンプトを投げて比べる
-- `eval_history` — nightly-eval の結果の記録（リリース `eval-history` の asset `history.jsonl`）と、経路ごとの月の実行回数の上限（`docs/eval/README.md`）
+- `eval_history` — nightly-eval（#822 でやめた）の結果の記録（リリース `eval-history` の asset `history.jsonl`）と、経路ごとの月の実行回数の上限（`docs/eval/README.md`）
 - `license` — 依存のライセンスの表記を SPDX にそろえ、方針（`license-policy.toml`）と照らす（`docs/maintenance/license-policy.md`）
-- `cli` — `dak-maint {triage,watch,feature-sync,collect-deps,charter-review,compare-models,eval-record,eval-budget,license-check}`（ワークフローから呼ぶ。`collect-deps` は `gh pr list --json body` の出力を標準入力で受け、feature-sync に渡す依存の一覧を出す）
+- `cli` — `dak-maint {triage,watch,feature-sync,collect-deps,charter-review,compare-models,eval-record,eval-budget,license-check}`（以前はワークフローから呼んでいた。今は手元で回す。`collect-deps` は `gh pr list --json body` の出力を標準入力で受け、feature-sync に渡す依存の一覧を出す）
 
 同じロジックは `agent/skills/dependency-maintenance/` の DAK スキルからも利用でき、
 DAK 自エージェントが対話的にトリアージを実行できる。
